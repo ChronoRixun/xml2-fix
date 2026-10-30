@@ -159,9 +159,42 @@ def parse_spawns(path):
     return out
 
 
+def normalise_caller(caller):
+    """A caller inside the fix DLL (per-process load base; the dormant respawn's own call) is 'dll', not a game address."""
+    return caller if 0x400000 <= int(caller, 16) < 0x700000 else 'dll'
+
+
+CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+) table=(?P<table>\S+)')
+
+
+def cam_mode(host, guest):
+    """Follow-up 6: the per-frame camera lines 1..60, paired by frame; the first frame whose camera differs is named."""
+    def parse(path):
+        out = {}
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            m = CAM.search(line)
+            if m and int(m['frame']) not in out:
+                out[int(m['frame'])] = (int(m['count']), m['rest'], m['table'])
+        return out
+    h, g = parse(host), parse(guest)
+    frames = sorted(set(h) & set(g))
+    print(f'camera lines: host {len(h)} frame(s), guest {len(g)} frame(s), {len(frames)} paired')
+    if frames and h[frames[0]][2] != g[frames[0]][2]:
+        print(f'  controller hero table order differs (local seats): host {h[frames[0]][2]} guest {g[frames[0]][2]}')
+    for f in frames:
+        if h[f][1] != g[f][1] or h[f][0] != g[f][0]:
+            print(f'  first difference at frame {f}: host count {h[f][0]} {h[f][1]} / guest count {g[f][0]} {g[f][1]}')
+            return 1
+    print('every paired camera line agrees')
+    return 0
+
+
 def spawn_mode(host, guest):
-    """Follow-up 5: every entity the zone spawned (0x4612e0), paired per phase in order; the extras are named."""
+    """Follow-up 5: every entity the zone spawned (0x4612e0), paired per phase in order; the extras are named.
+    Follow-up 6: a caller inside the fix DLL is normalised to 'dll' (its load base differs per process)."""
     h, g = parse_spawns(host), parse_spawns(guest)
+    h = {k: [(normalise_caller(e[0]),) + e[1:] for e in v] for k, v in h.items()}
+    g = {k: [(normalise_caller(e[0]),) + e[1:] for e in v] for k, v in g.items()}
     bad = 0
     for ph in sorted(set(h) | set(g)):
         a, b = h.get(ph, []), g.get(ph, [])
@@ -182,7 +215,7 @@ def spawn_mode(host, guest):
 
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode}[mode](sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

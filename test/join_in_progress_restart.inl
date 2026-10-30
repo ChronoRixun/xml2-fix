@@ -233,6 +233,7 @@ void run() {
     draw_probe();
     assert(*count==11 && fixture_trace.pending()==1);
     assert(fixture_trace.ring[0].caller==unsigned(reinterpret_cast<std::uintptr_t>(&draw_probe))+6 && fixture_trace.ring[0].count==11 && fixture_trace.ring[0].frame==7);
+    assert(fixture_trace.ring[0].a==0 && fixture_trace.ring[0].b==0); // follow-up 6: no actor for an unknown caller
     join_in_progress::flush_draws("fixture");
     assert(fixture_trace.pending()==0);
     join_in_progress::probe_enabled=false;join_in_progress::draws=nullptr;

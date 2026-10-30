@@ -112,7 +112,29 @@ void __cdecl note_draw(const std::uint32_t* sp)
 {
 	if (!draws || draws->phase == 0) return; // the probe round: phase 0 (the warm host before its zone load) overflowed the ring
 	const auto caller = join_in_progress_core::normalise_draw_caller(sp, draw_wrapper_float_return, draw_wrapper_int_return_a, draw_wrapper_int_return_b);
-	draws->note(caller, *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, *reinterpret_cast<const std::uint16_t*>(native_frame));
+	// Follow-up 6: for the two per-actor deciders, the actor's identity (reads guarded; the ring is written either way).
+	std::uint32_t a = 0, b = 0, c = 0, d = 0;
+	switch (join_in_progress_core::draw_actor_of(caller))
+	{
+	case join_in_progress_core::draw_actor_register::edi:
+		__try
+		{
+			const auto actor = sp[-9]; a = *reinterpret_cast<const std::uint32_t*>(actor + 0x1c); b = *reinterpret_cast<const std::uint32_t*>(actor + actor_controller);
+			// AE7b: ESI = the think state whose +4 is the brain; brain +0x1c = the next think time compared at 0x51e3ab.
+			const auto brain = *reinterpret_cast<const std::uint32_t*>(sp[-8] + 4); c = *reinterpret_cast<const std::uint32_t*>(brain + 0x1c);
+			const float* p = reinterpret_cast<const float*>(actor + 0x20); const float* e = reinterpret_cast<const float*>(camera_object + 0x104);
+			const float dx = p[0] - e[0], dy = p[1] - e[1], dz = p[2] - e[2]; const float dist2 = dx * dx + dy * dy + dz * dz;
+			d = std::uint32_t(dist2 > 0.0f ? std::sqrt(dist2) : 0.0f);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) { a = b = c = d = 0xffffffffu; }
+		break;
+	case join_in_progress_core::draw_actor_register::esi:
+		__try { const auto entity = sp[-8]; a = *reinterpret_cast<const std::uint32_t*>(entity + 0x1c); b = (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x20))) << 16) | (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x24))) & 0xffffu); }
+		__except (EXCEPTION_EXECUTE_HANDLER) { a = b = 0xffffffffu; }
+		break;
+	default: break;
+	}
+	draws->note(caller, *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, *reinterpret_cast<const std::uint16_t*>(native_frame), a, b, c, d);
 }
 std::uint32_t draw_resume_at = draw_resume; // mutable for the owned native fixture only
 // In place of `inc dword ptr [0x7ad8b4]` at 0x560090 (the synchronized draw's entry; entered by JUMP, [esp] = the
@@ -140,7 +162,8 @@ void flush_draws(const char* where)
 	while (draws->flushed != draws->head && n++ < 4096)
 	{
 		const auto& e = draws->ring[draws->flushed++ & (join_in_progress_core::draw_ring_size - 1)];
-		logger::write("jip rng: phase=%u frame=%u count=%u caller=%08x", unsigned(e.phase), unsigned(e.frame), e.count, e.caller);
+		if (e.a || e.b) logger::write("jip rng: phase=%u frame=%u count=%u caller=%08x actor=%08x/%08x think=%08x dist=%u", unsigned(e.phase), unsigned(e.frame), e.count, e.caller, e.a, e.b, e.c, e.d);
+		else logger::write("jip rng: phase=%u frame=%u count=%u caller=%08x", unsigned(e.phase), unsigned(e.frame), e.count, e.caller);
 	}
 	if (draws->overflow) { logger::write("jip rng: %s - %u draw(s) lost to the ring", where, draws->overflow); draws->overflow = 0; }
 }
@@ -150,6 +173,56 @@ void probe_milestone(const char* where, std::uint8_t phase)
 	flush_draws(where);
 	if (draws) draws->phase = phase;
 	snapshot(where);
+}
+// Follow-up 6: one compact camera line per shared frame 1..60 after the frame-0 epoch (yaw, history, mode, flags, eye
+// +0x104.., target +0xec.., the controller hero table's four handles in this PC's index order), so the next run names
+// the first frame where the camera histories part (round 3: equal at frame 0, a few ULPs apart by frame 30).
+// AE7b: the 32 brains' next think times (brain +0x1c, the value the think step compares with game time at 0x51e3ab)
+// for every held slot of the stock pool (slot i at pool + i * 0x61c; AI brain alloc 0x522e90 / layout actor_ai_layout.hpp),
+// and each controller-table hero's brain slot (actor +0x7dc handle & 31), one line per frame and at the frame-0 epoch.
+void probe_think(unsigned frame)
+{
+	if (!probe_enabled) return;
+	__try
+	{
+		const auto& dsc = actor_ai::installed();
+		const auto pool = dsc.primary_base ? std::uintptr_t(dsc.primary_base) : std::uintptr_t(brain_pool_stock);
+		const auto bits = probe_at<std::uint32_t>(pool + brain_ring_bitmap);
+		char line[720]; int n = std::snprintf(line, sizeof line, "jip think: frame=%u t=%08x bits=%08x", frame, probe_at<std::uint32_t>(game_static + 0x3e8), bits);
+		for (unsigned i = 0; i < 32 && n > 0 && n < int(sizeof line) - 24; ++i)
+			if (bits & (1u << i)) n += std::snprintf(line + n, sizeof line - n, " s%u:%08x", i, probe_at<std::uint32_t>(pool + i * 0x61c + 0x1c));
+		for (unsigned k = 0; k < 4 && n > 0 && n < int(sizeof line) - 32; ++k)
+		{
+			const std::uint32_t handle = probe_at<std::uint32_t>(hero_table + 4 * k);
+			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
+			if (!actor) continue;
+			const auto brain = probe_at<std::uint32_t>(reinterpret_cast<std::uintptr_t>(actor) + 0x7dc);
+			n += std::snprintf(line + n, sizeof line - n, " h%u=%08x:b%08x/s%u/c%d", k, handle, brain, brain & 31u, probe_at<std::int32_t>(reinterpret_cast<std::uintptr_t>(actor) + actor_controller));
+		}
+		logger::write("%s", line);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:think-line-fault", "jip think: a line faulted"); }
+}
+unsigned cam_lines = 0; constexpr unsigned cam_line_limit = 60;
+bool cam_lines_armed = false; // set at the frame-0 epoch
+void camera_lines(bool arm) { cam_lines_armed = arm && probe_enabled; cam_lines = 0; }
+void probe_frame_camera()
+{
+	if (!probe_enabled || !cam_lines_armed || cam_lines >= cam_line_limit) return;
+	__try
+	{
+		const auto frame = probe_at<std::uint16_t>(native_frame);
+		if (frame == 0) return;
+		++cam_lines;
+		const auto c = std::uintptr_t(camera_object);
+		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x table=%08x,%08x,%08x,%08x",
+			unsigned(frame), probe_at<std::uint32_t>(rng_count), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(c + camera_yaw_at), probe_at<std::uint32_t>(c + camera_yaw_history_at), probe_at<std::uint32_t>(c + camera_yaw_history_at + 4),
+			probe_at<std::uint32_t>(c + camera_mode_at), probe_at<std::uint32_t>(c + camera_flags_at),
+			probe_at<std::uint32_t>(c + 0x104), probe_at<std::uint32_t>(c + 0x108), probe_at<std::uint32_t>(c + 0x10c), probe_at<std::uint32_t>(c + 0xec), probe_at<std::uint32_t>(c + 0xf0), probe_at<std::uint32_t>(c + 0xf4),
+			probe_at<std::uint32_t>(hero_table), probe_at<std::uint32_t>(hero_table + 4), probe_at<std::uint32_t>(hero_table + 8), probe_at<std::uint32_t>(hero_table + 12));
+		probe_think(unsigned(frame));
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:cam-line-fault", "jip cam: a line faulted"); }
 }
 void probe_period(std::uint16_t frame)
 {

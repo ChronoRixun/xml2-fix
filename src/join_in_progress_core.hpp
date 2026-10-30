@@ -332,17 +332,30 @@ namespace join_in_progress_core
 		if (ret == int_return_a || ret == int_return_b) return sp[3];
 		return ret;
 	}
-	struct draw_entry_record { std::uint32_t caller = 0, count = 0; std::uint16_t frame = 0; std::uint8_t phase = 0; };
+	// Follow-up 6: a and b name the actor behind a draw where the caller is known to decide per actor (the AI think
+	// branch 0x51e3c6/0x51e3e0: the actor's handle and controller; the touch-nudge 0x42974d..73: the touched entity's
+	// handle and its packed x/y). 0 when not applicable.
+	// AE7b: c and d add, for the think branch, the brain's next think time (the value compared at 0x51e3ab, as float
+	// bits) and the actor's distance to the camera eye (integer units).
+	struct draw_entry_record { std::uint32_t caller = 0, count = 0; std::uint16_t frame = 0; std::uint8_t phase = 0; std::uint32_t a = 0, b = 0, c = 0, d = 0; };
+	// Which register holds the actor at the draw (pushad order: sp[-9] = EDI, sp[-8] = ESI, where sp -> the return address).
+	enum class draw_actor_register { none, edi, esi };
+	inline draw_actor_register draw_actor_of(std::uint32_t caller)
+	{
+		if (caller == 0x51e3c6 || caller == 0x51e3e0) return draw_actor_register::edi; // the AI think branch: EDI = the actor
+		if (caller == 0x42974d || caller == 0x429763 || caller == 0x429773) return draw_actor_register::esi; // the touch nudge: ESI = the entity
+		return draw_actor_register::none;
+	}
 	constexpr unsigned draw_ring_size = 32768; // power of two; ~384 KiB, static (the probe round overflowed 8192 in phase 0)
 	struct draw_trace
 	{
 		std::array<draw_entry_record, draw_ring_size> ring{};
 		unsigned head = 0, flushed = 0, overflow = 0;
 		std::uint8_t phase = 0;
-		void note(std::uint32_t caller, std::uint32_t count, std::uint16_t frame)
+		void note(std::uint32_t caller, std::uint32_t count, std::uint16_t frame, std::uint32_t a = 0, std::uint32_t b = 0, std::uint32_t c = 0, std::uint32_t d = 0)
 		{
 			if (head - flushed >= draw_ring_size) { ++overflow; ++flushed; } // the oldest unflushed entry is lost, counted
-			ring[head++ & (draw_ring_size - 1)] = {caller, count, frame, phase};
+			ring[head++ & (draw_ring_size - 1)] = {caller, count, frame, phase, a, b, c, d};
 		}
 		unsigned pending() const { return head - flushed; }
 	};

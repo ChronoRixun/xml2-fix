@@ -486,6 +486,14 @@ int main(int argc, char** argv)
 		check(smart_update_call + 5 + 0x0004840c == smart_manager_getter, "follow-up 5: the replaced call's rel32 reaches the CSmartEntMgr getter");
 		check(spawn_resume == spawn_entry + spawn_entry_original.size() && spawn_entry_original[4] == 0x33 && spawn_entry_original[5] == 0xf6,
 		      "follow-up 5: the displaced prologue ends on an instruction boundary (xor esi,esi) and resumes right after it");
+		// follow-up 6: the per-actor deciders the draw trace names (AI think branch: EDI; touch nudge: ESI), nothing else.
+		check(draw_actor_of(0x51e3c6) == draw_actor_register::edi && draw_actor_of(0x51e3e0) == draw_actor_register::edi &&
+		      draw_actor_of(0x42974d) == draw_actor_register::esi && draw_actor_of(0x429773) == draw_actor_register::esi &&
+		      draw_actor_of(0x423698) == draw_actor_register::none && draw_actor_of(0x4ee0f4) == draw_actor_register::none,
+		      "follow-up 6: the draw trace names the actor only for the AI think branch and the touch nudge");
+		auto* t = new draw_trace(); t->note(0x51e3c6, 1, 2, 0x3804u, 0xffffffffu); t->note(0x4204a6, 2, 2);
+		check(t->ring[0].a == 0x3804u && t->ring[0].b == 0xffffffffu && t->ring[1].a == 0 && t->ring[1].b == 0, "follow-up 6: a draw entry carries the actor's handle and controller when given, 0 otherwise");
+		delete t;
 	}
 	{
 		std::array<std::uint32_t, 32> ring{}; std::int32_t w = 7, r = 11, f = 28;

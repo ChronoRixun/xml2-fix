@@ -19,6 +19,7 @@
 #include "xml1_hook_transaction.hpp"
 #include <atomic>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -244,6 +245,7 @@ namespace join_in_progress
 		void __cdecl deferred_campaign_start(void*);
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
+		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -401,6 +403,7 @@ namespace join_in_progress
 		}
 		void __cdecl frame_gate_reseed()
 		{
+			probe_frame_camera(); // probe only; every gated frame
 			if (!restart.armed) return;
 			__try
 			{
@@ -413,7 +416,9 @@ namespace join_in_progress
 					unsigned(frame), count, seed, native_seed);
 				reanchor_camera_at_frame0();
 				release_smart_hold("the first shared frame");
+				camera_lines(true);
 				snapshot("frame 0 epoch");
+				probe_think(0); // probe only (returns at once otherwise)
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -597,7 +602,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1585,7 +1590,8 @@ namespace join_in_progress
 		{
 			static join_in_progress_core::draw_trace trace;
 			draws = &trace;
-			logger::write("join in progress: [Dev] LateJoinProbe=1 - milestone snapshots and the synchronized-draw caller trace (bounded ring of %u) are on", join_in_progress_core::draw_ring_size);
+			logger::write("join in progress: [Dev] LateJoinProbe=1 - milestone snapshots and the synchronized-draw caller trace (bounded ring of %u) are on; think-branch scales [0x6819a0]=%08x (with controller) [0x6801ac]=%08x +[0x682ffc]=%08x (without)",
+				join_in_progress_core::draw_ring_size, probe_at<std::uint32_t>(0x6819a0), probe_at<std::uint32_t>(0x6801ac), probe_at<std::uint32_t>(0x682ffc));
 		}
 		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
 #ifndef NDEBUG
