@@ -303,11 +303,22 @@ namespace join_in_progress_core
 	};
 	// Follow-up 3: the zone-start camera anchor comes from the party list only during an armed late restart.
 	inline bool camera_anchor_from_party(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
-	// P2: the AI brain free ring goes back to identity only on the stock pool (stage 0) and only when every brain is free.
-	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t free_count, std::uint32_t controllers)
+	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
+	// count, free count = the slots not held in the bitmap), so every peer allocates the same next slots even when a
+	// warm host still holds one (probe round: slot 31 held, bits 0x80000007). Returns the number of held slots.
+	inline unsigned rebuild_brain_ring(std::uint32_t bitmap, std::array<std::uint32_t, 32>& ring, std::int32_t& write, std::int32_t& read, std::int32_t& free_count)
 	{
-		return stage == 0 && controllers != 0 && free_count == std::int32_t(controllers);
+		unsigned held = 0, n = 0;
+		for (std::uint32_t slot = 0; slot < 32; ++slot)
+		{
+			if (bitmap & (1u << slot)) { ++held; continue; }
+			ring[n++] = slot;
+		}
+		for (unsigned i = n; i < 32; ++i) ring[i] = 0;
+		read = 0; write = std::int32_t(n % 32); free_count = std::int32_t(n);
+		return held;
 	}
+	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers) { return stage == 0 && controllers == 32; }
 	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
 	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
 	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.
@@ -319,7 +330,7 @@ namespace join_in_progress_core
 		return ret;
 	}
 	struct draw_entry_record { std::uint32_t caller = 0, count = 0; std::uint16_t frame = 0; std::uint8_t phase = 0; };
-	constexpr unsigned draw_ring_size = 8192; // power of two; ~128 KiB, static
+	constexpr unsigned draw_ring_size = 32768; // power of two; ~384 KiB, static (the probe round overflowed 8192 in phase 0)
 	struct draw_trace
 	{
 		std::array<draw_entry_record, draw_ring_size> ring{};

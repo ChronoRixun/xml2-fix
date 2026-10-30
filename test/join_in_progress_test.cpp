@@ -451,8 +451,8 @@ int main(int argc, char** argv)
 		r.arm();
 		check(r.should_reseed_segment() && r.should_reseed_segment() && r.segment_reseeds == 2, "P1: LoadMap entry and the zone start each take an epoch while armed");
 		check(r.should_reseed(0) && !r.should_reseed_segment(), "P1: after frame 0 took the final epoch no segment epoch follows");
-		check(brain_ring_reset_wanted(0, 32, 32) && !brain_ring_reset_wanted(0, 31, 32) && !brain_ring_reset_wanted(2, 32, 32) && !brain_ring_reset_wanted(0, 0, 0),
-		      "P2: the brain ring resets only on the stock pool with every brain free");
+		check(brain_ring_reset_wanted(0, 32, 32) && brain_ring_reset_wanted(0, 31, 32) && !brain_ring_reset_wanted(2, 32, 32) && !brain_ring_reset_wanted(0, 0, 0),
+		      "P2: the brain ring is made canonical on the stock pool (follow-up 4: also with held slots), never on a relocated pool");
 		const std::uint32_t direct[4]{0x4990a5, 1, 2, 3}, wrapped_float[4]{0x5601bd, 0x4870c5, 2, 3}, wrapped_int[4]{0x5601fb, 0, 0, 0x48aea7}, wrapped_int_b[4]{0x56023f, 0, 0, 0x46e605};
 		check(normalise_draw_caller(direct, 0x5601bd, 0x5601fb, 0x56023f) == 0x4990a5, "P3: a tail-jumped bool draw names its caller directly");
 		check(normalise_draw_caller(wrapped_float, 0x5601bd, 0x5601fb, 0x56023f) == 0x4870c5, "P3: the float wrapper's caller is one frame up");
@@ -472,6 +472,14 @@ int main(int argc, char** argv)
 		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x4868f4; }) &&
 		      std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x486968; }),
 		      "follow-up 3: the anchor table load and the camera vt+0x74 call are guarded");
+	}
+	{
+		std::array<std::uint32_t, 32> ring{}; std::int32_t w = 7, r = 11, f = 28;
+		check(rebuild_brain_ring(0x80000007u, ring, w, r, f) == 4 && w == 28 && r == 0 && f == 28 && ring[0] == 3 && ring[27] == 30 && ring[28] == 0,
+		      "follow-up 4: the brain ring is rebuilt over the free slots in ascending order (held slots kept out)");
+		check(rebuild_brain_ring(0u, ring, w, r, f) == 0 && w == 0 && r == 0 && f == 32 && ring[31] == 31, "follow-up 4: with every brain free the rebuilt ring is identity");
+		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a relocated pool");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x484069; }), "follow-up 4: the LoadZone site is guarded");
 	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;

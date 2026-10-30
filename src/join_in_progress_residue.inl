@@ -28,14 +28,20 @@ void canonical_brain_ring()
 	__try
 	{
 		const auto free_count = at<std::int32_t>(pool, brain_ring_free), read = at<std::int32_t>(pool, brain_ring_read), write = at<std::int32_t>(pool, brain_ring_write);
+		const auto bitmap = at<std::uint32_t>(pool, brain_ring_bitmap);
 		if (!join_in_progress_core::brain_ring_reset_wanted(stage, free_count, controllers))
 		{
-			logger::write("join in progress: canonical restart - the AI brain free ring is left as it is (stage %u, %d of %u brains free, read %d write %d)",
-				stage, free_count, controllers, read, write);
+			logger::write("join in progress: canonical restart - the AI brain free ring is left as it is (stage %u, %u controllers, %d free, read %d write %d, held %08x)",
+				stage, controllers, free_count, read, write, bitmap);
 			return;
 		}
-		fn<void(__thiscall*)(void*)>(brain_ring_init)(pool); // retail 0x522f70: ring = 0..31, read = write = 0, free = 32
-		logger::write("join in progress: canonical restart - AI brain free ring back to identity order (was read %d write %d); brain generations untouched", read, write);
+		std::array<std::uint32_t, 32> ring{};
+		std::int32_t new_write = 0, new_read = 0, new_free = 0;
+		const auto held = join_in_progress_core::rebuild_brain_ring(bitmap, ring, new_write, new_read, new_free);
+		std::memcpy(pool + 0xc384, ring.data(), sizeof ring);
+		at<std::int32_t>(pool, brain_ring_write) = new_write; at<std::int32_t>(pool, brain_ring_read) = new_read; at<std::int32_t>(pool, brain_ring_free) = new_free;
+		logger::write("join in progress: canonical restart - AI brain free ring rebuilt over the %d free slots in ascending order (was read %d write %d free %d; held %08x = %u slot(s) kept); brain generations untouched",
+			new_free, read, write, free_count, bitmap, held);
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
@@ -91,7 +97,7 @@ void snapshot(const char* where)
 }
 void __cdecl note_draw(const std::uint32_t* sp)
 {
-	if (!draws) return;
+	if (!draws || draws->phase == 0) return; // the probe round: phase 0 (the warm host before its zone load) overflowed the ring
 	const auto caller = join_in_progress_core::normalise_draw_caller(sp, draw_wrapper_float_return, draw_wrapper_int_return_a, draw_wrapper_int_return_b);
 	draws->note(caller, *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, *reinterpret_cast<const std::uint16_t*>(native_frame));
 }
@@ -149,12 +155,13 @@ void __cdecl zone_load_entry_notice()
 }
 void __cdecl zone_start_entry_notice()
 {
-	if (late_restart && restart.armed) probe_milestone("zone start", 2);
+	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
 	segment_reseed("the zone start (before the players are placed)");
 	if (late_restart && restart.armed) snapshot("zone start epoch");
 }
 // ---- follow-up 3: the camera anchor of the zone-loaded finish ------------------------------------------------------
 alignas(16) std::uint32_t camera_anchor_handles[8]{};
+bool late_restart_epoch_for_camera = false; // set when the zone start anchored on the party; consumed at frame 0
 std::uint32_t camera_anchor_table_at = hero_table; // what the loop at 0x4868f4 walks: retail, or the party copy
 void __cdecl select_camera_anchor_table()
 {
@@ -170,6 +177,7 @@ void __cdecl select_camera_anchor_table()
 		for (std::uint32_t i = 0; i < count && i < 4; ++i) camera_anchor_handles[i] = list[i];
 		if (!count || !camera_anchor_handles[0]) { logger::write("join in progress: canonical restart - the party list is empty at the zone start; the camera anchors as retail does"); return; }
 		camera_anchor_table_at = reinterpret_cast<std::uint32_t>(camera_anchor_handles);
+		late_restart_epoch_for_camera = true;
 		logger::write("join in progress: canonical restart - the zone-start camera anchors on party slot 0 (handle %08x of %u) on every peer instead of this PC's controller 0",
 			camera_anchor_handles[0], count);
 	}
@@ -193,7 +201,40 @@ __declspec(naked) void camera_anchor_table_bridge()
 		ret
 	}
 }
-std::uint32_t zone_load_entry_target_at = zone_load_entry_target, zone_start_entry_target_at = zone_start_entry_target; // mutable for the fixture only
+std::uint32_t zone_load_entry_target_at = zone_load_entry_target, zone_start_entry_target_at = zone_start_entry_target, zone_load_zone_entry_target_at = zone_load_entry_target; // mutable for the fixture only
+// In place of `call 0x4457e0` at 0x484070 (CMap::LoadZone, the zone load a mode-2 restore actually takes): same notice.
+__declspec(naked) void zone_load_zone_entry_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		call zone_load_entry_notice
+		popad
+		popfd
+		jmp dword ptr [zone_load_zone_entry_target_at]
+	}
+}
+// Follow-up 4: at the first shared frame the camera is re-initialised from the party anchor on every peer, so the
+// camera updates that ran between the zone start and frame 0 (the probe round: the joiner waited ~1.3 s longer at
+// the barrier, yaw history 60.7 vs 67.4 deg) are discarded and both peers start frame 0 from the same camera state.
+void reanchor_camera_at_frame0()
+{
+	if (!restart_reset_enabled || !late_restart_epoch_for_camera) return;
+	late_restart_epoch_for_camera = false;
+	__try
+	{
+		const std::uint32_t handle = camera_anchor_handles[0];
+		void* actor = handle ? fn<entity_of_t>(entity_of_handle)(&handle) : nullptr;
+		if (!actor) { logger::write("join in progress: canonical restart - no party anchor at frame 0; the camera keeps its state"); return; }
+		auto* camera = reinterpret_cast<std::uint8_t*>(camera_object);
+		if (at<std::uint32_t>(camera, 0) != camera_vtable_value) return;
+		const auto yaw = at<std::uint32_t>(camera, camera_yaw_at), hist = at<std::uint32_t>(camera, camera_yaw_history_at);
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(camera, 0), 0x74))(camera, actor); // the zone-start camera init, again
+		logger::write("join in progress: canonical restart - the camera is re-initialised from party slot 0 at frame 0 (was yaw %08x history %08x; now yaw %08x history %08x)",
+			yaw, hist, at<std::uint32_t>(camera, camera_yaw_at), at<std::uint32_t>(camera, camera_yaw_history_at));
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:reanchor-fault", "join in progress: the frame-0 camera re-init faulted - the camera keeps its state"); }
+}
 __declspec(naked) void zone_load_entry_bridge()
 {
 	__asm {

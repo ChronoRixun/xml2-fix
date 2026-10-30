@@ -190,20 +190,30 @@ void run() {
     // latejoin-residue P2: the AI brain free ring on a synthetic stock pool: used ring -> identity through retail
     // 0x522f70 when every brain is free; left alone with one brain allocated.
     auto* pool=reinterpret_cast<unsigned char*>(brain_pool_stock);
-    put(pool,brain_ring_write,5);put(pool,brain_ring_read,5);put(pool,brain_ring_free,32);
+    put(pool,brain_ring_write,5);put(pool,brain_ring_read,5);put(pool,brain_ring_free,32);put(pool,brain_ring_bitmap,0u);
     for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*7)%32));
     join_in_progress::late_restart=true;join_in_progress::restart.arm();
     join_in_progress::canonical_brain_ring();
     assert(*reinterpret_cast<int*>(pool+brain_ring_write)==0 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==32);
     for(unsigned i=0;i<32;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i);
-    put(pool,brain_ring_write,3);put(pool,brain_ring_read,4);put(pool,brain_ring_free,31);put(pool,0xc384,9u);
+    // The probe round: the warm host holds slot 31 (bits 0x80000007 with 0,1,2 also held): the ring is rebuilt over
+    // the 28 free slots in ascending order, read 0, write 28, free 28; the held slots stay out of it.
+    put(pool,brain_ring_write,7);put(pool,brain_ring_read,11);put(pool,brain_ring_free,28);put(pool,brain_ring_bitmap,0x80000007u);
+    for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*5+3)%32));
     join_in_progress::canonical_brain_ring();
-    assert(*reinterpret_cast<int*>(pool+brain_ring_read)==4 && *reinterpret_cast<unsigned*>(pool+0xc384)==9u); // one brain allocated: untouched
+    assert(*reinterpret_cast<int*>(pool+brain_ring_write)==28 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==28);
+    for(unsigned i=0;i<28;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i+3);
+    assert(*reinterpret_cast<unsigned*>(pool+brain_ring_bitmap)==0x80000007u);
+    // The LoadZone bridge (the zone load a mode-2 restore takes), entered by call: an epoch while armed.
+    join_in_progress::zone_load_zone_entry_target_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_getter));
+    const auto zone_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::zone_load_zone_entry_bridge);
+    join_in_progress::restart.arm();*seed=0x66666666u;*count=9;
+    assert(zone_bridge()==&getter_object && *seed==native_seed && *count==0);
     join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     // latejoin-residue P3: the draw bridge, entered through a CALL from the probe (the same frame shape as the JMP at
     // 0x560090: [esp] = the caller's return address), notes the normalised caller and the count after the displaced
     // increment, then resumes (redirected to a stub returning to the probe); the wrapper returns are normalised.
-    join_in_progress::probe_enabled=true;join_in_progress::draws=&fixture_trace;
+    join_in_progress::probe_enabled=true;join_in_progress::draws=&fixture_trace;fixture_trace.phase=1; // phase 0 is not recorded (follow-up 4)
     join_in_progress::draw_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&draw_resume_stub));
     *count=10;*frame=7;
     draw_probe();

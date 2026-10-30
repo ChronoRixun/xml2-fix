@@ -231,6 +231,10 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t zone_load_entry_call = 0x484108, zone_load_entry_target = 0x4457e0;
 	inline constexpr std::array<unsigned char, 5> zone_load_entry_original{0xe8,0xd3,0x16,0xfc,0xff};
 	constexpr std::uint32_t zone_start_entry_call = 0x4867fe, zone_start_entry_target = 0x596890;
+	// Follow-up 4 (probe round): the mode-2 restore reaches the zone through CMap::LoadZone (vt+0x4c 0x484010, called by the
+	// CMap load 0x484b70), a sibling of LoadMap with the same tail: its camera getter call 0x484070 is the second zone-load site.
+	constexpr std::uint32_t zone_load_zone_entry_call = 0x484070;
+	inline constexpr std::array<unsigned char, 5> zone_load_zone_entry_original{0xe8,0x6b,0x17,0xfc,0xff};
 	inline constexpr std::array<unsigned char, 5> zone_start_entry_original{0xe8,0x8d,0x00,0x11,0x00};
 	constexpr std::uint32_t brain_ring_init = 0x522f70, brain_pool_stock = 0x78ba14, brain_ring_write = 0xc408, brain_ring_read = 0xc40c,
 		brain_ring_free = 0xc410, brain_ring_bitmap = 0xc414, brain_slots = 32;
@@ -247,7 +251,8 @@ namespace join_in_progress_rules
 	// party list (game vt+0x11c, lockstep order) on every peer; otherwise the retail table.
 	constexpr std::uint32_t camera_anchor_table_load = 0x4868f4, game_party_list_slot = 0x11c, party_list_count_at = 0x14;
 	inline constexpr std::array<unsigned char, 5> camera_anchor_table_original{0xbb,0x14,0xb8,0x70,0x00};
-	inline constexpr std::array<guard, 114> guards{{
+	inline constexpr std::array<guard, 115> guards{{
+		{0x484069,"02889620020000e86b17fcff8b108bc8ff5204e88f750d", "CMap::LoadZone: loading bit 2, camera getter call, camera vt+4, clock getter"},
 		{0x4868f4,"bb14b8700033f6eb038d490083fefc7e0783fe10", "zone-loaded finish: the camera anchor walks the controller hero table from slot 0"},
 		{0x486968,"e873eefbff8b10578bc8ff5274", "zone-loaded finish: camera vt+0x74 init with the first resolved hero"},
 		{0x484101,"808e2002000003e8d316fcff8b108bc8ff5204e8f7740d00", "CMap::LoadMap: loading bits, camera getter call, camera vt+4, clock getter"},

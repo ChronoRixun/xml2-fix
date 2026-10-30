@@ -95,9 +95,12 @@ def parse_snapshots(path):
         where = where[len('where='):]
         key = where if 'hero[' not in body or ' frame=' in body else where + ' ' + rest.split('=')[0]
         fields = {}
+        last = ''
         for tok in (('frame=' + rest) if ' frame=' in body else rest).split():
             if '=' in tok:
-                k, v = tok.split('=', 1); fields[k] = v
+                k, v = tok.split('=', 1); fields[k] = v; last = k
+            elif ':' in tok and last:
+                k, v = tok.split(':', 1); fields[last + '.' + k] = v
         out.setdefault(key, []).append(fields)
     return out
 

@@ -43,6 +43,7 @@ namespace join_in_progress
 		void probe_period(std::uint16_t frame); // [Dev] LateJoinProbe: the checksum sample milestones (join_in_progress_residue.inl)
 		void probe_milestone(const char* where, std::uint8_t phase);
 		void snapshot(const char* where);
+		void reanchor_camera_at_frame0();
 		bool probe_zone_started = false, probe_epoch_late = false; // the probe: the late epoch reached its zone start / its samples belong to a late restart
 		bool area_load = false; // latched at the synchronous zone-loader boundary, consumed by the pump afterwards
 		bool composed_receiver = false;
@@ -409,6 +410,7 @@ namespace join_in_progress
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
 				logger::write("join in progress: first shared frame %u - synchronized RNG epoch reset (this PC had drawn %u since the last epoch, seed %08x); every peer continues from the native seed %06x with count 0",
 					unsigned(frame), count, seed, native_seed);
+				reanchor_camera_at_frame0();
 				snapshot("frame 0 epoch");
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -1672,6 +1674,7 @@ namespace join_in_progress
 			// P1/P2: the zone-load epochs (CALL replacements of argument-less getters); P3: the draw entry (JMP) only with the probe.
 			writes.push_back({zone_load_entry_call, bytes(zone_load_entry_original), rel(0xe8, zone_load_entry_call, reinterpret_cast<const void*>(&zone_load_entry_bridge), 5)});
 			writes.push_back({zone_start_entry_call, bytes(zone_start_entry_original), rel(0xe8, zone_start_entry_call, reinterpret_cast<const void*>(&zone_start_entry_bridge), 5)});
+			writes.push_back({zone_load_zone_entry_call, bytes(zone_load_zone_entry_original), rel(0xe8, zone_load_zone_entry_call, reinterpret_cast<const void*>(&zone_load_zone_entry_bridge), 5)});
 			if (probe_enabled) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
 			// Follow-up 3: the zone-start camera anchor (CALL replacement of the 5-byte table load).
 			writes.push_back({camera_anchor_table_load, bytes(camera_anchor_table_original), rel(0xe8, camera_anchor_table_load, reinterpret_cast<const void*>(&camera_anchor_table_bridge), 5)});
