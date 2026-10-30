@@ -38,6 +38,11 @@ const void* draw_bridge_target=reinterpret_cast<const void*>(&join_in_progress::
 // `call dword ptr [draw_bridge_target]` is 6 bytes: the bridge's [esp] (the caller's return) is this function + 6.
 __declspec(naked) void draw_probe() { __asm { call dword ptr [draw_bridge_target]
                                              ret } }
+// Follow-up 7: a fixture-owned timed-event manager image and the owner resolver's fake entities (slots 1 and 2 alive).
+alignas(16) unsigned char event_manager_image[join_in_progress_rules::event_body_bytes+join_in_progress_rules::event_body_at+16]{};
+alignas(16) unsigned char fake_entity_storage[4][0x400]{};
+unsigned char* fake_entities[4]={fake_entity_storage[0],fake_entity_storage[1],fake_entity_storage[2],fake_entity_storage[3]};
+void* __fastcall fake_entity_of(const unsigned* handle,void*) { const unsigned slot=*handle&0xff;return (*handle==0x1801u||*handle==0x3802u)?fake_entities[slot]:nullptr; }
 // Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
 unsigned smart_vtable[8]{};unsigned char smart_object[0x20]{};unsigned smart_getter_calls=0;
 int __fastcall fake_smart_count(void*,void*) { return 3; }
@@ -296,6 +301,83 @@ void run() {
     assert(std::strcmp(join_in_progress::last_spawn.definition,"def_a")==0 && std::strcmp(join_in_progress::last_spawn.instance,"inst_b")==0);
     assert(join_in_progress::last_spawn.position[0]==1.5f && join_in_progress::last_spawn.position[1]==2.5f && join_in_progress::last_spawn.position[2]==-3.5f);
     join_in_progress::probe_enabled=false;join_in_progress::probe_epoch_late=false;
+    // Follow-up 7: the timed-event queue rebuilt in canonical order on a fixture-owned manager image (the retail
+    // vtable value at +0, the body at +4) through the mapped retail pool init / record alloc / store / heap push, the
+    // owner resolver redirected to a table of fake entities. Owners: 0x1801 (slot 1, a cold joiner's generation) and
+    // 0x3802 (slot 2) alive, 0x35ce and 0x35de dead (a warm host's old world), 0 a non-token owner (kept).
+    {
+        using namespace join_in_progress_rules;
+        std::memset(event_manager_image,0,sizeof event_manager_image);
+        put(event_manager_image,0,event_manager_vtable);
+        unsigned char* body=event_manager_image+event_body_at;
+        reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_pool_init))(body);
+        assert(*reinterpret_cast<unsigned*>(body+event_ring_count_at)==event_records && *reinterpret_cast<unsigned*>(body+event_ring_read_at)==0);
+        join_in_progress::event_manager_at=unsigned(reinterpret_cast<std::uintptr_t>(event_manager_image));
+        join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
+        const auto add=[&](float time,unsigned handle,unsigned event,unsigned char tag) {
+            const auto index=reinterpret_cast<unsigned(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_record_alloc))(body);
+            unsigned char record[event_record_bytes]{};std::memcpy(record,&handle,4);std::memcpy(record+4,&event,4);record[8]=tag;
+            reinterpret_cast<void(__thiscall*)(void*,unsigned,const void*)>(static_cast<std::uintptr_t>(event_record_store))(body,index,record);
+            struct { float time;unsigned index; } pair{time,index};
+            reinterpret_cast<void(__thiscall*)(void*,const void*)>(static_cast<std::uintptr_t>(event_heap_push))(body+event_heap_at,&pair);
+        };
+        const unsigned e1=unsigned(reinterpret_cast<std::uintptr_t>(fake_entities[1])),e2=unsigned(reinterpret_cast<std::uintptr_t>(fake_entities[2]));
+        add(2.0f,0x3802,e2+0x320,0);add(2.0f,0x35ce,0x12345678,0);add(2.0f,0x1801,e1+0x328,0);add(64.0f,0x35de,0x23456789,0);
+        add(2.0f,0x1801,e1+0x320,0);add(1.5f,0x1801,e1+0x330,0);add(2.0f,0,0x6d55fc,0);add(2.0f,0x1801,e1+0x320,7);
+        assert(*reinterpret_cast<unsigned*>(body+event_heap_count_at)==8 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==8);
+        unsigned char before[event_body_bytes];std::memcpy(before,body,sizeof before);
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+        join_in_progress::canonical_event_queue("fixture: not a late restart");
+        assert(join_in_progress::event_rebuilds==0 && std::memcmp(before,body,sizeof before)==0); // untouched
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();
+        join_in_progress::canonical_event_queue("fixture: the first shared frame");
+        assert(join_in_progress::event_rebuilds==1 && join_in_progress::event_last_live==6 && join_in_progress::event_last_dead==2);
+        assert(*reinterpret_cast<unsigned*>(body+event_heap_count_at)==6 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==6);
+        assert(*reinterpret_cast<unsigned*>(body+event_ring_read_at)==6 && *reinterpret_cast<unsigned*>(body+event_ring_count_at)==event_records-6);
+        assert(*reinterpret_cast<unsigned*>(body+event_used_bitmap_at)==0x3f && *reinterpret_cast<unsigned*>(body+event_alloc_bitmap_at)==0x3f);
+        // An ascending push sequence needs no sift: the heap array IS the canonical sequence, records 0..5 in that order.
+        const float times[6]={1.5f,2.0f,2.0f,2.0f,2.0f,2.0f};const unsigned handles[6]={0x1801,0x1801,0x1801,0x1801,0x3802,0};
+        const unsigned events[6]={e1+0x330,e1+0x320,e1+0x320,e1+0x328,e2+0x320,0x6d55fc};const unsigned char tags[6]={0,0,7,0,0,0};
+        for(unsigned i=0;i<6;++i) {
+            const unsigned char* pair=body+event_heap_at+i*8;float t;unsigned index;std::memcpy(&t,pair,4);std::memcpy(&index,pair+4,4);
+            assert(t==times[i] && index==i);
+            const unsigned char* record=body+index*event_record_bytes;unsigned handle,event;std::memcpy(&handle,record,4);std::memcpy(&event,record+4,4);
+            assert(handle==handles[i] && event==events[i] && record[8]==tags[i]);
+        }
+        // A second rebuild is byte-identical, and so is a rebuild of the same entries pushed in another order (the
+        // claim: the queue no longer depends on the process's push/pop history). Then the retail pops drain it with
+        // non-decreasing times over a permutation of the six records (ties pop in heap-shape order, now the same shape).
+        // The queue's observable state: the heap pairs within the count, the records they reference, both counts,
+        // the ring and both bitmaps (record and heap slots beyond the counts keep whatever a history left: the retail
+        // pool init and alloc never clear them, store copies all 24 bytes and push the whole pair).
+        const auto view=[&](std::vector<unsigned char>& v) {
+            v.clear();const auto push=[&](const void* p,std::size_t k) { const auto* b=static_cast<const unsigned char*>(p);v.insert(v.end(),b,b+k); };
+            const unsigned n=*reinterpret_cast<unsigned*>(body+event_heap_count_at);push(body+event_heap_at,n*8);
+            for(unsigned i=0;i<n;++i) { unsigned idx;std::memcpy(&idx,body+event_heap_at+i*8+4,4);push(body+idx*event_record_bytes,event_record_bytes); }
+            push(body+event_heap_count_at,4);push(body+event_record_count_at,4);push(body+event_ring_write_at,12);push(body+event_used_bitmap_at,0x24*4);push(body+event_alloc_bitmap_at,0x24*4);
+        };
+        std::vector<unsigned char> after,now;view(after);
+        unsigned char after_bytes[event_body_bytes];std::memcpy(after_bytes,body,sizeof after_bytes);
+        join_in_progress::restart.arm();join_in_progress::canonical_event_queue("fixture: again");
+        assert(join_in_progress::event_rebuilds==2 && std::memcmp(after_bytes,body,sizeof after_bytes)==0); // idempotent, byte for byte
+        reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_pool_init))(body);
+        std::memset(body+event_used_bitmap_at,0,0x24*4);std::memset(body+event_alloc_bitmap_at,0,0x24*4);
+        *reinterpret_cast<unsigned*>(body+event_record_count_at)=0;*reinterpret_cast<unsigned*>(body+event_heap_count_at)=0;
+        add(2.0f,0x1801,e1+0x320,7);add(2.0f,0,0x6d55fc,0);add(1.5f,0x1801,e1+0x330,0);add(2.0f,0x1801,e1+0x320,0);
+        add(64.0f,0x35de,0x23456789,0);add(2.0f,0x1801,e1+0x328,0);add(2.0f,0x35ce,0x12345678,0);add(2.0f,0x3802,e2+0x320,0);
+        view(now);assert(now!=after); // a different history: a different queue before the rebuild
+        join_in_progress::restart.arm();join_in_progress::canonical_event_queue("fixture: another history");
+        view(now);assert(join_in_progress::event_rebuilds==3 && now==after); // the same queue after it
+        unsigned char* heap=body+event_heap_at;unsigned seen=0;float last=0.0f;
+        for(unsigned i=0;i<6;++i) {
+            unsigned index;float t;std::memcpy(&t,heap,4);std::memcpy(&index,heap+4,4);
+            assert(index<6 && !(seen&(1u<<index)) && t>=last);seen|=1u<<index;last=t;
+            reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_heap_pop))(heap);
+        }
+        assert(seen==0x3f && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==0);
+        join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    }
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
 }

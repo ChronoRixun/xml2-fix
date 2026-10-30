@@ -127,6 +127,22 @@ namespace join_in_progress_rules
 		record_controller_at = 0x30, record_index_at = 0x18, actor_controller = 0x3d4, zones_current_slot = 0x5c,
 		zones_static = 0x72a578, game_static = 0x729960, game_vtable = 0x686e1c, zones_loading_at = 0x220, zones_name_at = 0x1e0, zone_name_size = 0x3f;
 	constexpr std::uint32_t spectator_repeat_ms = 30000;
+	// Follow-up 7: the timed-event manager (static 0x75d340, vtable 0x68de14, getter 0x4b2fc0; body = object + 4).
+	// Every actor update is a timed event: the actor's members at +0x320/+0x328/+0x330 ({vptr, time}; vtable 0x682b9c
+	// fires the actor update 0x434540 when the queued time equals the stored one), scheduled by 0x41d380 -> 0x41a730,
+	// which builds a 24-byte record {owner handle, event*, payload} (0x41a090) and adds it through vt+8 (0x4b2b20:
+	// record alloc 0x4b2c10 from the free ring, store 0x4b2b80, heap push 0x4b2c90). The game update pumps vt+0xc
+	// (0x4b2d60 -> 0x4b2d70): pops the (time, index) binary heap at body+0x7c40 (count body+0x9f6c) while time < game
+	// time and fires the record (0x4199f0). The heap compares TIMES ONLY (sift-up 0x4b2cd0, sift-down 0x4b2e10), so
+	// the order of same-time events - every actor update of a frame - is the heap's shape, i.e. each process's own
+	// push/pop history. Round 4: the same three brains re-armed in a different order on the two peers (frame 16/17).
+	constexpr std::uint32_t event_manager_object = 0x75d340, event_manager_vtable = 0x68de14, event_manager_getter = 0x4b2fc0,
+		event_record_alloc = 0x4b2c10, event_record_store = 0x4b2b80, event_heap_push = 0x4b2c90, event_pool_init = 0x4b2a10, event_heap_pop = 0x4b2de0;
+	constexpr std::uint32_t event_body_at = 4, event_record_bytes = 24, event_records = 0x465, event_used_bitmap_at = 0x6978, event_ring_at = 0x6a08,
+		event_ring_write_at = 0x7ba0, event_ring_read_at = 0x7ba4, event_ring_count_at = 0x7ba8, event_alloc_bitmap_at = 0x7bac, event_record_count_at = 0x7c3c,
+		event_heap_at = 0x7c40, event_heap_count_at = 0x9f6c, event_body_bytes = 0x9f70;
+	constexpr std::uint16_t game_x87_control_word = 0x027f; // the CRT's _PC_53 at 0x6729f6; the D3D8 device is created with FPU_PRESERVE (det_math.hpp)
+	constexpr std::uint32_t game_mxcsr = 0x1f80;            // Windows' default; nothing in XMen2.exe or the Alchemy DLLs loads MXCSR (scripts/fpu_sites.py)
 	// Host alone: the host menu's Start Game (0x5bacd0) refuses a room list of one; with rule 26 the host starts alone
 	// and players drop in later (admission stays open after Start Game).
 	constexpr std::uint32_t start_alone = 0x5bae34;
@@ -272,7 +288,7 @@ namespace join_in_progress_rules
 	// position, orientation, flag) is entered by JUMP with its first six bytes displaced (push ecx/ebx/ebp/esi; xor esi,esi).
 	constexpr std::uint32_t spawn_entry = 0x4612e0, spawn_resume = 0x4612e6;
 	inline constexpr std::array<unsigned char, 6> spawn_entry_original{0x51,0x53,0x55,0x56,0x33,0xf6};
-	inline constexpr std::array<guard, 118> guards{{
+	inline constexpr std::array<guard, 128> guards{{
 		{0x46f2d8,"7505c644241001e80c8404008b4c24108b10518bc8ff5204", "game update: the CSmartEntMgr getter call and its vt+4 update (all flag) every tick"},
 		{0x4612e0,"5153555633f6e8d5120000", "spawn by definition / instance names: entry prologue"},
 		{0x68e440,"d0764b0000714b0000704b00e0704b00c06f4b00b06f4b00f06f4b00c0754b00", "CSmartEntMgr vtable: destructor, update, allocate, reset, clear, count, at, append"},
@@ -391,6 +407,16 @@ namespace join_in_progress_rules
 		{0x612d92,"83be78020000027e0f8bcbe8fe140000","lost participant (0x612c40): with two participants or fewer the session ends; more: only that record goes"},
 		{0x5bae2e,"8b876c19000083780c027d48","host menu Start Game: refused with fewer than two players in the room list (dialog 0xffc)"},
 		{0x46dd0a,"b960997200","the game object is the static 0x729960 (party +0x14, seat binding +0x514/+0x524)"},
+		{0x4b2fc0,"8a0db4727600b80100000084c8752f8b","timed-event manager getter (static 0x75d340)"},
+		{0x68de14,"a02f4b00d02a4b00202b4b00602d4b00","timed-event manager vtable: dtor, reset 0x4b2ad0, add 0x4b2b20, pump 0x4b2d60"},
+		{0x4b2d70,"83ec08578bf98b876c9f000085c0744e538d9f407c000056eb06","timed-event pump: heap count body+0x9f6c, heap body+0x7c40"},
+		{0x4b2c10,"53568bf18b8ea47b00008d86086a0000578b3c888b","timed-event record alloc: ring read body+0x7ba4, ring body+0x6a08"},
+		{0x4b2b80,"8b442408568b742408578bf98d0c76508d14cf52","timed-event record store: 24-byte records at body+0"},
+		{0x4b2c90,"8b442404568bf18b8e2c2300006a08508d14ce52e827e9f4ff8b","timed-event heap push: 8-byte (time, index) entries, count heap+0x232c"},
+		{0x4b2a10,"5633f65789b1a07b000089b1a47b000089b1a87b0000","timed-event pool init: ring write/read/count at body+0x7ba0/4/8"},
+		{0x41a76b,"8b4c24248b571c8bf08b4424285051518bc48d4c2414896424348910e804f9ffff8b16508bceff5208","timed-event schedule: record {owner handle +0x1c, event*, payload} added through manager vt+8"},
+		{0x41e440,"8b442408d900d94104dae9dfe0f6c4447a12c74104000000008b4c24046a00e8dc600100","actor update timed event: fires 0x434540 when the queued time equals the stored one"},
+		{0x4b2de0,"568bf18b962c2300004a8bc285c089962c230000","timed-event heap pop: last entry to the root, sift-down by time"},
 	}};
 	inline const guard* first_mismatch(const std::uint8_t* image)
 	{

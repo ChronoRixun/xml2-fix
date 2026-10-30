@@ -17,12 +17,14 @@
 #include "save_format.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
+#include <xmmintrin.h>
 
 namespace join_in_progress
 {
@@ -246,6 +248,7 @@ namespace join_in_progress
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
 		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
+		void canonical_event_queue(const char* where); void fpu_canonical(const char* where); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue)
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -416,9 +419,14 @@ namespace join_in_progress
 					unsigned(frame), count, seed, native_seed);
 				reanchor_camera_at_frame0();
 				release_smart_hold("the first shared frame");
+				probe_events("frame 0 before rebuild"); // probe only
+				canonical_event_queue("the first shared frame"); // follow-up 7: every actor update's queue in canonical order
+				fpu_canonical("the first shared frame");
 				camera_lines(true);
 				snapshot("frame 0 epoch");
+				probe_events("frame 0 epoch");
 				probe_think(0); // probe only (returns at once otherwise)
+				probe_camera_dump(0);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -1699,7 +1707,7 @@ namespace join_in_progress
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
-				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera, dormant-entity respawn held to frame 0)" : "OFF ([Dev] LateJoinRestartReset=0)");
+				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera, dormant-entity respawn held to frame 0, timed-event queue in canonical order, FPU control state)" : "OFF ([Dev] LateJoinRestartReset=0)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");

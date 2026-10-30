@@ -82,7 +82,16 @@ def main(argv):
 
 
 SNAPSHOT = re.compile(r'jip snapshot: where=(?P<where>[^ ]+(?: [^ ]+)*?) (?P<fields>(?:[a-z\[\]0-9_]+[:=]\S+ ?)+)$')
-RNG = re.compile(r'jip rng: phase=(?P<phase>\d+) frame=(?P<frame>\d+) count=(?P<count>\d+) caller=(?P<caller>[0-9a-f]{8})')
+RNG = re.compile(r'jip rng: phase=(?P<phase>\d+) frame=(?P<frame>\d+) count=(?P<count>\d+) caller=(?P<caller>[0-9a-f]{8})(?: actor=(?P<actor>[0-9a-f]{8})/(?P<ctl>[0-9a-f]{8}) think=(?P<think>[0-9a-f]{8}) dist=(?P<dist>\d+))?')
+EVENTS = re.compile(r'jip events: where=(?P<where>.+?) heap=(?P<heap>\d+) records=(?P<records>\d+) ring=(?P<ring>\S+) live=(?P<live>\d+) dead=(?P<dead>\d+) stale=(?P<stale>\d+) rebuilds=(?P<rebuilds>\d+) head=(?P<head>\S*)')
+CAMDUMP = re.compile(r'jip camdump: frame=(?P<frame>\d+) off=(?P<off>[0-9a-f]{3})(?P<words>(?: [0-9a-f]{8})+)')
+
+
+def actor_index(actor):
+    """A handle's dense index (the generation bits differ per process: a warm host's are higher for the same slot)."""
+    return int(actor, 16) & 0x3ff if actor else None
+
+
 
 
 def parse_snapshots(path):
@@ -121,11 +130,13 @@ def snapshot_mode(host, guest):
 
 
 def parse_rng(path):
+    """Follow-up 7: field-level entries (caller, the actor's dense index, controller, think time, distance) as rngcmp.py
+    compared them in round 4; the caller alone missed the earlier same-caller / different-actor draws."""
     out = {}
     for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
         m = RNG.search(line)
         if m:
-            out[(int(m['phase']), int(m['count']))] = (int(m['frame']), m['caller'])
+            out[(int(m['phase']), int(m['count']))] = (int(m['frame']), m['caller'], actor_index(m['actor']), m['ctl'], m['think'], m['dist'], m['actor'])
     return out
 
 
@@ -138,13 +149,75 @@ def rng_mode(host, guest):
         print(f'phase {ph}: host {len(hk)} draw(s), guest {len(gk)} draw(s)')
         for key in sorted(set(hk) | set(gk)):
             a, b = h.get(key), g.get(key)
-            if a is None or b is None or a[1] != b[1]:
+            if a is None or b is None or a[:6] != b[:6]:
                 first = first or (key, a, b)
-                print(f'  first difference at phase {key[0]} count {key[1]}: host {a} guest {b}')
+                print(f'  first difference at phase {key[0]} count {key[1]} (frame, caller, actor index, controller, think, dist, handle): host {a} guest {b}')
                 break
     if first is None:
-        print('every synchronized draw agrees (phase, count, caller)')
+        print('every synchronized draw agrees (phase, count, caller, actor index, controller, think, dist)')
     return 1 if first else 0
+
+
+def events_mode(host, guest):
+    """Follow-up 7: the timed-event queue lines per milestone (heap/records/ring/live/dead/stale and the first 24 heap
+    pairs as time:index:handle:offset); the handle's generation is masked before comparing."""
+    def parse(path):
+        out = {}
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            m = EVENTS.search(line)
+            if m and m['where'] not in out:
+                head = []
+                for item in m['head'].split(',') if m['head'] else []:
+                    t, index, handle, off = item.split(':')
+                    head.append((t, int(index), int(handle, 16) & 0x3ff if int(handle, 16) else 0, off))
+                out[m['where']] = (int(m['heap']), int(m['records']), m['ring'], int(m['live']), int(m['dead']), int(m['stale']), int(m['rebuilds']), head)
+        return out
+    h, g = parse(host), parse(guest)
+    bad = 0
+    for where in [w for w in h if w in g]:
+        a, b = h[where], g[where]
+        same = a[0] == b[0] and a[3] == b[3] and a[7] == b[7]
+        verdict = 'AGREE  ' if same else 'DIFFERS'
+        print(f"{verdict} {where}: host heap {a[0]} records {a[1]} ring {a[2]} live {a[3]} dead {a[4]} stale {a[5]} rebuilds {a[6]} | guest heap {b[0]} records {b[1]} ring {b[2]} live {b[3]} dead {b[4]} stale {b[5]} rebuilds {b[6]}")
+        if not same:
+            bad += 1
+            for i, (x, y) in enumerate(zip(a[7], b[7])):
+                if x != y:
+                    print(f'  first differing heap pair at {i}: host {x} guest {y}')
+                    break
+    for who, only in (('host', [w for w in h if w not in g]), ('guest', [w for w in g if w not in h])):
+        for w in only:
+            print(f'  only on the {who}: {w}')
+    return 1 if bad else 0
+
+
+def camdump_mode(host, guest):
+    """Follow-up 7: the camera object's dwords at the frame-0 epoch and frames 1 and 2; the first differing dword
+    per frame is named by its offset."""
+    def parse(path):
+        out = {}
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            m = CAMDUMP.search(line)
+            if m:
+                words = m['words'].split()
+                frame = int(m['frame'])
+                if frame not in out or int(m['off'], 16) not in out[frame]:
+                    out.setdefault(frame, {})[int(m['off'], 16)] = words
+        return out
+    h, g = parse(host), parse(guest)
+    bad = 0
+    for frame in sorted(set(h) & set(g)):
+        diffs = []
+        for off in sorted(set(h[frame]) & set(g[frame])):
+            for k, (x, y) in enumerate(zip(h[frame][off], g[frame][off])):
+                if x != y:
+                    diffs.append((off + 4 * k, x, y))
+        first = f"; first at +{diffs[0][0]:#05x}: host {diffs[0][1]} guest {diffs[0][2]}" if diffs else ''
+        print(f"frame {frame}: {len(diffs)} differing dword(s){first}")
+        for off, x, y in diffs[:12]:
+            print(f'  +{off:#05x}: host {x} guest {y}')
+        bad += bool(diffs)
+    return 1 if bad else 0
 
 
 SPAWN = re.compile(r'jip spawn: phase=(?P<phase>\d+) frame=(?P<frame>\d+) n=(?P<n>\d+) caller=(?P<caller>[0-9a-f]{8}) def=(?P<definition>\S*) inst=(?P<instance>\S*) at=(?P<at>\S+) draws=(?P<draws>\d+)')
@@ -164,7 +237,7 @@ def normalise_caller(caller):
     return caller if 0x400000 <= int(caller, 16) < 0x700000 else 'dll'
 
 
-CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+) table=(?P<table>\S+)')
+CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?:t=\S+ )?(?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+) table=(?P<table>\S+)(?: fpu=(?P<fpu>\S+))?')
 
 
 def cam_mode(host, guest):
@@ -174,13 +247,15 @@ def cam_mode(host, guest):
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
             m = CAM.search(line)
             if m and int(m['frame']) not in out:
-                out[int(m['frame'])] = (int(m['count']), m['rest'], m['table'])
+                out[int(m['frame'])] = (int(m['count']), m['rest'], m['table'], m['fpu'])
         return out
     h, g = parse(host), parse(guest)
     frames = sorted(set(h) & set(g))
     print(f'camera lines: host {len(h)} frame(s), guest {len(g)} frame(s), {len(frames)} paired')
     if frames and h[frames[0]][2] != g[frames[0]][2]:
         print(f'  controller hero table order differs (local seats): host {h[frames[0]][2]} guest {g[frames[0]][2]}')
+    if frames and h[frames[0]][3] != g[frames[0]][3]:
+        print(f'  FPU control state differs (x87/mxcsr): host {h[frames[0]][3]} guest {g[frames[0]][3]}')
     for f in frames:
         if h[f][1] != g[f][1] or h[f][0] != g[f][0]:
             print(f'  first difference at frame {f}: host count {h[f][0]} {h[f][1]} / guest count {g[f][0]} {g[f][1]}')
@@ -215,7 +290,7 @@ def spawn_mode(host, guest):
 
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode}[mode](sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

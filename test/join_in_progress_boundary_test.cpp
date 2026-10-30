@@ -30,7 +30,7 @@ namespace gameplay_agreement {
 bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool) { assert(false);return false; }
 }
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
-namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } }
+namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }

@@ -82,7 +82,7 @@ void snapshot(const char* where)
 			smart_cursor = probe_at<std::uint32_t>(reinterpret_cast<std::uintptr_t>(manager) + smart_cursor_at);
 			smart_count = fn<std::int32_t(__thiscall*)(void*)>(at<std::uint32_t>(at<void*>(manager, 0), smart_count_slot))(manager);
 		}
-		logger::write("jip snapshot: where=%s frame=%u session=phases:%08x/%08x/%02x clock=step:%08x%08x now:%08x%08x pause:%08x%08x paused:%u game=t:%08x dt:%08x mode:%u rng=%08x/%u/%08x world=w:%d r:%d f:%d live:%d brains=w:%d r:%d f:%d bits:%08x cam=yaw:%08x mode:%u hist:%08x/%08x flags:%08x pause=%u/%u zone=%s/%02x ai=%08x/%08x/%08x/%08x smart=n:%d cursor:%u held:%u",
+		logger::write("jip snapshot: where=%s frame=%u session=phases:%08x/%08x/%02x clock=step:%08x%08x now:%08x%08x pause:%08x%08x paused:%u game=t:%08x dt:%08x mode:%u rng=%08x/%u/%08x world=w:%d r:%d f:%d live:%d brains=w:%d r:%d f:%d bits:%08x cam=yaw:%08x mode:%u hist:%08x/%08x flags:%08x pause=%u/%u zone=%s/%02x ai=%08x/%08x/%08x/%08x smart=n:%d cursor:%u held:%u fpu=%04x/%08x",
 			where, unsigned(frame), sess ? probe_at<std::uint32_t>(sess + 0x424) : 0, sess ? probe_at<std::uint32_t>(sess + 0x438) : 0, sess ? probe_at<std::uint8_t>(sess + 0x445) : 0,
 			probe_at<std::uint32_t>(clock + 0x34), probe_at<std::uint32_t>(clock + 0x30), probe_at<std::uint32_t>(clock + 0x3c), probe_at<std::uint32_t>(clock + 0x38),
 			probe_at<std::uint32_t>(clock + 0x14), probe_at<std::uint32_t>(clock + 0x10), probe_at<std::uint8_t>(clock + 0x20),
@@ -93,7 +93,7 @@ void snapshot(const char* where)
 			probe_at<std::uint32_t>(camera_object + camera_yaw_at), probe_at<std::uint32_t>(camera_object + camera_mode_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at + 4), probe_at<std::uint32_t>(camera_object + camera_flags_at),
 			pause ? probe_at<std::uint8_t>(pause + 0x64) : 0, pause ? probe_at<std::uint8_t>(pause + 0x6c) : 0, zone, probe_at<std::uint8_t>(zones_static + zones_loading_at),
 			probe_at<std::uint32_t>(0x78a9e4), probe_at<std::uint32_t>(0x78a9f8), probe_at<std::uint32_t>(0x78aa04), probe_at<std::uint32_t>(0x78a9e8),
-			smart_count, smart_cursor, unsigned(smart_hold));
+			smart_count, smart_cursor, unsigned(smart_hold), unsigned(x87_control_word()), unsigned(_mm_getcsr()));
 		for (int k = 0; k < 4; ++k)
 		{
 			const std::uint32_t handle = probe_at<std::uint32_t>(game_static + game_party + 4 * k);
@@ -215,12 +215,15 @@ void probe_frame_camera()
 		if (frame == 0) return;
 		++cam_lines;
 		const auto c = std::uintptr_t(camera_object);
-		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x table=%08x,%08x,%08x,%08x",
+		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x table=%08x,%08x,%08x,%08x fpu=%04x/%08x",
 			unsigned(frame), probe_at<std::uint32_t>(rng_count), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(c + camera_yaw_at), probe_at<std::uint32_t>(c + camera_yaw_history_at), probe_at<std::uint32_t>(c + camera_yaw_history_at + 4),
 			probe_at<std::uint32_t>(c + camera_mode_at), probe_at<std::uint32_t>(c + camera_flags_at),
 			probe_at<std::uint32_t>(c + 0x104), probe_at<std::uint32_t>(c + 0x108), probe_at<std::uint32_t>(c + 0x10c), probe_at<std::uint32_t>(c + 0xec), probe_at<std::uint32_t>(c + 0xf0), probe_at<std::uint32_t>(c + 0xf4),
-			probe_at<std::uint32_t>(hero_table), probe_at<std::uint32_t>(hero_table + 4), probe_at<std::uint32_t>(hero_table + 8), probe_at<std::uint32_t>(hero_table + 12));
+			probe_at<std::uint32_t>(hero_table), probe_at<std::uint32_t>(hero_table + 4), probe_at<std::uint32_t>(hero_table + 8), probe_at<std::uint32_t>(hero_table + 12),
+			unsigned(x87_control_word()), unsigned(_mm_getcsr()));
 		probe_think(unsigned(frame));
+		if (frame <= 3) { char where[24]; std::snprintf(where, sizeof where, "frame %u", unsigned(frame)); probe_events(where); }
+		if (frame <= 2) probe_camera_dump(unsigned(frame));
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:cam-line-fault", "jip cam: a line faulted"); }
 }
@@ -239,14 +242,18 @@ void __cdecl zone_load_entry_notice()
 	segment_reseed("the zone load (CMap::LoadMap or CMap::LoadZone)");
 	canonical_brain_ring();
 	hold_smart_update();
-	if (late_restart && restart.armed) snapshot("zone load epoch");
+	if (late_restart && restart.armed) probe_events("zone load before rebuild");
+	canonical_event_queue("the zone load");
+	if (late_restart && restart.armed) { snapshot("zone load epoch"); probe_events("zone load epoch"); }
 }
 void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
 	segment_reseed("the zone start (before the players are placed)");
 	hold_smart_update();
-	if (late_restart && restart.armed) snapshot("zone start epoch");
+	if (late_restart && restart.armed) probe_events("zone start before rebuild");
+	canonical_event_queue("the zone start");
+	if (late_restart && restart.armed) { snapshot("zone start epoch"); probe_events("zone start epoch"); }
 }
 // ---- follow-up 3: the camera anchor of the zone-loaded finish ------------------------------------------------------
 alignas(16) std::uint32_t camera_anchor_handles[8]{};
@@ -448,4 +455,167 @@ __declspec(naked) void spawn_entry_bridge()
 		xor esi, esi
 		jmp dword ptr [spawn_resume_at]
 	}
+}
+// ---- follow-up 7: the timed-event queue in canonical order, the FPU/SSE control state, the camera image --------
+// Round 4 (ae7/evidence/runs): at frames 12-16 the AI brains sit in the SAME slots with the SAME timers on both peers,
+// and at frame 16/17 the same three brains re-arm with the same three draws in a different order (the host 462, 478,
+// 486; the joiner 486, 462, 478; a different rotation in every run and process). Every actor update is a timed
+// event of the manager 0x75d340 (rules: event_manager_*): the heap at body+0x7c40 compares times only, so the order
+// of a frame's same-time updates is the heap's shape, which each process's push/pop history decides (a warm host
+// carries the old world's entries). At the late restart's epochs (zone load, zone start, frame 0) every peer rebuilds
+// the queue in a canonical order: the entries whose owner is a dead entity token are dropped (their fire is a no-op),
+// the rest are sorted by (time, owner's dense index, event offset, payload), the record pool is re-initialised by
+// the retail pool init and the records and heap pairs are re-added through the retail alloc / store / push, so both
+// peers hold byte-identical queues for the same live set.
+std::uint32_t event_manager_at = event_manager_object, entity_of_handle_at = entity_of_handle; // mutable for the owned native fixture only
+unsigned event_rebuilds = 0, event_last_live = 0, event_last_dead = 0;
+std::uint32_t event_index_mask()
+{
+	std::uint32_t bits = 8;
+	__try { bits = entity_capacity::installed().tokens.index_bits; } __except (EXCEPTION_EXECUTE_HANDLER) { bits = 8; }
+	if (bits < 1 || bits > 16) bits = 8;
+	return (1u << bits) - 1;
+}
+// Reads the heap pairs and their records; false when the counts are implausible (nothing is touched then).
+bool read_event_entries(std::uint8_t* body, std::vector<join_in_progress_core::event_entry>& out, unsigned& dead, unsigned& stale)
+{
+	const auto heap_count = at<std::uint32_t>(body, event_heap_count_at);
+	if (heap_count > event_records) return false;
+	out.clear(); out.reserve(heap_count); dead = stale = 0;
+	for (std::uint32_t i = 0; i < heap_count; ++i)
+	{
+		join_in_progress_core::event_entry e{};
+		const auto pair = body + event_heap_at + i * 8;
+		std::memcpy(&e.time, pair, 4); std::memcpy(&e.index, pair + 4, 4);
+		if (e.index >= event_records) return false;
+		const auto record = body + e.index * event_record_bytes;
+		e.handle = at<std::uint32_t>(record, 0); e.event = at<std::uint32_t>(record, 4);
+		std::memcpy(e.payload, record + 8, sizeof e.payload);
+		e.token = join_in_progress_core::positive_entity_token(e.handle);
+		if (e.token)
+		{
+			const std::uint32_t handle = e.handle;
+			e.owner = reinterpret_cast<std::uint32_t>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			e.live = e.owner != 0;
+			// the event's stored time (+4) no longer equals the queued one: a cancelled entry (kept; counted)
+			if (e.live && e.event >= e.owner && e.event < e.owner + 0x2000 && at<float>(reinterpret_cast<void*>(e.event), 4) != e.time) ++stale;
+		}
+		if (join_in_progress_core::event_entry_dropped(e)) ++dead;
+		out.push_back(e);
+	}
+	return true;
+}
+void probe_events_body(const char* where)
+{
+	{
+		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_at);
+		if (at<std::uint32_t>(object, 0) != event_manager_vtable) { logger::write("jip events: where=%s (unexpected manager vtable %08x)", where, at<std::uint32_t>(object, 0)); return; }
+		auto* body = object + event_body_at;
+		std::vector<join_in_progress_core::event_entry> entries; unsigned dead = 0, stale = 0;
+		const bool ok = read_event_entries(body, entries, dead, stale);
+		char line[900]; int n = std::snprintf(line, sizeof line, "jip events: where=%s heap=%u records=%u ring=r:%u/w:%u/n:%u live=%u dead=%u stale=%u rebuilds=%u head=",
+			where, at<std::uint32_t>(body, event_heap_count_at), at<std::uint32_t>(body, event_record_count_at), at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at),
+			ok ? unsigned(entries.size()) - dead : 0, dead, stale, event_rebuilds);
+		for (std::size_t i = 0; ok && i < entries.size() && i < 24 && n > 0 && n < int(sizeof line) - 40; ++i)
+		{
+			const auto& e = entries[i]; std::uint32_t t; std::memcpy(&t, &e.time, 4);
+			n += std::snprintf(line + n, sizeof line - n, "%s%08x:%u:%08x:%x", i ? "," : "", t, e.index, e.handle, e.owner ? e.event - e.owner : 0xfffu);
+		}
+		logger::write("%s", line);
+	}
+}
+// The bodies hold std::vector (C2712: no __try beside objects that unwind); the wrappers guard them.
+void probe_events(const char* where)
+{
+	if (!probe_enabled) return;
+	__try { probe_events_body(where); }
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:events-line-fault", "jip events: a line faulted"); }
+}
+void canonical_event_queue_body(const char* where)
+{
+	{
+		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_at);
+		if (at<std::uint32_t>(object, 0) != event_manager_vtable)
+		{
+			logger::write_once("jip:events-vtable", "join in progress: the timed-event manager has an unexpected vtable %08x - its queue is left as it is", at<std::uint32_t>(object, 0));
+			return;
+		}
+		auto* body = object + event_body_at;
+		const auto heap_count = at<std::uint32_t>(body, event_heap_count_at), records = at<std::uint32_t>(body, event_record_count_at);
+		const auto ring_read = at<std::uint32_t>(body, event_ring_read_at), ring_write = at<std::uint32_t>(body, event_ring_write_at), ring_count = at<std::uint32_t>(body, event_ring_count_at);
+		std::vector<join_in_progress_core::event_entry> entries; unsigned dead = 0, stale = 0;
+		if (!read_event_entries(body, entries, dead, stale))
+		{
+			logger::write_once("jip:events-implausible", "join in progress: the timed-event queue is implausible (heap %u, records %u) - left as it is", heap_count, records);
+			return;
+		}
+		const auto mask = event_index_mask();
+		entries.erase(std::remove_if(entries.begin(), entries.end(), join_in_progress_core::event_entry_dropped), entries.end());
+		std::stable_sort(entries.begin(), entries.end(), [mask](const auto& a, const auto& b) { return join_in_progress_core::canonical_event_less(a, b, mask); });
+		// The pool back to its constructed state (retail pool init: the free ring 0..1124 ascending, read 0), both
+		// bitmaps and both counts cleared, then every kept entry re-added through the retail alloc / store / heap push.
+		fn<void(__thiscall*)(void*)>(event_pool_init)(body);
+		std::memset(body + event_used_bitmap_at, 0, 0x24 * 4);
+		std::memset(body + event_alloc_bitmap_at, 0, 0x24 * 4);
+		at<std::uint32_t>(body, event_record_count_at) = 0;
+		at<std::uint32_t>(body, event_heap_count_at) = 0;
+		for (const auto& e : entries)
+		{
+			const auto index = fn<std::uint32_t(__thiscall*)(void*)>(event_record_alloc)(body);
+			alignas(4) std::uint8_t record[event_record_bytes];
+			std::memcpy(record, &e.handle, 4); std::memcpy(record + 4, &e.event, 4); std::memcpy(record + 8, e.payload, sizeof e.payload);
+			fn<void(__thiscall*)(void*, std::uint32_t, const void*)>(event_record_store)(body, index, record);
+			struct { float time; std::uint32_t index; } pair{e.time, index};
+			fn<void(__thiscall*)(void*, const void*)>(event_heap_push)(body + event_heap_at, &pair);
+		}
+		++event_rebuilds; event_last_live = unsigned(entries.size()); event_last_dead = dead;
+		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
+			where, unsigned(entries.size()), dead, stale, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
+			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at), mask, event_rebuilds);
+	}
+}
+void canonical_event_queue(const char* where)
+{
+	if (!join_in_progress_core::event_queue_rebuild_wanted(restart_reset_enabled, late_restart, restart.armed)) return;
+	__try { canonical_event_queue_body(where); }
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:events-rebuild-fault", "join in progress: the timed-event queue rebuild faulted - the queue keeps its order");
+	}
+}
+// The game thread's x87 control word and MXCSR: logged by the probe, and at the frame-0 epoch set to the values the
+// retail process runs with after its own init (the CRT's _PC_53 word 0x027f at 0x6729f6; MXCSR 0x1f80, Windows'
+// default, which nothing in XMen2.exe or the Alchemy DLLs loads - scripts/fpu_sites.py) should either have drifted.
+std::uint16_t x87_control_word() { std::uint16_t cw = 0; __asm { fnstcw cw } return cw; }
+void x87_control_word_set(std::uint16_t cw) { __asm { fldcw cw } }
+unsigned fpu_corrections = 0;
+void fpu_canonical(const char* where)
+{
+	if (!restart_reset_enabled || !late_restart) return;
+	const auto cw = x87_control_word(); const auto csr = _mm_getcsr();
+	if (cw == game_x87_control_word && csr == game_mxcsr)
+	{
+		logger::write("join in progress: canonical restart - FPU control state at %s is the game's (x87 %04x, mxcsr %08x)", where, cw, csr);
+		return;
+	}
+	x87_control_word_set(game_x87_control_word); _mm_setcsr(game_mxcsr); ++fpu_corrections;
+	logger::write("join in progress: canonical restart - FPU control state at %s CORRECTED to the game's (x87 %04x -> %04x, mxcsr %08x -> %08x; correction %u)", where, cw, game_x87_control_word, csr, game_mxcsr, fpu_corrections);
+}
+// The whole camera object as dwords (the frame-0 epoch, frames 1 and 2) so the next pair of logs names the first
+// field that parts (round 4: equal yaw/history/eye/target at frame 0, 22 ULPs apart in eye/target y at frame 1).
+void probe_camera_dump(unsigned frame)
+{
+	if (!probe_enabled) return;
+	__try
+	{
+		const auto c = std::uintptr_t(camera_object);
+		for (std::uint32_t off = 0; off < camera_bytes; off += 128)
+		{
+			char line[420]; int n = std::snprintf(line, sizeof line, "jip camdump: frame=%u off=%03x", frame, off);
+			for (std::uint32_t k = 0; k < 32 && off + k * 4 + 4 <= camera_bytes && n > 0 && n < int(sizeof line) - 12; ++k)
+				n += std::snprintf(line + n, sizeof line - n, " %08x", probe_at<std::uint32_t>(c + off + k * 4));
+			logger::write("%s", line);
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:camdump-fault", "jip camdump: a line faulted"); }
 }

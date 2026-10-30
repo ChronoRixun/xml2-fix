@@ -322,6 +322,35 @@ namespace join_in_progress_core
 		return held;
 	}
 	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers) { return stage == 0 && controllers == 32; }
+	// Follow-up 7: the timed-event queue (every actor update is one of its entries) is rebuilt in a canonical order at
+	// the late restart's epochs on every peer. One entry = one heap pair resolved to its record.
+	struct event_entry
+	{
+		float time = 0; std::uint32_t index = 0;           // the heap pair
+		std::uint32_t handle = 0, event = 0;              // the record: owner handle (+0), event object (+4)
+		std::uint32_t owner = 0;                           // the resolved owner entity (0: none)
+		std::uint8_t payload[16]{};                        // the record's +8..+23
+		bool token = false, live = false;                  // a positive entity token; resolved to an entity
+	};
+	// Canonical order: time, then the owner's DENSE index (never its generation: the warm host's generations are
+	// higher than a cold joiner's for the same slots), then the event's offset inside its owner, then the payload
+	// bytes, then the raw handle (non-token owners).
+	inline bool canonical_event_less(const event_entry& a, const event_entry& b, std::uint32_t index_mask)
+	{
+		if (a.time != b.time) return a.time < b.time;
+		const std::uint32_t ia = a.token ? (a.handle & index_mask) : 0xffffffffu, ib = b.token ? (b.handle & index_mask) : 0xffffffffu;
+		if (ia != ib) return ia < ib;
+		const std::uint32_t oa = a.owner ? a.event - a.owner : a.event, ob = b.owner ? b.event - b.owner : b.event;
+		if (oa != ob) return oa < ob;
+		const int c = std::memcmp(a.payload, b.payload, sizeof a.payload);
+		if (c) return c < 0;
+		return (a.token ? 0u : a.handle) < (b.token ? 0u : b.handle); // a token's raw value (its generation) never orders
+	}
+	// An entry is dropped only when its owner is a positive entity token that no longer resolves (the old world's
+	// actors on a warm host: their fire is a no-op that still shapes the heap). Everything else is kept.
+	inline bool event_entry_dropped(const event_entry& e) { return e.token && !e.live; }
+	inline bool positive_entity_token(std::uint32_t handle) { return handle != 0 && (handle >> 31) == 0; }
+	inline bool event_queue_rebuild_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
 	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
 	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
 	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.

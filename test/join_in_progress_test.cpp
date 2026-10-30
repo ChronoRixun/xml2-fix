@@ -503,6 +503,29 @@ int main(int argc, char** argv)
 		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a relocated pool");
 		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x484069; }), "follow-up 4: the LoadZone site is guarded");
 	}
+	{
+		// Follow-up 7: the timed-event queue's canonical order and drop rule.
+		auto entry = [](float time, std::uint32_t handle, std::uint32_t owner, std::uint32_t event, std::uint8_t tag) {
+			event_entry e{}; e.time = time; e.handle = handle; e.owner = owner; e.event = event; e.payload[0] = tag;
+			e.token = positive_entity_token(handle); e.live = owner != 0; return e; };
+		const auto host_hero = entry(2.0f, 0x3801, 0x10000, 0x10320, 0), joiner_hero = entry(2.0f, 0x1801, 0x10000, 0x10320, 0);
+		const auto other = entry(2.0f, 0x3802, 0x20000, 0x20320, 0), later = entry(2.5f, 0x3801, 0x10000, 0x10320, 0);
+		const auto second_event = entry(2.0f, 0x3801, 0x10000, 0x10328, 0), payload_b = entry(2.0f, 0x3801, 0x10000, 0x10320, 1);
+		const auto dead = entry(2.0f, 0x35ce, 0, 0x12345678, 0), non_token = entry(2.0f, 0, 0, 0x6d55fc, 0), negative = entry(2.0f, 0x80000001u, 0, 0x6d5604, 0);
+		check(!canonical_event_less(host_hero, joiner_hero, 0x3ff) && !canonical_event_less(joiner_hero, host_hero, 0x3ff), "follow-up 7: the owner's generation never orders (warm host 0x3801 = cold joiner 0x1801)");
+		check(canonical_event_less(host_hero, other, 0x3ff) && !canonical_event_less(other, host_hero, 0x3ff), "follow-up 7: same time: the lower dense index first");
+		check(canonical_event_less(host_hero, later, 0x3ff) && canonical_event_less(other, later, 0x3ff), "follow-up 7: the earlier time first whatever the owner");
+		check(canonical_event_less(host_hero, second_event, 0x3ff) && !canonical_event_less(second_event, host_hero, 0x3ff), "follow-up 7: the same owner's events by their offset (+0x320 before +0x328)");
+		check(canonical_event_less(host_hero, payload_b, 0x3ff), "follow-up 7: equal otherwise: the payload bytes decide");
+		check(canonical_event_less(other, non_token, 0x3ff) && canonical_event_less(non_token, negative, 0x3ff), "follow-up 7: non-token owners sort after every token, by raw handle");
+		check(event_entry_dropped(dead) && !event_entry_dropped(host_hero) && !event_entry_dropped(non_token) && !event_entry_dropped(negative), "follow-up 7: only a dead entity token is dropped");
+		check(event_queue_rebuild_wanted(true, true, true) && !event_queue_rebuild_wanted(true, false, true) && !event_queue_rebuild_wanted(true, true, false) && !event_queue_rebuild_wanted(false, true, true), "follow-up 7: the rebuild runs only in an armed late restart with the reset on");
+		check(join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_at + 8 * join_in_progress_rules::event_records <= join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_count_at
+		      && join_in_progress_rules::event_record_bytes * join_in_progress_rules::event_records == join_in_progress_rules::event_used_bitmap_at, "follow-up 7: the manager layout is self-consistent (1125 records of 24 bytes, 1125 heap pairs before the count)");
+		for (const auto va : {0x4b2fc0u, 0x68de14u, 0x4b2d70u, 0x4b2c10u, 0x4b2b80u, 0x4b2c90u, 0x4b2a10u, 0x41a76bu, 0x41e440u, 0x4b2de0u})
+			check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 7: every timed-event site is guarded");
+		check(join_in_progress_rules::game_x87_control_word == 0x027f && join_in_progress_rules::game_mxcsr == 0x1f80, "follow-up 7: the canonical FPU control state is the game's (CRT _PC_53, Windows MXCSR)");
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

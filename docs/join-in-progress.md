@@ -401,3 +401,33 @@ update(s) held; M dormant record(s), cursor C -> 0)`. The probe adds
 names entry `0x4612e0`, one `jip spawn: phase= frame= n= caller= def= inst=
 at= draws=` line per entity the zone spawns (bounded, 2048 per epoch);
 `scripts/jip_components.py HOST.log GUEST.log --mode spawn` names the extras.
+
+Follow-up 7 (probe round 4): every actor update is a timed event of the
+manager `0x75d340` (the actor's members +0x320/+0x328/+0x330 fire `0x434540`
+when the queued time equals the stored one; scheduled through `0x41d380` ->
+`0x41a730` -> manager vt+8; pumped by the game update through vt+0xc). The
+pending entries are a binary heap of (time, record index) at body+0x7c40 that
+compares TIMES ONLY, so the order of a frame's same-time updates - and so the
+order in which due AI brains think and draw - is the heap's shape, which each
+process's push/pop history decides (round 4: the same three brains re-armed
+with the same three draws in a different order on the two peers at frame
+16/17, in a different rotation per run). At the late restart's epochs (zone
+load, zone start, first shared frame) every peer rebuilds the queue in a
+canonical order: entries whose owner is a dead entity token are dropped (their
+fire is a no-op that still shapes the heap), the rest are sorted by (time,
+owner's dense index - never the generation, event offset, payload), the pool
+is re-initialised by the retail pool init and every entry re-added through the
+retail alloc / store / heap push. Logs: `the timed-event queue (every actor
+update) is rebuilt in canonical order at <epoch> on every peer: N entries kept
+(D whose owner is gone dropped, S cancelled kept), heap A -> B, records ...`.
+The frame-0 epoch also logs the game thread's x87 control word and MXCSR and
+sets them to the game's own values (0x027f: the CRT's `_PC_53`; 0x1f80) should
+either have drifted (`FPU control state at the first shared frame is the
+game's` / `CORRECTED`). Probe additions: `fpu=` on every snapshot and cam line,
+`jip events: where= heap= records= ring= live= dead= stale= rebuilds= head=`
+at every milestone, before and after the rebuilds, and at frames 1..3;
+`jip camdump: frame= off= <32 dwords>` of the whole camera object at the
+frame-0 epoch and frames 1 and 2. Tool modes `--mode events` and
+`--mode camdump`; `--mode rng` now compares the actor's dense index, controller,
+think time and distance as well as the caller; `--mode cam` accepts the `t=`
+field.
