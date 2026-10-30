@@ -57,6 +57,12 @@
 namespace join_in_progress_rules
 {
 	using limits_rules::guard;
+	constexpr std::uint32_t admission_entry = 0x609970;
+	inline constexpr std::array<unsigned char, 5> admission_original{0x83,0xec,0x1c,0x53,0x57};
+	inline constexpr std::array<unsigned char, 6> checksum_actor_original{0xd9,0x40,0x20,0x8b,0x48,0x28},
+		checksum_hero_original{0x8b,0x44,0x24,0x78,0x03,0xfe};
+	inline constexpr std::array<unsigned char, 5> checksum_camera_original{0xd9,0x00,0xd9,0x40,0x04};
+	inline constexpr std::array<unsigned char, 7> checksum_produced_original{0xe8,0xa7,0xb5,0xf4,0xff,0x03,0xf8};
 	constexpr std::uint32_t gamespy_thunk = 0x6159c0;
 	constexpr std::uint32_t gamespy_think = 0x604da0;
 	inline constexpr std::array<unsigned char,6> gamespy_think_original{0x8b,0x44,0x24,0x04,0x8b,0x08};
@@ -183,7 +189,17 @@ namespace join_in_progress_rules
 	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
 	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
 	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
-	inline constexpr std::array<guard, 88> guards{{
+	inline constexpr std::array<guard, 98> guards{{
+		{0x6106f0,"8a442404884119c20400", "native refusal marks the pending peer disconnected"},
+		{0x609970,"83ec1c5357", "late-admission policy before participant allocation"},
+		{0x614b05,"d940208b4828", "checksum raw actor transform observer"},
+		{0x614b77,"8b44247803fe", "checksum native hero contribution observer"},
+		{0x614bad,"d900d94004", "checksum raw camera vector observer"},
+		{0x614bd4,"e8a7b5f4ff03f8", "checksum native RNG count and final sum observer"},
+		{0x560180,"a1b4d87a00c3", "checksum RNG component is the deterministic draw count"},
+		{0x560150,"8a44240884c074148b442404a374086e00c705b4d87a0000000000", "deterministic seed setter also clears the draw count"},
+		{0x614b8a,"e8510ce3ff8b108d4c2420518bc8ff92d4000000", "checksum camera first vector stored on native stack"},
+		{0x614b9e,"e83d0ce3ff8b108bc8ff9284000000", "checksum camera second vector returned by reference"},
         {0x5e4b4e,"e8ad76020084c0", "Team action checks the current cohort not-ready flags"},
         {0x5e4c21,"e8da75020084c0", "Team alternate action checks the current cohort not-ready flags"},
         {0x60aaec,"e80f17000084c0750d", "host pause scheduler resumes when the current cohort is ready"},
@@ -286,5 +302,5 @@ namespace join_in_progress_rules
 		std::memcpy(&relative, entry + 1, 4);
 		return campaign_receive + 5 + relative == owned_target;
 	}
-	constexpr std::uint16_t agreement_revision = 6;
+	constexpr std::uint16_t agreement_revision = 7;
 }

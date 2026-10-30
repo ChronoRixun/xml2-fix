@@ -158,3 +158,4 @@ PRIVATE_IP test/online_native_fixture.inl # Invented native-discovery fixtures u
 DISASM src/online_menus_anchors.cpp # Authored 512-anchor bounds and register-preserving mask/initialization adapters; only the short guarded entry is replayed, with no extracted game listing or decompiled body.
 DISASM test/online_menus_live_input.inl # Original fixture thunk sets the parser register ABI and returns to our caller; the owned retail parser executes from the local PE, with no game instruction body embedded.
 DISASM test/join_in_progress_gamespy.inl # Authored synthetic ESI/stack callers and peer-pump recorder exercise the production bridge against the locally owned PE; no extracted game body or instruction listing.
+DISASM src/join_in_progress_diagnostics.inl # Authored register/flags/x87/XMM-preserving observer bridges; only short guarded instructions are replayed, while the retail checksum producer executes from the locally owned PE. No extracted game body or listing.

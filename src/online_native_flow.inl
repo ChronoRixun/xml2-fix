@@ -12,6 +12,7 @@ struct native_flow_state {
     int maximum=0,difficulty=-1;
     bool loaded=false,danger_room=false;
     bool callback=false,touched=false,accepted=false,refused=false,lobby_active=false,seeded=false,host_queued=false;
+    bool started_refused=false;
     // This PC's own participant record (0x6111f0, admitted: 0x614290) while the session is live (review E finding 1): the kick
     // classification compares the removed record with it, because by the 0x612070 call 0x611f50 -> 0x611c10 has already run
     // the record slot's destructor and the record's own fields may be gone.
@@ -665,6 +666,49 @@ bool native_local_admitted() {
         return admitted;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// Tagged native 0x1c refusal. Authentication and attempt ownership are checked
+// again at delivery, so another member or an obsolete generation cannot put up
+// the started-session notice. Defer cleanup until the next UI tick, outside
+// ordered packet dispatch, and skip retail's generic refusal popup.
+bool __cdecl native_started_refusal(const void* event) {
+    if(!ready || native_flow.phase!=native_phase::admitting || !broker_live() ||
+       !broker_calls.admission_target || broker_view().generation!=native_flow.ticket) return false;
+    __try {
+        const auto* bytes=static_cast<const unsigned char*>(event);
+        if(!bytes || bytes[0]!=0x1c) return false;
+        const auto size=*reinterpret_cast<const unsigned short*>(bytes+8);
+        const auto* body=*reinterpret_cast<const void* const*>(bytes+4);
+        if(!join_in_progress_core::is_started_refusal(body,size)) return false;
+        const auto* peer=*reinterpret_cast<const unsigned char* const*>(bytes+0x10);
+        if(!peer) return false;
+        std::uint32_t target=0;
+        if(!broker_calls.admission_target(native_flow.ticket,target) || target!=native_flow.address) return false;
+        const auto source=(std::uint32_t(peer[0x14])<<24)|(std::uint32_t(peer[0x15])<<16)|(std::uint32_t(peer[0x16])<<8)|peer[0x17];
+        if(source!=target) return false;
+        native_flow.started_refused=native_flow.refused=true;
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+const std::uint32_t native_refusal_resume=0x609adf;
+__declspec(naked) void native_refusal_bridge() {
+    __asm {
+        pushad
+        push edi
+        call native_started_refusal
+        add esp,4
+        test al,al
+        jz original
+        popad
+        pop edi
+        pop esi
+        xor eax,eax
+        ret
+    original:
+        popad
+        mov eax,dword ptr [esi+2298h]
+        jmp dword ptr [native_refusal_resume]
+    }
+}
 // Refreshes native_flow.local_record from the live session (the lobby tick and the Party frame). The cache matters for the
 // LOBBY kick: there 0x612c40 removes the local record through 0x611f50 before its 0x612070 call; in a running zone the record
 // is not destroyed first (review F finding 4). Not side-effect free: 0x6111f0 writes session+0x78 (its cache of the local
@@ -870,7 +914,11 @@ bool native_flow_tick(screen s) {
         }
     }
     if(native_flow.phase==native_phase::admitting) {
-        if(native_flow.refused) { native_flow_error("admission_refused");return false; }
+        if(native_flow.refused) {
+            if(native_flow.started_refused) native_flow_error("session_started");
+            else native_flow_error("admission_refused");
+            return false;
+        }
         if(native_flow.accepted) {
             if(!native_callback_clear()) { native_flow_error("admission_callback_cleanup");return false; }
             native_flow.callback=false;native_flow.phase=native_phase::guest;native_flow.started=now_ms();

@@ -20,6 +20,7 @@ inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 // /2: per-row status/pip/build/dim scenes, list count + age, per-cause error scenes, service scene (docs/online-menus.md).
 inline constexpr char broker_capability[] = "lc-online-broker/2";
 inline constexpr char native_capability[] = "lc-online-native/1";
+inline constexpr char drop_capability[] = "lc-online-drop-in/1";
 // Round 8: base lc_party scene + the pause menu's lc_party_link rename. LC authors both only when the DLL carries this.
 inline constexpr char party_capability[] = "lc-online-party/1";
 // Round 15: the complete error table (docs/online-menus.md "Round 15"): per-cause scenes beyond broker/2's eight, native
@@ -32,7 +33,7 @@ enum class intent : int { enter=1, host, code, browse, other, back, unavailable,
     // Round 8 (lc_party only; 68 and 70 are reserved and never accepted): the pause rail's Resume, Invite/Copy, the host's
     // Propose load placeholder, Leave, its confirmation, the host's Kick confirmation and Kick on card 1..4.
     party_resume=63, party_invite=64, party_propose=65, party_leave=66, party_leave_yes=67, party_kick_yes=69,
-    party_kick_first=71, party_kick_last=74, last=74 };
+    party_kick_first=71, party_kick_last=74, drop_in=75, last=75 };
 // The co-op installer atomically provides menu-anchors/512 before these seven rows are reachable.
 inline constexpr unsigned browse_rows = 7;
 static_assert(browse_rows>=1 && browse_rows<=7);
@@ -400,10 +401,11 @@ inline unsigned wait_seconds(std::uint32_t remaining_ms) { return (remaining_ms+
 
 // Native Host setup / admission failures (online_native_flow.inl native_flow_error). Every id the flow can raise is
 // registered; each selects one inline notice. An unregistered id shows the general setup notice.
-enum class native_failure { setup, discovery, refused, service, timeout, silent };
-inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent"};
+enum class native_failure { setup, discovery, refused, service, timeout, silent, started };
+inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent","lc_notice_started"};
 struct native_failure_row { const char* why; native_failure kind; };
 inline constexpr native_failure_row native_failure_table[] = {
+    {"session_started",native_failure::started},
     {"native_open_queue_full",native_failure::setup},{"stale_native_activation",native_failure::setup},{"native_open_request",native_failure::setup},
     {"native_open_exception",native_failure::setup},{"native_options_seed",native_failure::setup},{"native_options_unavailable",native_failure::setup},
     {"native_options_activation",native_failure::setup},{"native_options_initialization",native_failure::setup},{"native_options_frame",native_failure::setup},
@@ -529,6 +531,10 @@ struct mailbox {
         if(s==screen::party) {
             if(!party_accepts(value)) return false;
             source=menu; from=s; action=value; return true;
+        }
+        if(value==int(intent::drop_in)) {
+            if(s!=screen::host) return false;
+            source=menu;from=s;action=value;return true;
         }
         if(value>62) return false;
         // Entry is a native queued openmenu request with captured real input;

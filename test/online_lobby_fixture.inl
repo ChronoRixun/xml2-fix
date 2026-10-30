@@ -953,8 +953,8 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Online game"); // Other ways has no broker room.
         auto* session=reinterpret_cast<unsigned char*>(0xa53058);
         std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");session[0x3dd]=4;session[0x3df]=2;session[0x3e0]=1;
-        tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Campaign - Hard. Friends join at the next area.");
-        session[0x3e0]=2;tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Danger Room. Friends join at the next area.");
+        tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Campaign - Hard");
+        session[0x3e0]=2;tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Danger Room");
         fixture_throw=true;tick(child.data(),nullptr);fixture_throw=false;
         back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;mask=0;
         assert(announces==2 && !last_ready && current()==child.data());

@@ -645,4 +645,39 @@ void ab_native_controls(bool visibility_case) {
     std::cout<<"PASS Party kick -> immediate rail Quit -> Esc dismiss -> Esc Back\n";
 }
 
+void ac_drop_controls() {
+    setup("lc_host");items.clear();items.reserve(64);
+    auto add=[&](const char* name,int action,float y) {
+        fitem i;i.menu="lc_host";i.name=name;i.ax=118;i.az=y;i.l=0;i.b=-18;i.r=100;i.t=0;i.flags=8;
+        items.push_back(std::move(i));auto& a=items.back();const int id=int(items.size());
+        lay_out(a,id);text_of(id,name);put(a.mem.data(),8,unsigned(id));put(a.mem.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(hub.data())));
+        if(action) command_on(a,unsigned(100+id),action);else a.mem[0x54]|=0x20;
+    };
+    add("campaign",19,300);add("drop_in",75,250);add("open",19,200);
+    for(const char* name:{"lc_host_drop_on","lc_host_drop_off","lc_host_drop_unknown","lc_host_marker_drop"}) add(name,0,-500);
+    build_menu(hub.data(),"lc_host");write_table_text("lc-online-hits/1\nlc_host drop_in 118 230 222 255\n");
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
+    tick(hub.data(),nullptr);assert(!menu_drop_policy);
+    auto& campaign=item_named("lc_host","campaign");auto& drop=item_named("lc_host","drop_in");auto& open=item_named("lc_host","open");
+    for(unsigned off:{0x5cu,0x60u,0x64u,0x68u}) {
+        put(campaign.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(drop.mem.data())));
+        put(drop.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(open.mem.data())));
+        put(open.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(campaign.mem.data())));
+    }
+    reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),campaign.mem.data());
+    navigate(hub.data(),0,1);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==drop.mem.data());
+    accept_focused(hub.data());tick(hub.data(),nullptr);assert(menu_drop_policy && menu_drop_changes==1);
+    assert(!visibility["lc_host_marker_drop"] && !visibility["lc_host_drop_on"] && visibility["lc_host_drop_off"]);
+    accept_focused(hub.data());tick(hub.data(),nullptr);assert(!menu_drop_policy && menu_drop_changes==2);
+    ask_unit(mouse,hub.data(),140,240,0x202);tick(hub.data(),nullptr);assert(menu_drop_policy && menu_drop_changes==3);
+    ask_unit(mouse,hub.data(),140,240,0x202);tick(hub.data(),nullptr);assert(!menu_drop_policy && menu_drop_changes==4);
+    menu_drop_locked=true;tick(hub.data(),nullptr);accept_focused(hub.data());tick(hub.data(),nullptr);
+    assert(!menu_drop_policy && menu_drop_changes==4);
+    online_menus_rules::mailbox box;
+    for(auto screen:{online_menus_rules::screen::hub,online_menus_rules::screen::code,online_menus_rules::screen::browse,
+                     online_menus_rules::screen::lobby_host,online_menus_rules::screen::party}) assert(!box.post(75,1,screen));
+    std::cout<<"PASS AC DROP-IN retail keyboard navigation/Accept and mouse/usecmd toggle both ways; locked backend and wrong screens refuse\n";
+}
+
 }

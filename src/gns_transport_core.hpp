@@ -14,6 +14,20 @@
 
 namespace gns_transport_core
 {
+	// Outbound migration policy. A bound link can stage new messages while its
+	// earlier native reliable queue drains; delivery must wait for that drain.
+	enum class outbound_lane { native, held, service, game };
+	inline outbound_lane handoff_lane(bool bound, bool switched) {
+		return !bound ? outbound_lane::native : switched ? outbound_lane::game : outbound_lane::held;
+	}
+	inline outbound_lane handoff_lane(bool bound,bool switched,std::uint8_t opcode) {
+		if (!bound) return outbound_lane::native;
+		// Native transport service (ACK/sequence receipt and ping/reply) is
+		// independent of ordered gameplay. Holding it can deadlock both old
+		// reliable queues. A bound peer already accepts these GNS game frames.
+		if (opcode==0x0a || opcode==0x0f || opcode==0x10 || opcode==0x11) return outbound_lane::service;
+		return switched ? outbound_lane::game : outbound_lane::held;
+	}
 	// 0x611550's original entry stack: return address, participant index,
 	// reason for that participant, reason for everyone else, one-byte flag.
 	// 0x2b carries index / chosen reason / flag, padded to 12 bytes.
@@ -28,8 +42,10 @@ namespace gns_transport_core
 
     // 0x6133a0 saves ESI/EDI, then pushes four arguments for 0x611550.
     // At the latter entry its own caller return is word 7, even with FPO.
+    // The helper can blame any participant on either peer; the index does not
+    // establish this PC's role or whether the blamed record is local.
     inline std::uint32_t self_drop_parent(const std::uint32_t* frame,std::size_t words) {
-        return frame && words>=8 && frame[0]==0x6133ce && frame[1]==0 ? frame[7] : 0;
+        return frame && words>=8 && frame[0]==0x6133ce && frame[1]<4 ? frame[7] : 0;
     }
 
 	// Observation only: native checksum lists are indexed by the 0x2e sender's

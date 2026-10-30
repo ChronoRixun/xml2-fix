@@ -6,6 +6,7 @@
 #include "gns_transport.hpp"
 #include "gameplay_agreement.hpp"
 #include "join_in_progress.hpp"
+#include "join_in_progress_core.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
@@ -714,7 +715,7 @@ bool __fastcall queue(void* console,void*,const char* line) {
     // Model/name/clipboard text can never become a script or console command.
     if(ready && line) for(int value=2;value<=int(intent::last);++value) {
         if(value==int(intent::invalid_key)) continue; // internal keyboard feedback, never a published command
-        if(value>62 && !party_intent(value)) continue; // 68 and 70 are reserved
+        if(value>62 && !party_intent(value) && value!=int(intent::drop_in)) continue; // 68 and 70 are reserved
 
         char command[48]{};
         std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
@@ -909,7 +910,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host,online_room::suppress_host_lost,online_room::guest_admitted};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::late_join_enabled,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host,online_room::suppress_host_lost,online_room::guest_admitted,join_in_progress::set_late_join_enabled,join_in_progress::late_join_configurable};
 #else
 broker_api broker_calls{};
 #endif
@@ -1056,12 +1057,12 @@ void* item_try(void* menu,const char* name);
 // while the focus is on the Open bar or a prompt. Assets without the scenes (an older LC) keep their baked marker.
 struct host_marker_row { const char* item; const char* marker; };
 constexpr host_marker_row host_marker_rows[]{{"visibility","lc_host_marker_visibility"},{"room_name","lc_host_marker_room_name"},
-    {"edit_room","lc_host_marker_room_name"},{"campaign","lc_host_marker_campaign"}}; // DROP-IN is read-only: never focused, no marker
+    {"edit_room","lc_host_marker_room_name"},{"campaign","lc_host_marker_campaign"},{"drop_in","lc_host_marker_drop"}};
 void host_marker_follow(void* menu) {
     void* const focused=focus_of(menu);
     const char* shown=nullptr;
     for(const auto& row:host_marker_rows) if(focused && item_try(menu,row.item)==focused) shown=row.marker;
-    for(const char* marker:{"lc_host_marker_visibility","lc_host_marker_room_name","lc_host_marker_campaign"})
+    for(const char* marker:{"lc_host_marker_visibility","lc_host_marker_room_name","lc_host_marker_campaign","lc_host_marker_drop"})
         hide(menu,marker,!(shown && std::strcmp(shown,marker)==0));
 }
 void bind_broker(void* menu,screen s) {
@@ -1148,7 +1149,7 @@ void bind_broker(void* menu,screen s) {
         const bool settings=native_flow.maximum!=0;
         // Drop all round-1 fixture prose; LC composes localized labels from
         // these variants and the numeric maximum at the same approved anchors.
-        for(const auto* field:{"campaign","save","preview_save","preview_slots","drop_in","preview_drop"}) bind_text(menu,field,"");
+        for(const auto* field:{"campaign","save","preview_save","preview_slots","preview_drop"}) bind_text(menu,field,"");
         // 060q live: an empty value read as missing. Unknown until native Game Options produced it: the honest "--".
         bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "--");
         const std::pair<const char*,bool> choices[]{
@@ -1158,6 +1159,7 @@ void bind_broker(void* menu,screen s) {
             {"lc_host_normal",settings && native_flow.difficulty==1},{"lc_host_hard",settings && native_flow.difficulty==2}};
         for(const auto& choice:choices) hide(menu,choice.first,!choice.second);
         const bool policy_known=broker_calls.drop_in!=nullptr;
+        enable(menu,"drop_in",native_flow.phase==native_phase::idle && broker_calls.set_drop_in && broker_calls.drop_in_editable && broker_calls.drop_in_editable());
         const bool drop_in=policy_known && broker_calls.drop_in();
         hide(menu,"lc_host_drop_unknown",policy_known);hide(menu,"lc_host_drop_on",!policy_known || !drop_in);
         hide(menu,"lc_host_drop_off",!policy_known || drop_in);
@@ -1676,7 +1678,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
                 static const char* const levels[]{"Easy","Normal","Hard"};
                 std::string line=settings.danger_room ? "Danger Room" : "Campaign";
                 if(!settings.danger_room && settings.difficulty>=0) line+=std::string(" - ")+levels[settings.difficulty];
-                line+=". Friends join at the next area.";
+                // The host admission choice is not part of native discovered game info.
+                // Do not report this PC's future host policy as the remote host's.
                 bind_text(menu,"lc_campaign_summary",line.c_str());
             }
         }
@@ -2500,6 +2503,11 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
         if(private_chip || public_chip) host_visibility_click=std::pair{reinterpret_cast<std::uintptr_t>(menu),public_chip};
         pending.post(int(intent::visibility),reinterpret_cast<std::uintptr_t>(menu),screen::host);
     }
+    if(chosen && which(menu)==screen::host && current_peek()==menu && chosen==item_try(menu,"drop_in") &&
+        message==WM_LBUTTONUP && native_flow.phase==native_phase::idle && (!pending.action || pending.action==int(intent::drop_in))) {
+        lobby_focus(menu,"drop_in");
+        pending.post(int(intent::drop_in),reinterpret_cast<std::uintptr_t>(menu),screen::host);
+    }
     if(chosen && which(menu)==screen::browse && current_peek()==menu) {
         const auto name=engine_name(chosen);
         if(name.size()==8 && name.starts_with("room_") && name[5]>='0' && name[5]<'0'+int(browse_rows) && name[6]=='_') {
@@ -2552,7 +2560,7 @@ void show_notice(void* menu) {
         // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
         "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard",
         // 0.6 preview fix E: the host removed this guest (its native Kick).
-        "lc_notice_removed","lc_notice_service_silent"};
+        "lc_notice_removed","lc_notice_service_silent","lc_notice_started"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -2988,6 +2996,11 @@ void tick_impl(void* menu,bool& native_called) {
         if(s==screen::browse && broker_live() && broker_calls.list && broker_calls.list()) { last_list_at=now_ms();listed_started=true; } break;
     case intent::open_room:
         if(s==screen::host && broker_live()) { native_host_begin(); return; } break;
+    case intent::drop_in:
+        if(s==screen::host && native_flow.phase==native_phase::idle && broker_calls.drop_in && broker_calls.set_drop_in &&
+           broker_calls.drop_in_editable && broker_calls.drop_in_editable())
+            broker_calls.set_drop_in(!broker_calls.drop_in());
+        break;
     case intent::visibility:
         if(s==screen::host && native_flow.phase==native_phase::idle)
             host_public=visibility_click && visibility_click->first==reinterpret_cast<std::uintptr_t>(menu) ? visibility_click->second : !host_public;
@@ -3280,6 +3293,8 @@ bool pad_prompt_scope() {
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";
+    c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_refusal_bridge)),1,"started-session refusal from the proven host"));
     for(const auto& g:online_menus_guards::guards)
         c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what});
     c.writes.push_back(patch_transaction::relocation(0x5af5a0,"e9",true,
@@ -3409,6 +3424,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability);
 }
 }

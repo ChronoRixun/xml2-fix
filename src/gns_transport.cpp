@@ -67,6 +67,7 @@ namespace gns_transport
 			std::uint16_t port = 0;    // the peer's stock port
 			HSteamNetConnection connection = k_HSteamNetConnection_Invalid;
 			bool connector = false, bound = false, switched = false, closed = false, overflow = false, sequenced = false;
+			bool handoff_logged = false;
 			bool tunnel = false; // a room member's P2P connection (online_room owns it; the link only borrows it)
 			std::uint16_t sequence = 0; // the next native reliable sequence the GNS messages continue
 			gns_transport_core::outbox out;
@@ -652,18 +653,24 @@ namespace gns_transport
 			}
 		}
 
-		// The receive queue's reliable messages of one opcode the native ordered queue holds (0x610790's first walk).
+		// The three walks of native 0x610790, without its iterator writes:
+		// received, pending transmit and fragmented messages. During handoff,
+		// old native sends and new held adapter sends must both count.
 		std::uint32_t native_queued(std::uint8_t* peer, std::uint8_t opcode)
 		{
 			std::uint32_t n = 0;
-			if (!at<std::uint32_t>(peer, peer_receive_count)) return 0;
-			for (auto* node = at<std::uint8_t*>(peer, peer_receive_queue); node; node = at<std::uint8_t*>(node, node_next))
-			{
-				auto* header = at<std::uint8_t*>(node, node_object);
-				n += header && header[0x10] == opcode;
+			struct queue { std::uint32_t head, count, opcode; };
+			constexpr queue queues[]{{0x3090,0x309c,0x10},{0x30a0,0x30ac,0x10},{0x30b0,0x30bc,0xd}};
+			for (const auto& q : queues) {
+				if (!at<std::uint32_t>(peer, q.count)) continue;
+				for (auto* node = at<std::uint8_t*>(peer, q.head); node; node = at<std::uint8_t*>(node, node_next)) {
+					const auto* header = at<const std::uint8_t*>(node, node_object);
+					n += header && header[q.opcode] == opcode;
+				}
 			}
 			return n;
 		}
+
 		// The next reliable sequence the native receive side expects after everything it already queued.
 		std::uint16_t next_sequence(std::uint8_t* peer)
 		{
@@ -783,8 +790,8 @@ namespace gns_transport
 					if (at<std::uint32_t>(l->peer, peer_receive_count))
 						for (auto* node = at<std::uint8_t*>(l->peer, peer_receive_queue); node; node = at<std::uint8_t*>(node, node_next))
 							if (auto* h = at<std::uint8_t*>(node, node_object)) { ++queued; lowest = std::min<unsigned>(lowest, at<std::uint16_t>(h, 0xa)); }
-					logger::write("online: GNS link %s: native receive expects %u, %u queued (lowest %u), adapter next %u%s", text(l->address, l->port).c_str(),
-					              unsigned(expected), queued, lowest == 0x10000 ? 0u : lowest, unsigned(l->sequence), l->sequenced ? "" : " (not started)");
+					logger::write("online: GNS link %s: native receive expects %u, %u queued (lowest %u), adapter next %u%s; bound=%u switched=%u native send pending=%u", text(l->address, l->port).c_str(),
+					              unsigned(expected), queued, lowest == 0x10000 ? 0u : lowest, unsigned(l->sequence), l->sequenced ? "" : " (not started)",unsigned(l->bound),unsigned(l->switched),at<std::uint32_t>(l->peer,peer_send_count));
 				}
 			}
 		}
@@ -793,8 +800,9 @@ namespace gns_transport
 		{
 			for (auto& l : links)
 			{
-				// Outbound moves to GNS only once the native reliable queue to this peer is empty (all acknowledged),
-				// so no native message can arrive after a GNS one.
+				// Bound links stage NEW messages in the adapter. Only the finite old native queue must drain;
+				// continually adding input/campaign messages there can prevent an empty observation forever.
+				// Flush staged messages only after every old reliable message was acknowledged.
 				if (!l->bound || l->switched || l->closed || at<std::uint32_t>(l->peer, peer_send_count)) continue;
 				l->switched = true;
 				logger::write("online: GNS link %s carries the game's messages (switched %lu ms after binding)", text(l->address, l->port).c_str(),
@@ -1346,12 +1354,12 @@ namespace gns_transport
 			return at<const void*>(header, 0) ? length : 0;
 		}
 
-		link* switched_for_endpoint(void* manager, const void* endpoint)
+		link* bound_for_endpoint(void* manager, const void* endpoint)
 		{
 			if (manager != manager_ || links.empty()) return nullptr;
 			// The enqueue's own lookup (0x60db20: the first listed peer whose +4 equals the endpoint).
 			auto* l = by_peer(reinterpret_cast<peer_of_t>(native_peer_of)(manager, endpoint));
-			return l && l->switched ? l : nullptr;
+			return l && gns_transport_core::handoff_lane(l->bound,l->switched)!=gns_transport_core::outbound_lane::native ? l : nullptr;
 		}
 	}
 
@@ -1360,16 +1368,26 @@ namespace gns_transport
 	{
 		++enqueues;
 		activity();
-		auto* l = switched_for_endpoint(manager, endpoint);
+		auto* l = bound_for_endpoint(manager, endpoint);
 		if (!l) return -1;
 		++enqueued_gns;
-		++sent_by[header[0x10]][(header[0xe] ? 1 : 0) + (header[0xf] ? 2 : 0)];
-		if (rare(header[0x10])) logger::write_capped("gns-trace", "online: GNS trace: queued 0x%02x in the %s task", unsigned(header[0x10]), context);
-		const auto opcode = header[0x10];
-		// A link GNS closed: the message is lost like a datagram to a peer gone quiet (the native timeout ends it).
+		const auto opcode=header[0x10];
+		++sent_by[opcode][(header[0xe] ? 1 : 0)+(header[0xf] ? 2 : 0)];
 		if (l->closed || gns_transport_core::fragment_opcode(opcode)) return 1;
-		if (!l->out.enqueue(opcode, header[0xe] != 0, header[0xf] != 0, at<const std::uint8_t*>(header, 0), body_length(header)))
-			close(*l, "its outbound queue exceeded 2 MiB", false);
+		const auto length=body_length(header);
+		if (!header[0xe] && gns_transport_core::handoff_lane(l->bound,l->switched,opcode)==gns_transport_core::outbound_lane::service) {
+			message control;control.opcode=opcode;
+			if(length)control.body.assign(at<const std::uint8_t*>(header,0),at<const std::uint8_t*>(header,0)+length);
+			send(*l,gns_transport_core::frame(control),false);
+			return 1;
+		}
+		if (!l->switched && !l->handoff_logged) {
+			l->handoff_logged=true;
+			logger::write("online: GNS handoff holds new gameplay; native send pending=%u; ACK/ping service remains live",at<std::uint32_t>(l->peer,peer_send_count));
+		}
+		if (rare(opcode)) logger::write_capped("gns-trace", "online: GNS trace: queued 0x%02x in the %s task", unsigned(opcode), context);
+		if (!l->out.enqueue(opcode,header[0xe]!=0,header[0xf]!=0,at<const std::uint8_t*>(header,0),length))
+			close(*l,"its outbound queue exceeded 2 MiB",false);
 		return 1;
 	}
 	int __stdcall direct(void* manager, const std::uint8_t* address, std::uint32_t port, std::uint8_t* header)
@@ -1378,14 +1396,16 @@ namespace gns_transport
 		if (manager != manager_ || !address) return -1;
 		for (auto& l : links)
 		{
-			if (!l->switched || at<std::uint32_t>(l->peer, peer_address) != at<const std::uint32_t>(const_cast<std::uint8_t*>(address), 8) ||
+			if (gns_transport_core::handoff_lane(l->bound,l->switched)==gns_transport_core::outbound_lane::native || at<std::uint32_t>(l->peer, peer_address) != at<const std::uint32_t>(const_cast<std::uint8_t*>(address), 8) ||
 			    at<std::uint16_t>(l->peer, peer_port) != std::uint16_t(port)) continue;
 			if (l->closed || gns_transport_core::fragment_opcode(header[0x10])) return 1;
 			message m;
 			m.opcode = header[0x10];
 			const auto length = body_length(header);
 			if (length) m.body.assign(at<const std::uint8_t*>(header, 0), at<const std::uint8_t*>(header, 0) + length);
-			send(*l, gns_transport_core::frame(m), false);
+			if (gns_transport_core::handoff_lane(l->bound,l->switched,m.opcode)==gns_transport_core::outbound_lane::held) {
+				if (!l->out.enqueue(m.opcode,false,false,m.body.data(),m.body.size())) close(*l,"its handoff queue exceeded 2 MiB",false);
+			} else send(*l, gns_transport_core::frame(m), false);
 			return 1;
 		}
 		return -1;
@@ -1403,7 +1423,7 @@ namespace gns_transport
 	{
 		++backlogs;
 		auto* l = by_peer(peer);
-		if (!l || !l->switched) return -1;
+		if (!l || !l->bound) return -1;
 		outstanding(*l);
 		return int(l->out.count(std::uint8_t(opcode)) + l->in.count(std::uint8_t(opcode)) + native_queued(static_cast<std::uint8_t*>(peer), std::uint8_t(opcode)));
 	}
@@ -1447,12 +1467,12 @@ namespace gns_transport
 					index, unsigned(records[index]), unsigned(flags[index]), names[index], unsigned(head.count), unsigned(head.readable), unsigned(head.present), unsigned(head.frame), unsigned(head.hash));
 			}
 		}
-        void log_host_self_drop_parent(void* session, const std::uint32_t* frame) {
+        void log_self_drop_parent(void* session, const std::uint32_t* frame) {
             std::uint32_t parent=0;
             __try { parent=gns_transport_core::self_drop_parent(frame,8); }
             __except(EXCEPTION_EXECUTE_HANDLER) { }
             const char* name=parent==0x5f2867 ? "front-end exit" : parent==0x6149a7 ? "frame/checksum arbitration" : "other/unknown";
-            logger::write("online: native host self-drop chain: upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",unsigned(parent),name);
+            logger::write("online: native self-drop chain: role=%s target_index=%u upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",session_hosted_here() ? "host" : "guest",unsigned(frame[1]),unsigned(parent),name);
 			if (parent == 0x6149a7) log_self_drop_checksums(session);
         }
 		void log_removal_stack()
@@ -1478,7 +1498,7 @@ namespace gns_transport
 		logger::write("online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
 			unsigned(notice.caller), int(index), unsigned(lost_code), unsigned(notice.others), unsigned(notice.flag), unsigned(own_removal));
 		log_removal_stack();
-        if (!own_removal && index==0 && notice.caller==0x6133ce && session_hosted_here()) log_host_self_drop_parent(session,frame);
+        if (!own_removal && index>=0 && index<4 && notice.caller==0x6133ce) log_self_drop_parent(session,frame);
 		if (own_removal || !ready || lost_code != 0x10cc || index <= 0) return 0;
 		auto* record = record_of_index(session, index);
 		return record && defer_native_removal(session, record, "drop notice") ? 1 : 0;

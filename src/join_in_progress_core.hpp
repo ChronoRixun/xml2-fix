@@ -15,6 +15,16 @@
 // A seat whose record leaves, or a stage that outlives its limit, is dropped (the host stops holding the barrier).
 namespace join_in_progress_core
 {
+	// Admission policy is a host setup choice, not deterministic simulation state.
+	inline constexpr std::array<std::uint32_t,4> agreement_parameters{{1,4,0,0}};
+	// A release can retain rule 26's spectators/lifecycle without admitting a
+	// newcomer to a restored simulation. The host checks at request delivery,
+	// before participant/controller allocation (including a race with START).
+	inline bool admission_allowed(bool started, bool allow_late = false) { return !started || allow_late; }
+	inline constexpr std::array<std::uint8_t, 8> started_refusal{{'L','C','L','J',1,0,0,0}};
+	inline bool is_started_refusal(const void* body, std::size_t size) {
+		return body && size == started_refusal.size() && std::memcmp(body, started_refusal.data(), size) == 0;
+	}
 	// The online roster's parentheses name the held hero, not the participant.
 	// A solo-story spectator has no hero; keep the native name when one exists.
 	template<class Format>
