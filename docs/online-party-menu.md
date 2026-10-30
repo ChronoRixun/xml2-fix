@@ -152,3 +152,10 @@ Resume return target (above); the Codex route; no AREA line; Party row offline s
 
 ## Notes for the first co-op beta
 A removed player sees the native kick dialog and then "The host removed you from the game." on the Hub (rule 64; every PC of the session needs this build). Kick is not a ban.
+
+
+Party captures authored mouse actions before the native item walk, so informational text cannot cover Confirm or the Quit rail action. Mouse activations and keyboard/pad Back enter the same bounded, ordered queue. A successful Kick followed by Esc closes Party once; stale confirmation commands do not displace later input. Returning through the native menu history removes the current Party entry before Back.
+
+The lobby and Party campaign descriptions use the host's native game-info settings. The saved-campaign flag is game-info `+0x3d` (session `+0x3e1`), set on the native load path at `0x6082e6`; a guest's local selected-save pointer is not a host setting. Party's `lc_campaign_summary` is a builder-authored DATA node.
+
+Host setup visibility chips also own their mouse activation before the native walk: clicking Private or Public selects that chip immediately, and clicking the selected chip does nothing. Keyboard/pad activation retains its toggle behavior.

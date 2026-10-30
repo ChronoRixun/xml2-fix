@@ -576,6 +576,7 @@ namespace live_input_fixture {
 // Actual retail item flags/usecmd/mouse paths: the old Party fixture used
 // one shared text object and recorded focus without changing native +0x324.
 void ab_native_controls(bool visibility_case) {
+    const bool burst=mode=="r25-party-burst",blocked=mode=="r25-party-blocked";
     setup(visibility_case ? "lc_host" : "lc_party");
     items.clear();items.reserve(64);
     auto add=[&](const char* name,int action,float x,float y) {
@@ -592,11 +593,16 @@ void ab_native_controls(bool visibility_case) {
         add("visibility",21,118,250);
         add("lc_host_private",0,-500,-500);items.back().mem[0x54]|=0x20;
         add("lc_host_public",0,-500,-500);items.back().mem[0x54]|=0x20;
+        if(mode=="r25-visibility") { put(item_named("lc_host","visibility").mem.data(),0x9c,0); }
         build_menu(hub.data(),"lc_host");
         write_table_text("lc-online-hits/1\nlc_host visibility 118 230 222 255\n");
         tick(hub.data(),nullptr);
         for(bool want:{true,true,false,false,true}) {
-            ask_unit(mouse,hub.data(),want ? 196 : 140,240,0x202);tick(hub.data(),nullptr);
+            ask_unit(mouse,hub.data(),want ? 196 : 140,240,WM_MOUSEMOVE);
+            if(mode=="r25-visibility") hub[4]=0; // published owner during a native input/transition frame
+            ask_unit(mouse,hub.data(),want ? 196 : 140,240,WM_LBUTTONDOWN);hub[4]=1;tick(hub.data(),nullptr);
+            if(mode=="r25-visibility") hub[4]=0;
+            ask_unit(mouse,hub.data(),want ? 196 : 140,240,WM_LBUTTONUP);hub[4]=1;tick(hub.data(),nullptr);
             assert(visibility.count("lc_host_private") && visibility.count("lc_host_public"));
             assert(*reinterpret_cast<void**>(hub.data()+0x324)==item_named("lc_host","visibility").mem.data());
             std::cout<<"visibility selection "<<want<<" hidden public "<<visibility["lc_host_public"]<<" private "<<visibility["lc_host_private"]<<"\n";
@@ -609,17 +615,39 @@ void ab_native_controls(bool visibility_case) {
         {"lc_party_leave",66,420,80},{"lc_party_leave_yes",67,360,130},{"lc_party_cancel",8,440,130},
         {"lc_p2_kick",72,440,220}}) add(name,action,x,y);
     for(const char* scene:{"lc_party_confirm_leave_host","lc_party_confirm_leave_guest","lc_party_confirm_kick"}) { add(scene,0,-500,-500);items.back().mem[0x54]|=0x20; }
+    add("lc_campaign_summary",0,-500,-500);
     build_menu(hub.data(),"lc_party");party_default_rows(true);
     redirect(0x5b9fe0,party_back_stub);redirect(0x55c410,party_queue_stub);
     write_table_text("lc-online-hits/1\nlc_party lc_rail_quit 34 177 144 204\n");
+    auto* campaign=reinterpret_cast<unsigned char*>(0xa53058);
+    std::memset(campaign+0x3b6,0,32);campaign[0x3dd]=4;campaign[0x3df]=1;campaign[0x3e0]=1;campaign[0x3e1]=1;
     tick(hub.data(),nullptr);
+    auto& summary=item_named("lc_party","lc_campaign_summary");
+    const auto getter=reinterpret_cast<const char*(__fastcall*)(void*,void*)>((*reinterpret_cast<unsigned**>(summary.mem.data()))[0x7c/4]);
+    const char* shown_summary=getter(summary.mem.data(),nullptr);
+    assert(shown_summary && std::string_view(shown_summary)=="Saved campaign - Normal");
     auto& kick=item_named("lc_party","lc_p2_kick");
     reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),kick.mem.data());
     accept_focused(hub.data());tick(hub.data(),nullptr);
     auto& yes=item_named("lc_party","lc_party_leave_yes");
     reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),yes.mem.data());
-    accept_focused(hub.data());tick(hub.data(),nullptr);
+    if(blocked) {
+        // A visible informational CText owns the native walk before Confirm.
+        add("lc_party_recovery_1",0,360,130);
+        build_menu(hub.data(),"lc_party");
+        write_table_text("lc-online-hits/1\nlc_party lc_party_leave_yes 350 106 420 134\nlc_party lc_rail_quit 34 177 144 204\n");
+        ask_unit(mouse,hub.data(),380,120,0x202);
+    } else accept_focused(hub.data());
+    std::array<unsigned char,256> burst_keys{};
+    if(burst) { online_menus::keyboard(burst_keys.data());burst_keys[1]=128;online_menus::keyboard(burst_keys.data()); }
+    tick(hub.data(),nullptr);
     assert(party_removed==std::vector<unsigned>{1});
+    if(burst) { tick(hub.data(),nullptr);assert(party_native_backs==1);std::cout<<"PASS Confirm then Esc in one input burst: one Kick then one Back\n";return; }
+    if(mode=="r25-party-delayed") {
+        std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());
+        ticks+=300;hub[4]=0;keys[1]=128;online_menus::keyboard(keys.data());hub[4]=1;tick(hub.data(),nullptr);
+        assert(party_native_backs==1);std::cout<<"PASS Esc 300 ms after Kick closes Party once\n";return;
+    }
     assert(visibility.count("lc_party_confirm_leave_host") && visibility["lc_party_confirm_leave_host"]);
     // A delayed native replay of the shared Confirm must not swallow the
     // next real rail Quit click after Kick closed the inline confirmation.

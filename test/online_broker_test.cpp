@@ -559,7 +559,10 @@ struct packet : SteamNetworkingMessage_t {
 };
 std::deque<SteamNetworkingMessage_t*> queued;
 unsigned heartbeats=0,closed=0;
-int route_flags=0;
+int route_flags=0,timeout_ms=0;
+std::vector<std::vector<std::uint8_t>> departures;
+bool timeout(HSteamNetConnection c,int ms) { assert(c==123);timeout_ms=ms;return true; }
+EResult departure(HSteamNetConnection c,const void* data,std::uint32_t size) { assert(c==123);const auto* b=static_cast<const std::uint8_t*>(data);departures.emplace_back(b,b+size);return k_EResultOK; }
 bool info(HSteamNetConnection c,SteamNetConnectionInfo_t* out) { *out={};out->m_nFlags=c==124 ? k_nSteamNetworkConnectionInfoFlags_Relayed : route_flags;return true; }
 EResult status(HSteamNetConnection,SteamNetConnectionRealTimeStatus_t* out,int,SteamNetConnectionRealTimeLaneStatus_t*) { *out={};return k_EResultOK; }
 
@@ -580,7 +583,7 @@ room::tunnel& setup() {
     assert(room::members.reset({room::host_id,room::own_id}));
     assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
     assert(room::client.joined(room::view().generation,b::operation::resolve,"ABCDEFGH"));
-    room::guest_admitted();room::host_loss.connected();room::receive_messages=receive;room::send_keepalive=heartbeat;room::close_connection=static_cast<bool(*)(HSteamNetConnection,const char*,bool)>(close);heartbeats=closed=0;
+    room::guest_admitted();room::host_loss.connected();room::receive_messages=receive;room::send_keepalive=heartbeat;room::close_connection=static_cast<bool(*)(HSteamNetConnection,const char*,bool)>(close);heartbeats=closed=0;timeout_ms=0;departures.clear();room::connected_timeout=timeout;room::send_departure=departure;
     auto host=std::make_unique<room::tunnel>();host->id=room::host_id;host->connection=123;host->connected=true;host->removal_floor=40;
     room::tunnels.push_back(std::move(host));room::report_sequence=45;
     fake::party={};fake::party.session=true;fake::party.count=1;fake::party.participants[0].local=true;fake::party.participants[0].index=1;
@@ -599,7 +602,49 @@ void removal() {
 }
 void run(const std::string& name) {
     auto& host=setup();
-    if(name=="relay-direct" || name=="relay-accepted") {
+    if(name=="waiting-quit-receive") {
+        room::wanted=true;close();
+        gns_transport_core::message m;m.opcode=0x2b;m.reliable=true;m.body={0,0,0,0,6,0x11,0,0,1,0,0,0};
+        auto bytes=gns_transport_core::frame(m);send(bytes);queued.back()->m_nFlags=k_nSteamNetworkingSend_Reliable;room::poll();
+        assert(room::host_lost() && host.connected && host.game.empty());
+        assert(fake::delivered.empty());room::wanted=false;
+    } else if(name=="waiting-quit-guards") {
+        room::wanted=true;
+        for(unsigned variant=0;variant<5;++variant) {
+            room::host_loss.reset();room::guest_admitted();
+            gns_transport_core::message m;m.opcode=0x2b;m.reliable=true;m.body={0,0,0,0,6,0x11,0,0,1,0,0,0};
+            if(variant==1) m.body[0]=1; // a guest's own removal is not host departure
+            if(variant==2) room::host_loss.local_departure();
+            if(variant==3) room::host_loss.reset(); // no successful native admission
+            if(variant==4) host.id="legends:3333333333333333";
+            send(gns_transport_core::frame(m));if(variant) queued.back()->m_nFlags=k_nSteamNetworkingSend_Reliable;
+            room::poll();assert(!room::host_lost() && host.game.empty());host.id=room::host_id;
+        }
+        room::wanted=false;
+    } else if(name=="waiting-quit-send") {
+        room::wanted=true;room::hosting=true;
+        auto active=std::make_unique<room::tunnel>();active->connection=124;active->connected=active->transport_bound=true;
+        room::tunnels.push_back(std::move(active)); // active native peers keep their existing broadcast
+        room::leave_after_flush();room::leave_after_flush();
+        assert(departures.size()==1);
+        const auto msg=gns_transport_core::parse(departures.front().data(),departures.front().size());
+        assert(msg.valid && msg.k==gns_transport_core::kind::game && msg.opcode==0x2b && msg.length==12);
+        online_room_core::host_loss_tracker loss;loss.admitted();
+        assert(loss.departure_notice(true,false,true,msg.opcode,msg.body,msg.length));
+        room::deferred_leave.disarm();room::wanted=room::hosting=false;
+    } else if(name=="waiting-timeout") {
+        room::wanted=true;host.connected=false;
+        SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;event.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
+        event.m_info.m_identityRemote.ParseString(online_room_core::gns_identity(room::host_id).c_str());
+        room::on_status(&event);assert(host.connected && timeout_ms==10000);room::wanted=false;
+    } else if(name=="relay-host-refusal" || name=="relay-host-refusal-connected") {
+        room::wanted=true;host.connected=name=="relay-host-refusal-connected";room::host_loss.reset();
+        SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;event.m_info.m_eState=k_ESteamNetworkingConnectionState_ClosedByPeer;
+        event.m_info.m_eEndReason=1000;std::strcpy(event.m_info.m_szEndDebug,"relay-only requires TURN");
+        room::on_status(&event);
+        assert(!room::view().authenticated && room::view().error=="relay_unavailable" && !room::host_lost() && host.attempts==3);
+        room::wanted=false;
+    } else if(name=="relay-direct" || name=="relay-accepted") {
         room::wanted=true;room::relay_only=true;host.connected=false;
         if(name=="relay-direct") room::host_loss.reset(); // unadmitted join should fail promptly
         route_flags=name=="relay-accepted" ? k_nSteamNetworkConnectionInfoFlags_Relayed : k_nSteamNetworkConnectionInfoFlags_Fast;
@@ -736,7 +781,7 @@ void run(const std::string& name) {
 }
 void room_closed_offline(const std::string& only={}) {
     bool ran=false;
-    for(const char* name:{"relay-keep-host-room","relay-keep-bound","party-unbound-authority","relay-direct","relay-accepted","relay-migration","native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+    for(const char* name:{"waiting-quit-receive","waiting-quit-guards","waiting-quit-send","waiting-timeout","relay-host-refusal","relay-host-refusal-connected","relay-keep-host-room","relay-keep-bound","party-unbound-authority","relay-direct","relay-accepted","relay-migration","native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }

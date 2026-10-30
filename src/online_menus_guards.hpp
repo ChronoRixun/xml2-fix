@@ -203,6 +203,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005b9110, "83ec24a1f8386f005657894424288bf9e88b1dffff", "Game Options tick native ABI"},
     {0x005b9610, "5b8b4c24285f5ee8458b0b0083c424c3", "Game Options tick native epilogue"},
     {0x00610dc0, "8b442404568bf16a1f508d8eb603000051e89a13060083c40cc686d5030000005ec20400", "native accepted game name setter 31 bytes"},
+    {0x006082e6, "c680e103000001", "native loaded-campaign flag in advertised game-info (+3d / session +3e1)"},
     {0x0060b9d0, "e80b7200000fbe80e0030000c3", "accepted native game mode +3e0"},
     {0x005b8be8, "e8f39f05000fbea8df030000", "accepted native difficulty +3df"},
     {0x0060a089, "e80228f5ff8b1068b4466a008bc8ff521c5ec3", "native Host queues openmenu host then returns"},

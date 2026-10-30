@@ -9,7 +9,7 @@ bool tunnel_ready=false,allocate_ok=true,post_ok=true,save_accept=false,queue_ok
 std::array<unsigned,8> saves{};
 unsigned* save_object=saves.data();
 void* __cdecl save_get() { return &save_object; }
-void __fastcall save_process(void*,void*,int operation) { assert(operation==3);++save_requests;if(save_accept) put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400); }
+void __fastcall save_process(void*,void*,int operation) { assert(operation==3);++save_requests;if(save_accept) { put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400);*reinterpret_cast<unsigned char*>(0xa53058+0x3e1)=1; } }
 std::array<unsigned char,0x2100> pool{};
 std::array<unsigned char,0xc0> person{},peer{};
 std::array<unsigned char,12> address{};
@@ -314,7 +314,7 @@ void run(const script_functions_rules::func_entry* registration) {
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
     callback(8,old_generation,nullptr);const auto requests=calls.size();tick(child.data(),nullptr);assert(calls.size()==requests);
     // Round 15: a refusal selects its own notice; with the rules the PCs possibly differ on (allowlisted, bounded) it names them.
-    auto notice_count=[&] { unsigned n=0;for(const char* key:{"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_unavailable","lc_notice_resolving"}) n+=vis(key);return n; };
+    auto notice_count=[&] { unsigned n=0;for(const char* key:{"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_unavailable","lc_notice_resolving","lc_notice_relay"}) n+=vis(key);return n; };
     event(9);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && vis("lc_notice_refused") && notice_count()==1 && texts["lc_refusal_rules"].empty());
     cancel();
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
@@ -352,6 +352,14 @@ void run(const script_functions_rules::func_entry* registration) {
     set_refusal("");tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && vis("lc_notice_refused") && !vis("lc_notice_refusal_rules") && !vis("lc_notice_timeout") && notice_count()==1);
     cancel();
+    // Host relay policy is a specific refusal, at both tunnel and discovery.
+    for(bool discovered:{false,true}) {
+        resolve();tick(child.data(),nullptr);
+        if(discovered) { reply();tick(child.data(),nullptr); }
+        menu_broker.disconnected("relay_unavailable",ticks);tick(child.data(),nullptr);
+        assert(vis("lc_notice_relay") && !vis("lc_notice_timeout") && notice_count()==1);
+        cancel();
+    }
     // A console queue refusal must clean the native participant immediately.
     begin();script(0x49f9b0,4);(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);
     queue_ok=false;action("text_inviteslots");screen("lc_host");menu_complete=true;tick(child.data(),nullptr);queue_ok=true;
@@ -1052,6 +1060,11 @@ void history_run(const script_functions_rules::func_entry*) {
     (*reinterpret_cast<void(__fastcall**)(void*,void*,const char*,const char*)>(0x6a23d8))(mgr.data(),nullptr,"options",nullptr);
     assert(depth==0 && calls.back()=="request:options");
     push("main");assert(pop("options")=="main");
+    // A native menu above Party can leave Party itself in the stack. One
+    // Esc after Kick must return to the PDA rather than reopen Party.
+    depth=0;push("pda");push("lc_party");push("game_options");
+    screen("lc_party");tick(child.data(),nullptr);assert(depth==1);
+    assert(pop("lc_party")=="pda");
     std::cout<<"round9 history PASS actual retail push 0x5d74d0 / pop 0x5d7080: failed Host -> Hub -> Change name -> Enter returns to the Hub; main -> Options -> Back returns to main\n";
 }
 }

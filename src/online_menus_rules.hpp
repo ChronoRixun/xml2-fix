@@ -400,8 +400,8 @@ inline unsigned wait_seconds(std::uint32_t remaining_ms) { return (remaining_ms+
 
 // Native Host setup / admission failures (online_native_flow.inl native_flow_error). Every id the flow can raise is
 // registered; each selects one inline notice. An unregistered id shows the general setup notice.
-enum class native_failure { setup, discovery, refused, service, timeout, silent };
-inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent"};
+enum class native_failure { setup, discovery, refused, service, timeout, silent, relay };
+inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent","lc_notice_relay"};
 struct native_failure_row { const char* why; native_failure kind; };
 inline constexpr native_failure_row native_failure_table[] = {
     {"native_open_queue_full",native_failure::setup},{"stale_native_activation",native_failure::setup},{"native_open_request",native_failure::setup},
@@ -414,7 +414,7 @@ inline constexpr native_failure_row native_failure_table[] = {
     {"room_generation_or_service_lost",native_failure::service},{"native_timeout",native_failure::timeout},
     // 0.6 preview fix L (060r live failure 5): the service never answered while the room was being opened (nothing was lost - no room
     // existed yet), and a host that refused this PC's settings answered during the attempt (it used to surface as the 15 s timeout).
-    {"service_silent",native_failure::silent},{"settings_refused",native_failure::refused},
+    {"service_silent",native_failure::silent},{"settings_refused",native_failure::refused},{"relay_unavailable",native_failure::relay},
     {"native_search_refused",native_failure::discovery},{"discovery_ambiguous_or_wrong",native_failure::discovery},{"discovery_query_refused",native_failure::discovery},
     {"host_changed",native_failure::discovery},
     {"admission_call_refused",native_failure::refused},{"admission_refused",native_failure::refused},{"admission_callback_cleanup",native_failure::refused}};
@@ -523,14 +523,20 @@ struct mailbox {
     std::uintptr_t source=0;
     screen from=screen::none;
     int action=0;
-    void clear() { source=0; from=screen::none; action=0; }
+    std::array<int,31> party_tail{};
+    unsigned party_count=0;
+    void clear() { source=0; from=screen::none; action=0;party_count=0; }
     bool post(int value, std::uintptr_t menu, screen s) {
-        if(action || !menu || value<int(intent::enter) || value>int(intent::last)) return false;
+        if(!menu || value<int(intent::enter) || value>int(intent::last)) return false;
         if(s==screen::party) {
             if(!party_accepts(value)) return false;
+            if(action) {
+                if(source!=menu || from!=s || party_count==party_tail.size()) return false;
+                party_tail[party_count++]=value;return true;
+            }
             source=menu; from=s; action=value; return true;
         }
-        if(value>62) return false;
+        if(action || value>62) return false;
         // Entry is a native queued openmenu request with captured real input;
         // scripts cannot manufacture it. Value 1 remains reserved.
         if(lobby(s)) {
@@ -545,7 +551,11 @@ struct mailbox {
     }
     int take(std::uintptr_t menu, screen s) {
         const int result=source==menu && from==s ? action : 0;
-        clear(); return result;
+        if(result && s==screen::party && party_count) {
+            action=party_tail[0];--party_count;
+            for(unsigned i=0;i<party_count;++i) party_tail[i]=party_tail[i+1];
+        } else clear();
+        return result;
     }
 };
 
