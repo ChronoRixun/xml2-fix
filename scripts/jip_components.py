@@ -262,7 +262,7 @@ def normalise_caller(caller):
     return caller if 0x400000 <= int(caller, 16) < 0x700000 else 'dll'
 
 
-CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?:t=\S+ )?(?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+) table=(?P<table>\S+)(?: fpu=(?P<fpu>\S+))?')
+CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?:t=\S+ )?(?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+(?: basis=\S+ stick=\S+)?) table=(?P<table>\S+)(?: fpu=(?P<fpu>\S+))?')  # AE16: basis + stick compared too
 
 
 def cam_mode(host, guest):

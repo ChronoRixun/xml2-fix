@@ -602,6 +602,21 @@ E2 trace O:/Projects/agent-work/e2-settle-re/RESULT.md):
   (`jip move:`), and after a device switch; `scripts/jip_components.py
   --mode hero` pairs the lines by (frame, slot) and names the first
   differing dword offset.
+- AE16 (O:/Projects/agent-work/padswitch-re/RESULT.md): the controlled hero's
+  move direction is stick x the shared camera's basis vectors (0x42dbf0 ->
+  camera vt+0xcc 0x43fe00 copies +0x2cc/+0x2d8/+0x2e4; 0x447730 rewrites all
+  nine each frame) and the retail camera term is one _ftol of six summed
+  components, blind to ULPs - so a ULP-different camera moves the heroes
+  differently while the term agrees (the first-movement drops of round 10
+  A/C). The derived spans now cover +0x2cc..+0x2f8 as one span. At the
+  frame-0 epoch, after the ground re-probe, every peer also makes each party
+  hero's motion fields canonical: gravity hold +0x2f0 := 0, last fall +0x28c
+  := t, last update +0x150 := t, the velocity and angular pairs := 0 (log:
+  `the party heroes' motion fields are canonical at the first shared frame on
+  every peer (t ...)` with the before-values). The hero probe line adds
+  +0x178, +0x190..+0x1a4, +0x1d0..+0x1e8, one contiguous +0x1e8..+0x320 and
+  CHero +0x7e4..+0x81c; every `jip cam:` line carries the raw basis and the
+  decoded stick floats (compared by `--mode cam`).
 - Toggles: `[Dev] LateJoinRestartReset` (the whole canonical restart, A/B
   returning the 060y pattern), `[Dev] LateJoinProbe` (bug reports only) and
   `[Dev] LateJoinMovedCanonical` (until E2 is settled).

@@ -253,7 +253,10 @@ void probe_think(unsigned frame)
 // (the physics step's state); plus the game's t/dt. `jip_components.py --mode hero` pairs them by (frame, slot) and names
 // the first differing dword offset.
 struct hero_span { std::uint32_t at, bytes; };
-constexpr hero_span hero_dump_spans[4] = {{0x20, 0x18}, {0x120, 0x48}, {0x1e8, 0x88}, {0x2b0, 0x70}};
+// AE16: one contiguous +0x1e8..+0x320 (closes the +0x270..+0x2af gap: gravity scale +0x278, last fall +0x28c, gravity hold
+// +0x2f0), +0x178 (collision filter), +0x190..+0x1a4 (scripted interpolator), +0x1d0..+0x1e8 (animation root motion), CHero
+// +0x7e4..+0x81c (auto-move target/flag/distances read by 0x42dbf0).
+constexpr hero_span hero_dump_spans[7] = {{0x20, 0x18}, {0x120, 0x48}, {0x178, 0x04}, {0x190, 0x14}, {0x1d0, 0x18}, {0x1e8, 0x138}, {0x7e4, 0x38}};
 unsigned hero_lines = 0; constexpr unsigned hero_line_limit = 60; bool hero_lines_armed = false, hero_move_rearmed = false;
 std::uint32_t hero_last_pos[4][3]{}; bool hero_last_valid[4]{};
 void hero_lines_arm(const char* why, unsigned frame)
@@ -296,7 +299,7 @@ void probe_hero_frame(unsigned frame)
 			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
 			if (!actor) continue;
 			const auto a = reinterpret_cast<std::uintptr_t>(actor);
-			char line[1100]; int n = std::snprintf(line, sizeof line, "jip hero: frame=%u slot=%u handle=%08x ctl=%d t=%08x dt=%08x", frame, k, handle,
+			char line[1500]; int n = std::snprintf(line, sizeof line, "jip hero: frame=%u slot=%u handle=%08x ctl=%d t=%08x dt=%08x", frame, k, handle,
 				probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(game_static + 0x3ec));
 			for (const auto& sp : hero_dump_spans)
 			{
@@ -323,10 +326,15 @@ void probe_frame_camera()
 		if (frame == 0) return;
 		++cam_lines;
 		const auto c = std::uintptr_t(camera_object);
-		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x table=%08x,%08x,%08x,%08x fpu=%04x/%08x",
+		// AE16: the basis vectors the move direction is built from (+0x2cc/+0x2d8/+0x2e4) and the decoded stick floats
+		// [input+0xc610..] every peer feeds the controllers from (0x558cc0).
+		const auto input = probe_at<std::uintptr_t>(input_object_pointer);
+		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x basis=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x stick=%08x,%08x,%08x,%08x table=%08x,%08x,%08x,%08x fpu=%04x/%08x",
 			unsigned(frame), probe_at<std::uint32_t>(rng_count), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(c + camera_yaw_at), probe_at<std::uint32_t>(c + camera_yaw_history_at), probe_at<std::uint32_t>(c + camera_yaw_history_at + 4),
 			probe_at<std::uint32_t>(c + camera_mode_at), probe_at<std::uint32_t>(c + camera_flags_at),
 			probe_at<std::uint32_t>(c + 0x104), probe_at<std::uint32_t>(c + 0x108), probe_at<std::uint32_t>(c + 0x10c), probe_at<std::uint32_t>(c + 0xec), probe_at<std::uint32_t>(c + 0xf0), probe_at<std::uint32_t>(c + 0xf4),
+			probe_at<std::uint32_t>(c + 0x2cc), probe_at<std::uint32_t>(c + 0x2d0), probe_at<std::uint32_t>(c + 0x2d4), probe_at<std::uint32_t>(c + 0x2d8), probe_at<std::uint32_t>(c + 0x2dc), probe_at<std::uint32_t>(c + 0x2e0), probe_at<std::uint32_t>(c + 0x2e4), probe_at<std::uint32_t>(c + 0x2e8), probe_at<std::uint32_t>(c + 0x2ec),
+			input ? probe_at<std::uint32_t>(input + input_stick_floats_at) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 4) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 8) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 12) : 0u,
 			probe_at<std::uint32_t>(hero_table), probe_at<std::uint32_t>(hero_table + 4), probe_at<std::uint32_t>(hero_table + 8), probe_at<std::uint32_t>(hero_table + 12),
 			unsigned(x87_control_word()), unsigned(_mm_getcsr()));
 		probe_think(unsigned(frame));
@@ -864,6 +872,54 @@ void canonical_party_ground(const char* where, bool wanted)
 	{
 		ground_probe_running = false;
 		logger::write_once("jip:ground-probe-fault", "join in progress: the party heroes' ground re-probe faulted - their ground stays as each PC left it");
+	}
+}
+// AE16: the party heroes' motion fields canonical at the frame-0 epoch (after the ground re-probe, before the queue
+// rebuild) on every peer: gravity hold +0x2f0 := 0 (expired), last fall +0x28c := t, last update +0x150 := t (the first
+// step after frame 0 then sees dt = 0 on every peer alike), the velocity and angular pairs := 0 (they are zero at idle on
+// both peers anyway). CHero +0x808 (auto-move flag) is read into the line only.
+unsigned motion_canonical_runs = 0;
+void canonical_party_motion(const char* where, bool wanted)
+{
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		const std::uint32_t t = at<std::uint32_t>(reinterpret_cast<const void*>(game_static), game_time_at);
+		unsigned heroes = 0, holds = 0, falls = 0, updates = 0, velocities = 0, auto_moves = 0;
+		char detail[200]{}; int n = 0;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			if (!actor) continue;
+			++heroes;
+			if (at<std::uint32_t>(actor, actor_gravity_hold_at)) ++holds;
+			if (at<std::uint32_t>(actor, actor_last_fall_at) != t) ++falls;
+			if (at<std::uint32_t>(actor, actor_last_update_at) != t) ++updates;
+			bool moving = false;
+			for (const auto off : {actor_velocity_at, actor_angular_at, actor_velocity_prev_at, actor_angular_prev_at})
+				for (std::uint32_t i = 0; i < actor_vector_bytes; i += 4) moving |= at<std::uint32_t>(actor, off + i) != 0;
+			if (moving) ++velocities;
+			const auto auto_move = at<std::uint32_t>(actor, hero_auto_move_flag_at);
+			if (auto_move) ++auto_moves;
+			if (n >= 0 && n < int(sizeof detail) - 40) n += std::snprintf(detail + n, sizeof detail - n, "%s%u:%08x/%08x/%08x/%08x", n ? " " : "", k, at<std::uint32_t>(actor, actor_gravity_hold_at), at<std::uint32_t>(actor, actor_last_fall_at), at<std::uint32_t>(actor, actor_last_update_at), auto_move);
+			at<std::uint32_t>(actor, actor_gravity_hold_at) = 0;
+			at<std::uint32_t>(actor, actor_last_fall_at) = t;
+			at<std::uint32_t>(actor, actor_last_update_at) = t;
+			for (const auto off : {actor_velocity_at, actor_angular_at, actor_velocity_prev_at, actor_angular_prev_at}) std::memset(actor + off, 0, actor_vector_bytes);
+		}
+		++motion_canonical_runs;
+		logger::write("join in progress: canonical restart - the party heroes' motion fields are canonical at %s on every peer (t %08x): %u hero(s); gravity hold cleared on %u, last fall set on %u, last update set on %u, velocity zeroed on %u, auto-move flag set on %u (not written); before (slot:hold/fall/update/auto) %s (run %u)",
+			where, t, heroes, holds, falls, updates, velocities, auto_moves, detail, motion_canonical_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:motion-canonical-fault", "join in progress: the party heroes' motion fields could not be made canonical (read fault) - left as they are");
 	}
 }
 // In place of `call 0x495350` at 0x4868ad (the zone-loaded finish, right after 0x422520 bound the party; an

@@ -306,9 +306,14 @@ namespace join_in_progress_rules
 	// these bytes back from the pristine image before vt+0x74 runs from the party anchor, so the init runs from
 	// identical inputs on every peer; the other 205 dwords were equal on both peers in every pair.
 	struct camera_span { std::uint32_t at, bytes; };
-	inline constexpr std::array<camera_span, 12> camera_derived_spans{{
+	// AE16 (O:/Projects/agent-work/padswitch-re/RESULT.md): the controlled hero's move direction is stick x camera BASIS
+	// (0x42dbf0 -> camera vt+0xcc 0x43fe00 copies +0x2cc/+0x2d8/+0x2e4; 0x447730 rewrites all nine dwords each frame) and
+	// the retail camera term is ONE _ftol of six summed components, blind to ULPs - so +0x2cc..+0x2f8 is one span (the
+	// +0x2d8 dword sat between the two earlier spans).
+	inline constexpr std::array<camera_span, 11> camera_derived_spans{{
 		{0x010, 0x18}, {0x074, 0x04}, {0x088, 0x0c}, {0x0e0, 0x48}, {0x18c, 0x3c}, {0x1c8, 0xc4},
-		{0x2cc, 0x0c}, {0x2dc, 0x1c}, {0x414, 0x0c}, {0x458, 0x0c}, {0x484, 0x0c}, {0x4cc, 0x0c}}};
+		{0x2cc, 0x2c}, {0x414, 0x0c}, {0x458, 0x0c}, {0x484, 0x0c}, {0x4cc, 0x0c}}};
+	constexpr std::uint32_t camera_basis_at = 0x2cc, camera_basis_bytes = 0x24, input_object_pointer = 0xa6abfc, input_stick_floats_at = 0xc610;
 	// (2) E2's touch-nudge (O:/Projects/agent-work/e2-settle-re/RESULT.md): CEntity vt+0xac is "OnAttached(child)";
 	// CActor's override 0x429710 draws three bools (0x42974d/63/73) and sets the CHILD's move target (+0x120/+0x138
 	// through 0x473640) when a character lands on an actor; the only entity-to-entity caller is 0x419f20 ("set ground
@@ -323,6 +328,15 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t attach_override = 0x429710, attach_override_resume = 0x429718, find_ground = 0x470bb0, set_ground_call = 0x419f88;
 	inline constexpr std::array<unsigned char, 8> attach_override_original{0x83,0xec,0x18,0x56,0x8b,0x74,0x24,0x20};
 	constexpr std::uint32_t actor_ground_at = 0xbc, actor_ground_height_at = 0x200;
+	// AE16: the actor physics step's time stamps and velocity pair (my listing of 0x496f20 / 0x476220): +0x2f0 is compared
+	// with the game time at 0x4971c9..0x4971d7 (gravity held until then), +0x28c is `now - last fall` at 0x497287 and is
+	// rewritten `:= now` at 0x497305, +0x150 is the per-actor last update time (dt = t - +0x150 at 0x476226, rewritten at
+	// 0x476295), +0x120/+0x138 the velocity pair 0x473640 writes, +0x12c/+0x144 the angular pair (0x475f50). A warm host's
+	// heroes can carry stamps from the pre-restart clock (the clock restarts at 2.0) that a cold joiner's cannot; at the
+	// frame-0 epoch every peer makes them canonical. +0x278 (gravity scale), +0x254 (mass) and +0x259 (flags) are not
+	// velocity and stay; CHero +0x808 (auto-move flag) is logged, not written.
+	constexpr std::uint32_t actor_velocity_at = 0x120, actor_angular_at = 0x12c, actor_velocity_prev_at = 0x138, actor_angular_prev_at = 0x144,
+		actor_last_update_at = 0x150, actor_last_fall_at = 0x28c, actor_gravity_hold_at = 0x2f0, hero_auto_move_flag_at = 0x808, game_time_at = 0x3e8;
 	// (3) The AE14 pre-placement moved pass ran on an EMPTY party list (0x4867fe is before the heroes are placed by
 	// game vt+0x190 at 0x486884 and bound by 0x422520 at 0x4868a5: round 10 `0 hero(s)` on both peers). It now runs
 	// from a CALL-shape bridge over the argument-less getter call right after that binding (0x4868ad `call 0x495350`),

@@ -584,7 +584,11 @@ int main(int argc, char** argv)
 			for (const std::uint32_t keep : {camera_mode_at, camera_flags_at, 0x2f8u, 0x428u, 0x154u, 0x0u}) spans_ok &= !(x.at <= keep && keep < x.at + x.bytes);
 			total += x.bytes;
 		}
-		check(spans_ok && total == 0x1c8, "follow-up 14: the derived camera spans are aligned, disjoint, inside the object and exclude the configured fields (0x1c8 bytes)");
+		check(spans_ok && total == 0x1cc, "follow-up 14 / AE16: the derived camera spans are aligned, disjoint, inside the object and exclude the configured fields (0x1cc bytes)");
+		check(std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= camera_basis_at && camera_basis_at + camera_basis_bytes <= x.at + x.bytes && x.at + x.bytes >= 0x2f8; }),
+		      "AE16: the nine camera basis dwords +0x2cc..+0x2f0 and the yaw history up to +0x2f8 lie in ONE span");
+		check(actor_gravity_hold_at == 0x2f0 && actor_last_fall_at == 0x28c && actor_last_update_at == 0x150 && actor_velocity_at + 0x18 == actor_velocity_prev_at && actor_angular_at == actor_velocity_at + 0xc && actor_angular_prev_at == actor_velocity_prev_at + 0xc,
+		      "AE16: the motion fields are the physics step's stamps and the two velocity pairs");
 		std::array<std::uint8_t, camera_bytes> cam{}, pristine{};
 		for (std::uint32_t i = 0; i < camera_bytes; ++i) { cam[i] = std::uint8_t(i * 7); pristine[i] = std::uint8_t(i * 3 + 1); }
 		auto before = cam;

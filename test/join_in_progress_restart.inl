@@ -558,6 +558,9 @@ void run() {
         // FindGround runs on it (the redirected counter) with the override no longer suppressed; a probe-time attach
         // callback is counted, not suppressed.
         put(hero,actor_ground_at,0x1801u);find_ground_calls=0;join_in_progress::late_restart_epoch_for_camera=false;
+        // AE16: warm motion stamps and a velocity on the party hero; a non-party entity keeps its own
+        put(hero,actor_gravity_hold_at,0x43340000u);put(hero,actor_last_fall_at,0x42b40000u);put(hero,actor_last_update_at,0x42b40000u);put(hero,actor_velocity_at,0x3f800000u);put(hero,actor_velocity_prev_at+8,0x40000000u);put(hero,actor_angular_at+4,0x3e800000u);put(hero,hero_auto_move_flag_at,1u);
+        put(parent,actor_gravity_hold_at,0x43340000u);put(parent,actor_last_update_at,0x42b40000u);
         *frame=0;*seed=0x88888888u;*count=4;
         const auto epoch_at=observed_jip_logs.size();
         join_in_progress::frame_gate_reseed();
@@ -565,6 +568,14 @@ void run() {
         assert(find_ground_calls==1 && find_ground_order[0]==hero && *reinterpret_cast<unsigned*>(hero+actor_ground_at)==0);
         bool ground_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) ground_line|=observed_jip_logs[i].find("ground is re-probed at the first shared frame on every peer: 1 hero(s), 1 had a ground entity before, 1 ray hit(s), 0 attach callback(s)")!=std::string::npos;
         assert(ground_line && join_in_progress::attach_suppressions==0);
+        { // AE16: the motion pass ran after the re-probe: stamps := the game time (the mapped static's +0x3e8), hold 0, velocities 0, the auto-move flag only read
+            const unsigned t=*reinterpret_cast<const unsigned*>(game_static+game_time_at);
+            assert(*reinterpret_cast<unsigned*>(hero+actor_gravity_hold_at)==0 && *reinterpret_cast<unsigned*>(hero+actor_last_fall_at)==t && *reinterpret_cast<unsigned*>(hero+actor_last_update_at)==t);
+            for(unsigned off:{actor_velocity_at,actor_angular_at,actor_velocity_prev_at,actor_angular_prev_at}) for(unsigned i=0;i<12;i+=4) assert(*reinterpret_cast<unsigned*>(hero+off+i)==0);
+            assert(*reinterpret_cast<unsigned*>(hero+hero_auto_move_flag_at)==1u && *reinterpret_cast<unsigned*>(parent+actor_gravity_hold_at)==0x43340000u && *reinterpret_cast<unsigned*>(parent+actor_last_update_at)==0x42b40000u);
+            bool motion_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) motion_line|=observed_jip_logs[i].find("motion fields are canonical at the first shared frame on every peer")!=std::string::npos && observed_jip_logs[i].find("1 hero(s); gravity hold cleared on 1, last fall set on 1, last update set on 1, velocity zeroed on 1, auto-move flag set on 1 (not written)")!=std::string::npos;
+            assert(motion_line);
+        }
         attach_probe(parent,hero);assert(override_runs==5); // after the epoch: retail again
         // a callback during the re-probe itself (FindGround finding an actor below) runs and is counted on every peer
         join_in_progress::ground_probe_running=true;attach_probe(parent,hero);assert(override_runs==6 && join_in_progress::attach_calls_during_probe==1);join_in_progress::ground_probe_running=false;join_in_progress::attach_calls_during_probe=0;
