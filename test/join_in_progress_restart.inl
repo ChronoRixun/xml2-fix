@@ -206,6 +206,18 @@ void run() {
     *frame=0;join_in_progress::frame_gate_reseed();
     *seed=0x55555555u;*count=7;
     assert(start_bridge()==&getter_object && getter_calls==4 && *seed==0x55555555u && *count==7); // after frame 0: no segment epoch
+    // Follow-up 10 (live round 7, failing first on AE10): an EXISTING member's zone start must leave the pump's
+    // controls resume pending - the host's frame-0 input is only produced after that later resume ("resumed after
+    // world restore", AE9 reached frame 0 within 40 ms of it). AE10 resumed at the zone-start notice and marked the
+    // epoch's resume spent, so the pump never resumed, the host never produced frame 0 and both peers froze at the
+    // barrier for 120 s. The production notice as the host (existing member, epoch started, loading seen, armed late
+    // restart): afterwards the pump's resume is still due, exactly once.
+    join_in_progress::existing_cohort_member=true;join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    assert(start_bridge()==&getter_object && getter_calls==5);
+    assert(join_in_progress::epoch.resume_controls(true)); // the pump's resume after the world restore still happens
+    assert(!join_in_progress::epoch.resume_controls(true)); // once
+    join_in_progress::existing_cohort_member=false;join_in_progress::epoch.active=false;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     // latejoin-residue P2: the AI brain free ring on a synthetic stock pool: used ring -> identity through retail
     // 0x522f70 when every brain is free; left alone with one brain allocated.
     auto* pool=reinterpret_cast<unsigned char*>(brain_pool_stock);

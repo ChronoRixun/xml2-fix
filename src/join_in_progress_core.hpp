@@ -177,13 +177,6 @@ namespace join_in_progress_core
 			if (!active || !started || !saw_loading || !ready || controls_resumed) return false;
 			controls_resumed = true; return true;
 		}
-		// Follow-up 9: an existing member resumes its native controls at the zone START of a canonical restart (before
-		// the first world tick, the state a newcomer is already in), not at the pump's later poll; once per epoch.
-		bool resume_controls_early()
-		{
-			if (!active || !started || controls_resumed) return false;
-			controls_resumed = true; return true;
-		}
 		bool observe(bool loading, bool holding)
 		{
 			if (!active || !started) return false;

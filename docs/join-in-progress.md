@@ -452,12 +452,15 @@ unconditionally in a fixed order on every peer - RNG epoch, camera re-anchor,
 respawn release, FPU control state, the queue rebuild LAST - and the epoch
 itself ends the late restart (`the frame-0 epoch is complete on this peer ...;
 the late restart ends here`); `cohort synchronized` keeps the flag while an
-epoch is still armed. The one role-asymmetric step before frame 0 was the
-existing member's native controls, disabled by its old-world teardown and
-resumed by the pump's poll after the zone start (and the first world tick):
-they are now resumed at the zone start, the state a newcomer is already in
-(`the existing participant's native controls are resumed at the zone start,
-before the first world tick`). The canonical order keys an event by its offset
+epoch is still armed. Follow-up 10 (live round 7): AE10 also resumed an existing member's native
+controls at the zone start and marked the pump's resume spent; the host then
+never produced its frame-0 input and every late restart froze at the barrier.
+Reverted: the pump resumes the controls after the world restore, as before
+(the fixture drives the production zone-start notice as an existing member and
+asserts the pump's resume is still due). The AE10 logs show every hero
+transform bit-identical on both peers at `zone started`; the settle that parts
+them runs in the barrier-wait ticks, whose count differs per peer.
+The canonical order keys an event by its offset
 inside its owner or, for a static kind object (the "moved" notification
 0x6d7c5c and the table at 0x6d55a4), by its address, which every process
 shares; the probe's `jip events:` lines now carry every entry (`part=k/n`,

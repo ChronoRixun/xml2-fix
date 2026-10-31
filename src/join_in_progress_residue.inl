@@ -254,30 +254,15 @@ void __cdecl zone_load_entry_notice()
 	canonical_event_queue("the zone load");
 	if (late_restart && restart.armed) { snapshot("zone load epoch"); probe_events("zone load epoch"); }
 }
-// Follow-up 9 (round 6): the one role-asymmetric thing between the zone start and frame 0 was the HOST's native
-// controls, disabled by its old-world teardown and resumed only when the pump's poll saw the loading flags clear
-// (35.883, after the zone start 35.852 and the first world tick); a newcomer's controls were enabled at its native
-// add and stayed so. In that tick one hero settled on the joiner only (the camera target's y differed by 0.658 at
-// frame 0, every eye/target copy with it; E2: the Storm touch nudge; the joiner's one extra timed event is the
-// "moved" notification 0x6d7c5c of a hero that changed position). The existing member now resumes its controls at
-// the zone start, before anything of the finish runs, the state the newcomer is already in.
-void resume_existing_controls_at_zone_start()
-{
-	if (!restart_reset_enabled || !late_restart || !restart.armed || !existing_cohort_member || !epoch.resume_controls_early()) return;
-	__try
-	{
-		fn<init_t>(controller_resume)(fn<getter_t>(controllers_getter)());
-		logger::write("join in progress: canonical restart - the existing participant's native controls are resumed at the zone start, before the first world tick, as a newcomer's already are");
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		logger::write_once("jip:early-resume-fault", "join in progress: the zone-start controls resume faulted - the pump's later resume stands");
-	}
-}
+// Follow-up 10 (live round 7): AE10 resumed an existing member's native controls here (retail 0x550d10 = controllers
+// +0x24 := 1) and marked the pump's resume spent; the host then never produced its frame-0 input and both peers froze
+// at the barrier for 120 s (the pump's resume after the world restore is what the frame gate needs). The AE10 logs also
+// show the four hero transforms bit-identical on both peers at `zone started` (after the controls question is moot), so
+// the settle that parts them runs in the barrier-wait ticks, whose count differs per peer; it was never a controller
+// asymmetry. Reverted: the controls resume is the pump's, after the world restore, as in AE9.
 void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
-	resume_existing_controls_at_zone_start();
 	segment_reseed("the zone start (before the players are placed)");
 	hold_smart_update();
 	if (late_restart && restart.armed) probe_events("zone start before rebuild");

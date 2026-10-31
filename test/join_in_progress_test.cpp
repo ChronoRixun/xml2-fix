@@ -532,12 +532,13 @@ int main(int argc, char** argv)
 			check(event_kind_key(mem) == 0x320 && canonical_event_less(mem, jk, 0x3ff) && !canonical_event_less(jk, mem, 0x3ff), "follow-up 9: a member event (its offset) sorts before a static kind on the same owner");
 			check(!canonical_event_less(hk, jk, 0x3ff) && !canonical_event_less(jk, hk, 0x3ff), "follow-up 9: the same kind on the same slot is equal across processes");
 			check(cohort_sync_clears_late_restart(false) && !cohort_sync_clears_late_restart(true), "follow-up 9: cohort synchronized ends the late restart only when no frame-0 epoch is still armed");
-			cohort ep{};
-			check(!ep.resume_controls_early(), "follow-up 9: no early resume outside an epoch");
-			ep.begin(); check(!ep.resume_controls_early(), "follow-up 9: no early resume before the native start");
-			ep.start(); check(ep.resume_controls_early() && !ep.resume_controls_early() && !ep.resume_controls(true), "follow-up 9: the early resume happens once per started epoch and the pump's resume never repeats it");
-			cohort late{}; late.begin(); late.start(); late.observe(true, false);
-			check(late.resume_controls(true) && !late.resume_controls_early(), "follow-up 9: after the pump's resume the early one is spent too");
+			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
+			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
+			// epoch saw the loading flags, and never before.
+			cohort ep{}; ep.begin(); ep.start();
+			check(!ep.resume_controls(true), "follow-up 10: no resume before the epoch has seen the world loading");
+			ep.observe(true, false);
+			check(!ep.resume_controls(false) && ep.resume_controls(true) && !ep.resume_controls(true), "follow-up 10: the pump resumes once, when the world is no longer loading");
 		}
 		check(event_queue_rebuild_wanted(true, true, true) && !event_queue_rebuild_wanted(true, false, true) && !event_queue_rebuild_wanted(true, true, false) && !event_queue_rebuild_wanted(false, true, true), "follow-up 7: the rebuild runs only in an armed late restart with the reset on");
 		check(join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_at + 8 * join_in_progress_rules::event_records <= join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_count_at
