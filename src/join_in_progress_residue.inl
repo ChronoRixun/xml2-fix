@@ -330,6 +330,7 @@ void camera_lines(bool arm) { cam_lines_armed = arm && probe_enabled; cam_lines 
 void probe_frame_camera()
 {
 	if (!probe_enabled) return;
+	probe_audit_frame(unsigned(probe_at<std::uint16_t>(native_frame)), false);
 	{ const auto f = probe_at<std::uint16_t>(native_frame); if (f) probe_hero_frame(unsigned(f)); } // AE15b: every gated frame inside a late epoch
 	if (!cam_lines_armed || cam_lines >= cam_line_limit) return;
 	__try
@@ -367,6 +368,7 @@ void probe_period(std::uint16_t frame)
 void hold_smart_update(); // follow-up 5, below
 void __cdecl zone_load_entry_notice()
 {
+	audit_zone_load();
 	if (late_restart && restart.armed) { probe_epoch_late = true; spawn_notes = 0; spawn_notes_dropped = 0; touch_lines = 0; probe_milestone("zone load entry", 1); }
 	segment_reseed("the zone load (CMap::LoadMap or CMap::LoadZone)");
 	canonical_brain_ring();
@@ -1028,11 +1030,37 @@ void canonical_party_motion(const char* where, bool wanted)
 // the queue rebuild) on every peer: goal +0x1d0 and start +0x1dc := FLT_MIN, speeds +0x180 / +0x184 := 0 (what retail
 // 0x421b90 writes), so the first actor update after frame 0 re-arms every NPC every 0.1 s alike (rules:
 // actor_move_* / actor_update_rearm_tail). The entities are walked by dense index through the installed world's
-// vt+0x10; the party list (game vt+0x11c) names the heroes left to their own passes. The +6 flag, a follow handle and
-// the goal vector are counted (not written) and the dense indices of the NPCs that carried a speed are logged, so the
+// vt+0x10; the party list (game vt+0x11c) names the heroes left to their own passes. AL clears the +6 active bit and AM
+// notifies its registered world index; the follow handle is counted only. The NPCs that carried a speed are logged, so the
 // next probed round names them on every peer.
 std::uint32_t world_getter_at = entity_capacity_layout::native_world_getter; // mutable for the owned native fixture only
 unsigned npc_intent_runs = 0;
+// 0x45fe40's registered-entity notification, through the installed world (also supports raised layouts).
+// Retail vt+0x3c = 0x4c6990: bitmap changes followed by a 16-byte copy, no entity/grid/gameplay call.
+bool notify_npc_flags(void* world, void* actor, std::uint32_t index)
+{
+	if (!(at<std::uint8_t>(actor, entity_registered_at) & entity_registered_bit)) return false;
+	const auto vt = at<void*>(world, 0);
+	const auto cached = fn<const std::uint32_t*(__thiscall*)(void*, std::uint32_t)>(at<std::uint32_t>(vt, world_flag_record_slot))(world, index);
+	const bool changed = std::memcmp(cached, static_cast<std::uint8_t*>(actor) + entity_flags_at, entity_flag_bytes) != 0;
+	fn<void(__thiscall*)(void*, std::uint32_t, const void*)>(at<std::uint32_t>(vt, world_flag_update_slot))(world, at<std::uint32_t>(actor, 0x1c), static_cast<std::uint8_t*>(actor) + entity_flags_at);
+	return changed;
+}
+// The two persistent spatial query windows used by 0x466bf0. Retail 0x466b10 also clears these through vt+0x38,
+// before its separate SetActive(false) loop. Call only the bookkeeping clear, never that loop or a grid reset.
+std::uint32_t visibility_grid_getter_at = entity_capacity_layout::native_grid_getter;
+void canonical_visibility_queries(const char* where, bool wanted)
+{
+	if (!wanted) return;
+	__try
+	{
+		void* grid = fn<getter_t>(visibility_grid_getter_at)();
+		const auto clear = fn<void*(__thiscall*)(void*, int)>(at<std::uint32_t>(at<void*>(grid, 0), visibility_cache_clear_slot));
+		clear(grid, 0); clear(grid, 1);
+		logger::write("join in progress: canonical restart - the two visibility query caches are invalid and empty at %s on every peer; the next shared camera box rebuilds them from the grid (no entity callback)", where);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:visibility-cache-fault", "join in progress: the visibility query caches could not be invalidated (read fault)"); }
+}
 void canonical_npc_move_intent(const char* where, bool wanted)
 {
 	if (!wanted) return;
@@ -1048,7 +1076,7 @@ void canonical_npc_move_intent(const char* where, bool wanted)
 		const std::uint32_t capacity = 1u << bits;
 		void* world = fn<getter_t>(world_getter_at)();
 		const auto entity_at = fn<void*(__thiscall*)(void*, std::uint32_t)>(at<std::uint32_t>(at<void*>(world, 0), world_entity_by_index_slot));
-		unsigned actors = 0, heroes = 0, speeds = 0, goals = 0, flags = 0, follows = 0;
+		unsigned actors = 0, heroes = 0, speeds = 0, goals = 0, flags = 0, follows = 0, indexed = 0;
 		char detail[200]{}; int n = 0;
 		char fdetail[200]{}; int fn_ = 0; // p060fix/AL: the dense indices that carried the active bit
 		for (std::uint32_t i = 0; i < capacity; ++i)
@@ -1070,21 +1098,24 @@ void canonical_npc_move_intent(const char* where, bool wanted)
 			// the entity's active bit (+4 bit 16 = +6 bit 0; CEntity vt+0x5c = 0x4601f0 through the generic setter
 			// 0x41a190(16, v), driven by the grid/query activation 0x466b10 / 0x466dde / setInvisible 0x4a8910 before frame
 			// 0 with each PC's own camera) is the other every-frame input of the re-arm tail. From frame 2 on every kid is
-			// at 0.1 s on every peer, so the bit is cleared here directly (not through the setter: its true-to-false path
-			// removes the entity through the grid / vt+8); the first update after frame 0 then re-arms every NPC alike.
+			// at 0.1 s on every peer, so the bit is cleared here directly (not through SetActive: its true-to-false path
+			// can invoke entity vt+8 gameplay callbacks after the grid occupancy predicate); the first update after frame 0 then re-arms every NPC alike.
 			if (d.had_fast_flag)
 			{
 				++flags; if (fn_ >= 0 && fn_ < int(sizeof fdetail) - 8) fn_ += std::snprintf(fdetail + fn_, sizeof fdetail - fn_, "%s%x", fn_ ? "," : "", i);
 				at<std::uint8_t>(actor, actor_entity_flags6_at) = std::uint8_t(at<std::uint8_t>(actor, actor_entity_flags6_at) & ~actor_fast_update_bit);
 			}
+			// ZF: also repair a stale indexed record when this object's bit was already clear. The full native record
+			// notification keeps the authored visible/smartent predicates (15/17) indexed without rewriting those bits.
+			indexed += notify_npc_flags(world, actor, i) ? 1u : 0u;
 			if (d.had_follow) ++follows;
 			for (std::uint32_t off = 0; off < 2 * actor_vector_bytes; off += 4) at<std::uint32_t>(actor, actor_move_goal_at + off) = move_goal_none_bits; // +0x1d0..+0x1e7: goal, start
 			at<std::uint32_t>(actor, actor_move_speed_a_at) = 0;
 			at<std::uint32_t>(actor, actor_move_speed_b_at) = 0;
 		}
 		++npc_intent_runs;
-		logger::write("join in progress: canonical restart - the AI actors' move intent is canonical at %s on every peer: %u AI actor(s) (CActor without a controller; %u party hero(s) left to their own passes, %u entity slot(s) walked), %u had a move speed (+0x180/+0x184 > 0: updated every frame instead of every 0.1 s), %u a move goal (+0x1d0), %u the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on %s), %u a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: %s (run %u)",
-			where, actors, heroes, capacity, speeds, goals, flags, fn_ ? fdetail : "none", follows, n ? detail : "none", npc_intent_runs);
+		logger::write("join in progress: canonical restart - the AI actors' move intent is canonical at %s on every peer: %u AI actor(s) (CActor without a controller; %u party hero(s) left to their own passes, %u entity slot(s) walked), %u had a move speed (+0x180/+0x184 > 0: updated every frame instead of every 0.1 s), %u a move goal (+0x1d0), %u the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on %s), %u a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: %s (run %u); %u world-index entries corrected",
+			where, actors, heroes, capacity, speeds, goals, flags, fn_ ? fdetail : "none", follows, n ? detail : "none", npc_intent_runs, indexed);
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{

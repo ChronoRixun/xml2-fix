@@ -805,7 +805,8 @@ read `S 0, F 7` on every peer - no kid had a move speed at the epoch, seven
 carried the OTHER every-frame input, the entity's active bit (+4 bit 16 = +6
 bit 0), and `--mode cadence` named the same six kids. The bit has one writer:
 CEntity vt+0x5c = 0x4601f0(bool) through the generic flag setter 0x41a190(16,
-v) (a true-to-false change also removes the entity through the grid / vt+8),
+v) (a true-to-false change can invoke gameplay through entity vt+8 after a
+read-only grid occupancy check),
 called from the grid/query activation code (0x466b10 deactivates a query's
 results, 0x466dde activates a list, setInvisible 0x4a8910 pairs it with bit 15)
 - camera/query driven before frame 0 with each PC's own camera (the zone-start
@@ -818,3 +819,86 @@ on <indices>)`), and the probe adds one `jip npc: frame=N <index>:<bit>/<speed
 a>/<speed b> ...` line per gated frame. The first update after frame 0 then
 re-arms every NPC at 0.1 s alike on 2..4 peers at any exit: per entity, on
 every peer, nothing keyed on a seat, a role, a PC or a zone.
+
+
+p060fix/AM closes the audit's R1 and R4 gaps:
+
+* After AL directly clears NPC active bits, every registered selected NPC (+0x6c bit 0)
+  notifies the installed world's `vt+0x3c(token, flags+4)`, matching the flag
+  notification at retail `0x45fe40`. Retail `0x4c6990..0x4c6b5c` changes only
+  the transposed flag bitmaps and 16-byte cached flag record; its only call is
+  the `rep movsd/movsb` copy at `0x4015d0`. The raised world's corresponding
+  method has the same contract. No SetActive, grid operation or entity callback
+  is invoked. Already-inactive NPCs are reconciled too, including stale cached
+  flag-15/17 predicates; their authored object bits are preserved. The AL line gains `N world-index entries corrected` (cached records
+  that differed when notified). Unregistered NPCs have no entry to notify; party
+  heroes are excluded before the clear. This repairs indexed flags, not the
+  other activation side effects listed in audit R2.
+* At every canonical frame-0 cohort epoch, the XML1 turret adapter explicitly
+  resets its three deadlines from that frame's game time, target/burst/aim state,
+  binding retries, captured rest orientation, resource caches and flight list.
+  Existing rotation audio loops are stopped. A repeated load into the same zone
+  at the same time takes this reset too. Uninstalled turrets are a no-op, and
+  `[Dev] LateJoinRestartReset=0` retains the A/B behavior. The native queue rebuild
+  still runs last and composes with the existing turret dispatch hook.
+* With `[Dev] LateJoinProbe=1`, one `jip audit:` line is emitted after the epoch
+  passes, then at gated frames 1 and 30 (once each, even on repeated gate calls).
+  `entities=nonparty/registered` and `flags=hash` cover every non-party entity's
+  dense index, registration, four object/cache flag words and flag-16
+  bitmap membership through installed `vt+0x44` / `vt+0x40(16)` interfaces.
+  `diff=N[index:object_word0/cached_word0/bitmap,...]` names the first eight local
+  inconsistencies. Unregistered objects contribute object flags only.
+  `vis=activate/deactivate/remove/actonvisible/shy_inhibit/shy_permit` counts
+  actual dispatches/tests since zone load, with an ordered normalized hash and
+  `ids=N[index:event_mask,...]` for the first eight affected indices (mask bits
+  0..5 in that order). The activation counts are dispatches, including a repeated
+  SetActive with the same value; removal is recorded immediately before dispatch.
+  The guarded observation sites are `0x466dde`, `0x466ec3`, `0x466f72`,
+  `0x48a533` and `0x48b05b`. The shy observer records the actual projection result.
+  `turrets=placements/live/flights:hash` covers scheduler/deadline/target/binding/
+  aim/burst/rest state, normalized flight identities and definition-cache names;
+  process-local resource handles are represented by state/presence, not addresses.
+  The observer bridges preserve integer registers, flags, x87 and SSE state.
+  These five observation patches and guards are enabled only with the probe;
+  collection ends at frame 30 or a new zone load. Frames 1/30 require the epoch
+  sample first; the next late zone load starts a fresh trace.
+
+The mapped restart fixture executes the real retail world cache/bitmap updater,
+checks registered and unregistered NPCs and an untouched party hero, and drives
+all five probe bridges with the retail stack shapes. The production turret
+adapter has its own `xml2_xml1_turrets_restart_test` for same-zone/repeated-time
+resets and a generation-normalized read-only digest. These are offline checks;
+a live round is still needed for cross-peer behavior. No R2 blanket activation,
+R5 roster reconciliation, or R6-R10 state repair is included.
+
+
+AM follow-up to ZF-3P-E2p: the frame-1 activation set is
+`query_class & ~CWorld.flag16 & CWorld.flag15 & grid.window0(shared_camera_box)`.
+Deactivation uses `query_class & ~grid.window1(expanded_box) & flag16 & flag15`;
+smartent storage/removal uses `query_class & ~window1 & flag17`. Flag 15 is the
+visible predicate paired with SetActive by setInvisible; flag 17 is smartent
+lifecycle state. `query_class` is CWorld vt+0x40(global[0x718448]+0x24). The epoch preserves those authored object bits and refreshes
+their complete indexed record even on an NPC whose active object bit was
+already zero.
+
+Both persistent grid query windows (cell extents plus entity bitmaps) are now
+invalidated through installed grid vt+0x38 at the epoch, after the NPC pass.
+Retail `0x464330` only writes invalid extents and zeros that cache's bitmap.
+It changes no entity, cell membership, physical registration or gameplay state.
+The next `0x4646d0` stores the shared camera's bounds first and rebuilds each
+invalid cache from the grid. Old bounds cannot affect the decision.
+
+CEntityVisibility's routines do not retain a previous results list: they acquire
+and release temporary query/order records. `0x4ab670` calls the query reset before
+use; `0x4a9ac0` sets order count to zero before filling it. The policy vtable
+`0x68202c` calls `0x4dbb30`, which returns constant zero, so this path enumerates
+dense indices without a direction sort. The script scratch list `0x756138` is
+not read by visibility; setInvisible's surviving inputs here are indexed flags.
+
+The restart fixture runs actual retail `0x466bf0` against production 1024-slot
+World/Grid/Query owners. The old AL control reproduces peer A no activation and
+peer B `{116,11a,11f}`; AM activates `{116,117,119,11a,11d,11f,120}` on both, in
+the same order, with equal spatial caches/indexes. It also tests already-inactive
+objects with stale indexed flags 15/17, different prior spatial windows, stale
+query/order records and script scratch lists, and party/hidden/smartent preservation.
+No blanket SetActive(false) or smartent/invisibility rewrite is added.

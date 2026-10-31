@@ -390,7 +390,21 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t actor_move_speed_a_at = 0x180, actor_move_speed_b_at = 0x184, actor_move_goal_at = 0x1d0, actor_move_start_at = 0x1dc,
 		actor_follow_handle_at = 0x3ec, actor_entity_flags6_at = 0x6, actor_fast_update_bit = 0x01, actor_vtable = 0x682ccc, actor_move_goal_clear = 0x421b90,
 		actor_update_rearm_tail = 0x434fc3, actor_update_rearm_tail_bytes = 0x49, world_entity_by_index_slot = 0x10, move_goal_none_bits = 0x00800000; // FLT_MIN
-	inline constexpr std::array<guard, 145> guards{{
+	// AM / R1: mirror 0x45fe40 via the installed world; never dispatch SetActive or any entity/grid callback.
+	constexpr std::uint32_t entity_flags_at = 4, entity_flag_bytes = 16, entity_registered_at = 0x6c, entity_registered_bit = 1,
+		world_flag_update_slot = 0x3c, world_flag_members_slot = 0x40, world_flag_record_slot = 0x44, entity_active_flag = 16;
+	constexpr std::uint32_t visibility_cache_clear_slot = 0x38;
+	inline constexpr std::array<guard, 153> guards{{
+		{0x464330,"8b4424046bc03c03c132c988883d08010088883f08010033c90558080100b2ff8850e48850e6890889480489480889480c89481089481489481889481cc20400", "AM/ZF: full grid query-cache clear: only invalid extents and zero bitmap, no calls"},
+		{0x686c8c,"30434600", "AM/ZF: grid vt+0x38 is cache clear, not reset/remove"},
+
+		{0x45fe40,"f6416c017418a1308471008d510452518b491c8bd4890a8b108bc8ff523cc3", "AM: registered entity flag notification; only world vt+0x3c"},
+		{0x68f848,"90694c0050694c0070694c00", "AM: CWorld flag update, bitmap getter, cache getter slots"},
+		{0x4c6990,"8b44240453558bd9568d8b908500005725ff000000bf02000000894c24148bff8d4ffe8bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548ae08bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8d4fff8bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174288b5424148bc8c1f9058d148a8bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8bcf83e11fbe01000000d3e68b4c24188bd7c1fa058b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548a208bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8d4f018bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548a408bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8b74241483c70481c6800000008d4ffe83f970897424140f8c75feffff8b5424186a10c1e004528d84186c75000050e87eaaf3ff83c40c5f5e5d5bc20800", "AM: CWorld flag update: only bitmaps and 16-byte cache copy"},
+		{0x4015d0,"8b4c240c568b74240c578b7c240c8bc18bd7c1e902f3a58bc883e103f3a45f8bc25ec3", "AM: flag record copy helper: rep movsd / movsb only"},
+		{0x4c6950,"8b442404c1e0058d840870850000c20400", "AM: CWorld flag bitmap getter"},
+		{0x4c6970,"8b442404c1e0048d84086c750000c20400", "AM: CWorld dense flag record getter"},
+
 		{0x42a460,"8a81d8030000a82075170c208881d8030000", "actor vt+0x1ec: +0x3d8 bit 0x20 = the static kind 0x6d5e30 is pending; set once, then scheduled"},
 		{0x42ef3d,"8a96d803000080e2df8ac2a8018896d80300007511", "kind 0x6d5e30 fire: clears +0x3d8 bit 0x20, branches on the AI bit (player: re-arm through vt+0x1ec; AI: +0x774 := 0)"},
 		{0x41da63,"f686d803000001751951", "AI switch-on 0x41da60: tests the AI bit and ORs it (bit 0x20 untouched: a released player hero keeps its pending event)"},
@@ -537,9 +551,18 @@ namespace join_in_progress_rules
 		{0x41e440,"8b442408d900d94104dae9dfe0f6c4447a12c74104000000008b4c24046a00e8dc600100","actor update timed event: fires 0x434540 when the queued time equals the stored one"},
 		{0x4b2de0,"568bf18b962c2300004a8bc285c089962c230000","timed-event heap pop: last entry to the root, sift-down by time"},
 	}};
-	inline const guard* first_mismatch(const std::uint8_t* image)
+	inline constexpr std::array<guard, 5> audit_probe_guards{{
+		{0x466dd8,"8b106a018bc8ff525c8b068bce47ff10", "AM probe: visibility activation call and displaced load"},
+		{0x466ebe,"8b10538bc8ff525c8b068bce47ff103b", "AM probe: visibility deactivation call and displaced load"},
+		{0x466f6a,"8b401c518bcc8901e8798fffff", "AM probe: visibility removal token and call"},
+		{0x48a522,"f6867c02000008740e8b066a006a008bceff90d4000000", "AM probe: actonvisible predicate and spawn dispatch"},
+		{0x48b041,"f6857c020000107432e891a7fbff8b1033db53538d4d20518bc8ff927801000084c07419", "AM probe: shy predicate, projection call and actual result branch"},
+	}};
+	inline const guard* first_mismatch(const std::uint8_t* image, bool audit_probe = false)
 	{
 		for (const auto& g : guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base, g.hex)) return &g;
+		if (audit_probe) for (const auto& g : audit_probe_guards)
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base, g.hex)) return &g;
 		return nullptr;
 	}

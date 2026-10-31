@@ -44,9 +44,11 @@ alignas(16) unsigned char fake_entity_storage[4][0x900]{};
 unsigned char* fake_entities[4]={fake_entity_storage[0],fake_entity_storage[1],fake_entity_storage[2],fake_entity_storage[3]};
 void* __fastcall fake_entity_of(const unsigned* handle,void*) { const unsigned slot=*handle&0xff;return (*handle==0x1801u||*handle==0x3802u)?fake_entities[slot]:nullptr; }
 // p060fix/AK: a fake world behind the redirected getter: vt+0x10 (entity by dense index) answers slots 1 and 2 only.
-unsigned fake_world_vtable[8]{};unsigned* fake_world_object=fake_world_vtable;unsigned fake_world_walks=0;
+unsigned fake_world_vtable[0x48/4]{};alignas(16) unsigned char fake_world_object[0xc000]{};unsigned fake_world_walks=0;
 void* __fastcall fake_world_entity_at(void*,void*,unsigned index) { ++fake_world_walks;return (index==1||index==2)?fake_entities[index]:nullptr; }
-void* __cdecl fake_world_get() { return &fake_world_object; }
+void* __cdecl fake_world_get() { return fake_world_object; }
+unsigned fake_visibility_grid_vtable[0x44/4]{};unsigned char fake_visibility_grid[0x10900]{};
+void* __cdecl fake_visibility_grid_get() { return fake_visibility_grid; }
 // Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
 unsigned smart_vtable[8]{};unsigned char smart_object[0x20]{};unsigned smart_getter_calls=0;
 int __fastcall fake_smart_count(void*,void*) { return 3; }
@@ -157,6 +159,8 @@ __declspec(naked) void attach_probe(void* parent,void* child) {
         ret
     }
 }
+#include "join_in_progress_audit.inl"
+#include "join_in_progress_visibility.inl"
 void run() {
     using namespace join_in_progress_rules;
     // Follow-up 12: every frame-0 epoch below now walks the party list (game vt+0x11c) and resolves its heroes; the
@@ -167,7 +171,15 @@ void run() {
     join_in_progress::find_ground_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_find_ground)); // follow-up 14: every frame-0 epoch re-probes the fake party's ground
     // p060fix/AK: every frame-0 epoch walks the world through the getter's vt+0x10; the fake world (slots 1 and 2) stands in from the start, never the retail getter
     fake_world_vtable[world_entity_by_index_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_entity_at));
+    put(fake_world_object,0,unsigned(reinterpret_cast<std::uintptr_t>(fake_world_vtable)));
+    // Execute the actual mapped retail cache/bitmap update and getters; never a model of that update.
+    fake_world_vtable[world_flag_update_slot/4]=0x4c6990;
+    fake_world_vtable[world_flag_members_slot/4]=0x4c6950;
+    fake_world_vtable[world_flag_record_slot/4]=0x4c6970;
     join_in_progress::world_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_get));
+    put(fake_visibility_grid,0,unsigned(reinterpret_cast<std::uintptr_t>(fake_visibility_grid_vtable)));
+    fake_visibility_grid_vtable[0x38/4]=0x464330; // actual retail bookkeeping-only cache clear
+    join_in_progress::visibility_grid_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_visibility_grid_get));
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
     std::memset(camera,0,camera_bytes);
     // The construction bridge: the (stubbed) constructor runs with this = the singleton and its stack argument, then
@@ -664,9 +676,15 @@ void run() {
         join_in_progress::world_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_get));fake_world_walks=0;
         put(parent,0,actor_vtable);put(parent,actor_controller,0xffffffffu);put(parent,actor_move_speed_a_at,0x3f800000u);put(parent,actor_move_speed_b_at,0u);put(parent,actor_move_goal_at,0x40a00000u);put(parent,actor_move_start_at+8,0x3f000000u);parent[actor_entity_flags6_at]=0x01;put(parent,actor_follow_handle_at,0x1917u);
         put(hero,0,actor_vtable);put(hero,actor_controller,0u);put(hero,actor_move_speed_a_at,0x3f800000u);put(hero,actor_move_goal_at,0x41200000u);
+        put(parent,entity_registered_at,1u);put(hero,entity_registered_at,1u);hero[actor_entity_flags6_at]=1;
+        std::memcpy(fake_world_object+0x756c+16,parent+entity_flags_at,entity_flag_bytes);
+        std::memcpy(fake_world_object+0x756c+32,hero+entity_flags_at,entity_flag_bytes);
+        put(fake_world_object,0x8570+16*32,6u); // registered NPC 1 and party hero 2 initially active
         *frame=0;*seed=0x88888888u;*count=4;
         const auto epoch_at=observed_jip_logs.size();
+        const auto turret_epochs_before=xml1_turrets::fixture_epochs;
         join_in_progress::frame_gate_reseed();
+        assert(xml1_turrets::fixture_epochs==turret_epochs_before+1);
         assert(!join_in_progress::restart.armed && !join_in_progress::late_restart && *seed==native_seed);
         assert(find_ground_calls==1 && find_ground_order[0]==hero && *reinterpret_cast<unsigned*>(hero+actor_ground_at)==0);
         bool ground_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) ground_line|=observed_jip_logs[i].find("ground is re-probed at the first shared frame on every peer: 1 hero(s), 1 had a ground entity before, 1 ray hit(s), 0 attach callback(s)")!=std::string::npos;
@@ -684,6 +702,10 @@ void run() {
             assert(*reinterpret_cast<unsigned*>(parent+actor_move_speed_a_at)==0 && *reinterpret_cast<unsigned*>(parent+actor_move_speed_b_at)==0);
             for(unsigned i=0;i<24;i+=4) assert(*reinterpret_cast<unsigned*>(parent+actor_move_goal_at+i)==move_goal_none_bits);
             assert(parent[actor_entity_flags6_at]==0x00 && *reinterpret_cast<unsigned*>(parent+actor_follow_handle_at)==0x1917u); // p060fix/AL: the active bit cleared; the follow handle counted, not written
+            assert(std::memcmp(fake_world_object+0x756c+16,parent+entity_flags_at,entity_flag_bytes)==0);
+            assert(*reinterpret_cast<unsigned*>(fake_world_object+0x8570+16*32)==4u); // NPC cache AND bitmap cleared; hero kept
+            assert(hero[actor_entity_flags6_at]==1 && std::memcmp(fake_world_object+0x756c+32,hero+entity_flags_at,entity_flag_bytes)==0);
+            assert(observed_jip_logs.back().find("1 world-index entries corrected")!=std::string::npos || std::any_of(observed_jip_logs.begin()+epoch_at,observed_jip_logs.end(),[](const auto& l){return l.find("1 world-index entries corrected")!=std::string::npos;}));
             assert(*reinterpret_cast<unsigned*>(hero+actor_move_speed_a_at)==0x3f800000u && *reinterpret_cast<unsigned*>(hero+actor_move_goal_at)==0x41200000u);
             bool npc_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) npc_line|=observed_jip_logs[i].find("the AI actors' move intent is canonical at the first shared frame on every peer: 1 AI actor(s) (CActor without a controller; 1 party hero(s) left to their own passes, 256 entity slot(s) walked), 1 had a move speed")!=std::string::npos && observed_jip_logs[i].find("1 a move goal (+0x1d0), 1 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on 1), 1 a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: 1 (run ")!=std::string::npos; // the run counter counts the fixture's earlier epochs too
             if(!npc_line) for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) if(observed_jip_logs[i].find("intent")!=std::string::npos) std::cerr<<"npc pass logged: "<<observed_jip_logs[i]<<"\n";
@@ -691,6 +713,14 @@ void run() {
             // a second epoch with nothing carrying a speed logs `with a speed: none`
             join_in_progress::canonical_npc_move_intent("fixture: again",true);
             assert(observed_jip_logs.back().find("0 had a move speed")!=std::string::npos && observed_jip_logs.back().find("0 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on none)")!=std::string::npos && observed_jip_logs.back().find("with a speed: none (run ")!=std::string::npos);
+            assert(observed_jip_logs.back().find("0 world-index entries corrected")!=std::string::npos);
+            // Unregistered NPC: the object bit clears, but there is no world index to notify (0x45fe40's guard).
+            put(parent,entity_registered_at,0u);parent[actor_entity_flags6_at]=1;
+            const std::vector<unsigned char> index_before(fake_world_object,fake_world_object+sizeof fake_world_object);
+            join_in_progress::canonical_npc_move_intent("fixture: unregistered",true);
+            assert(parent[actor_entity_flags6_at]==0 && std::memcmp(index_before.data(),fake_world_object,sizeof fake_world_object)==0);
+            assert(observed_jip_logs.back().find("0 world-index entries corrected")!=std::string::npos);
+            put(parent,entity_registered_at,1u);
             // the hero keeps its own active bit (only the NPC's is cleared); a second NPC flag set now is cleared by the next run
             hero[actor_entity_flags6_at]=0x01;parent[actor_entity_flags6_at]=0x01;join_in_progress::canonical_npc_move_intent("fixture: flag again",true);
             assert(parent[actor_entity_flags6_at]==0 && hero[actor_entity_flags6_at]==0x01 && observed_jip_logs.back().find("1 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on 1)")!=std::string::npos);
@@ -750,6 +780,8 @@ void run() {
         join_in_progress::probe_enabled=false;
         anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     }
+    run_audit_probe();
+    run_visibility_pattern();
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party; initial and first-movement hero probe windows are bounded and rearm correctly\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
