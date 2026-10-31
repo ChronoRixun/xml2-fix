@@ -467,3 +467,35 @@ shares; the probe's `jip events:` lines now carry every entry (`part=k/n`,
 16 per line, `time:index:handle:kind:payload`) and the snapshot's hero lines
 walk the party list (game vt+0x11c). `--mode events` lists the entries present
 on one peer only.
+
+Follow-up 11 (the world hold, design in the work folder's REPORT section 16):
+the remaining frame-0 difference is the world ticking a different number of
+times per peer between `zone started` and frame 0 (the barrier wait: AE9 host
+~2 iterations, joiner ~7). The main-loop iteration (0x401d70) calls the game
+update (game vt+0x16c = 0x46eef0) at 0x40235a, and that update gates its whole
+world section 0x46f0ca..0x46f60d (timed-event pump, countdowns, the physics
+and collision singletons, the camera update, the smart-entity update, the AI)
+on `test byte ptr [esi+0x728], 2; je 0x46f60d` at 0x46f0a9. A CALL-shape
+bridge over that 7-byte test returns ZF=1 (skip) while the hold is on and
+executes retail's own test otherwise. The hold opens at the `zone started`
+milestone of an ARMED late restart only (the pump poll that also resumes an
+existing member's controls; a lobby START never arms) and closes first thing
+in the frame-0 epoch, at the session's end, on a first-frame reset fault, and
+by a 2 s watchdog that logs (`resumes at the watchdog ...`: frame 0 never
+came, the restart proceeds as AE11 did). What keeps running while held: the
+clock tick, the input manager update 0x55a2b0 (called at 0x40219e on the main
+loop, before the game update; its 0x559700 samples the local pad, broadcasts
+the record through 0x611270 and advances the ring's write cursor +0x3174 - the
+host's frame-0 input is produced THERE, outside the held section), the
+scheduler tasks (the frame gate 0x606a50 from the pump at 0x401f74, this
+module's pump with the controls resume), rendering. The game update's direct
+callees include none of the input-manager, controllers or net-step functions.
+Log: `the world update ... is held from the zone start until the first shared
+frame on every peer (hold N; the watchdog releases it after 2000 ms)` at the
+opening and `the world update resumes at the first shared frame (N world
+update(s) skipped on this PC while held)` first in the frame-0 epoch, N per
+peer. `[Dev] LateJoinWorldHold=0` is the A/B control. Retail guard
+0x46f0a0..0x46f0bb (the vt+0x20 call tail, the test, the je, the seats getter
+call); the native fixture enters the bridge by CALL with every register known
+and asserts retail's flags for every bit pattern with the hold off, ZF=1 held,
+and every open/close trigger including the watchdog with a stubbed clock.

@@ -372,6 +372,13 @@ namespace join_in_progress_core
 	// Follow-up 8: the manager's pump slot composes with the one module that hooks it (xml1_turrets): retail, or that
 	// module's installed hook (never 0, never anything else).
 	inline bool event_pump_slot_accepted(std::uint32_t slot, std::uint32_t native, std::uint32_t module_hook) { return slot == native || (module_hook != 0 && slot == module_hook); }
+	// Follow-up 11: the world hold (the game update's world section skipped) is wanted only inside an armed late
+	// restart with the reset on, from the moment the epoch has seen the world loading and then not loading (the
+	// `zone started` milestone) until the frame-0 epoch; a lobby START never arms, [Dev] LateJoinWorldHold=0 turns it
+	// off. The watchdog releases an open hold once limit_ms have passed since it opened (frame 0 never came: the
+	// first shared frame needs a world tick on that build - logged, the restart proceeds as before).
+	inline bool world_hold_wanted(bool enabled, bool late_restart, bool armed, bool window_open) { return enabled && late_restart && armed && window_open; }
+	inline bool world_hold_watchdog_expired(bool open, std::uint32_t opened_ms, std::uint32_t now_ms, std::uint32_t limit_ms) { return open && now_ms - opened_ms >= limit_ms; }
 	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
 	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
 	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.

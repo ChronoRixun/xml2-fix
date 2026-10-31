@@ -292,7 +292,21 @@ namespace join_in_progress_rules
 	// position, orientation, flag) is entered by JUMP with its first six bytes displaced (push ecx/ebx/ebp/esi; xor esi,esi).
 	constexpr std::uint32_t spawn_entry = 0x4612e0, spawn_resume = 0x4612e6;
 	inline constexpr std::array<unsigned char, 6> spawn_entry_original{0x51,0x53,0x55,0x56,0x33,0xf6};
-	inline constexpr std::array<guard, 128> guards{{
+	// Follow-up 11 (the world hold): the game update 0x46eef0 (game vt+0x16c, called from the main-loop iteration
+	// 0x401d70 at 0x40235a) gates its whole world section 0x46f0ca..0x46f60d on bit 1 of game+0x728 - the 7-byte
+	// `test byte ptr [esi+0x728], 2` at 0x46f0a9 and its `je 0x46f60d` (0x46f094 also jumps to the test). During a
+	// late restart's barrier wait the main loop keeps running the update, each peer a different number of times
+	// (AE9: host ~2, joiner ~7), and the dt-independent per-tick work (settle, touch nudge, camera) parts the heroes
+	// that were bit-identical at `zone started` (round 7). The frame gate (0x606a50, a scheduler task pumped at
+	// 0x401f74), the input manager update 0x55a2b0 (0x40219e, the main loop; its 0x559700 samples the local pad,
+	// broadcasts the record and advances the ring's write cursor +0x3174) and the pump's controls resume are all
+	// outside that section, so a CALL-shape bridge over the test returns ZF=1 (skip) while the hold is on and
+	// retail's own test otherwise; a lobby START never arms it.
+	constexpr std::uint32_t world_gate_site = 0x46f0a9, world_gate_flag_at = 0x728, world_gate_flag_bit = 2;
+	inline constexpr std::array<unsigned char, 7> world_gate_original{0xf6,0x86,0x28,0x07,0x00,0x00,0x02};
+	constexpr std::uint32_t world_hold_watchdog_ms = 2000;
+	inline constexpr std::array<guard, 129> guards{{
+		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the seats getter call"},
 		{0x46f2d8,"7505c644241001e80c8404008b4c24108b10518bc8ff5204", "game update: the CSmartEntMgr getter call and its vt+4 update (all flag) every tick"},
 		{0x4612e0,"5153555633f6e8d5120000", "spawn by definition / instance names: entry prologue"},
 		{0x68e440,"d0764b0000714b0000704b00e0704b00c06f4b00b06f4b00f06f4b00c0754b00", "CSmartEntMgr vtable: destructor, update, allocate, reset, clear, count, at, append"},

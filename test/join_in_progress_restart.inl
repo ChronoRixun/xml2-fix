@@ -110,6 +110,53 @@ void check_stamp(bool late) {
     assert(tail==(late ? join_in_progress_core::late_restart_marker : 0)); // the body's tail bytes [esp+0x1e..0x1f]
     for(unsigned i=0;i<0x40;++i) if(i!=0x30 && i!=0x1e && i!=0x1f) assert(stamp_frame[i]==0xee); // nothing else touched
 }
+// Follow-up 11: the world-gate bridge is installed as a CALL over the 7-byte `test byte ptr [esi+0x728], 2` at
+// 0x46f0a9 (ESI = the game object at the site). The probe enters it by CALL - the same frame shape as the installed
+// site - with ESI = a fake game object and every other register a known value, and captures EFLAGS and the
+// registers right after the bridge returns: hold off, the flags are exactly the retail instruction's; hold on, ZF=1.
+alignas(16) unsigned char world_game[0x800]{};
+const void* world_bridge_target=reinterpret_cast<const void*>(&join_in_progress::world_gate_bridge);
+unsigned world_flags=0,world_regs[7]{},world_clock_now=0;
+DWORD WINAPI world_fake_clock() { return world_clock_now; }
+__declspec(naked) void world_probe() {
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        lea esi, world_game
+        mov eax, 11111111h
+        mov ebx, 22222222h
+        mov ecx, 33333333h
+        mov edx, 44444444h
+        mov edi, 55555555h
+        mov ebp, 66666666h
+        call dword ptr [world_bridge_target]
+        pushfd
+        pop dword ptr [world_flags]
+        mov dword ptr [world_regs], eax
+        mov dword ptr [world_regs+4], ebx
+        mov dword ptr [world_regs+8], ecx
+        mov dword ptr [world_regs+12], edx
+        mov dword ptr [world_regs+16], esi
+        mov dword ptr [world_regs+20], edi
+        mov dword ptr [world_regs+24], ebp
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+        ret
+    }
+}
+// flag byte -> the bridge's ZF: a zero result (bit 1 clear, or held) leaves ZF=1 PF=1 SF=0 CF=0 OF=0 (0x44 of the
+// mask 0x8c5), a set bit (result 2: odd parity) leaves all five clear - exactly what retail's test produces.
+void check_world_gate(unsigned char flag_byte,bool expect_skip) {
+    world_game[join_in_progress_rules::world_gate_flag_at]=flag_byte;
+    world_probe();
+    assert((world_flags&0x8c5u)==(expect_skip ? 0x44u : 0x00u));
+    assert(world_regs[0]==0x11111111u && world_regs[1]==0x22222222u && world_regs[2]==0x33333333u && world_regs[3]==0x44444444u);
+    assert(world_regs[4]==unsigned(reinterpret_cast<std::uintptr_t>(world_game)) && world_regs[5]==0x55555555u && world_regs[6]==0x66666666u);
+}
 void run() {
     using namespace join_in_progress_rules;
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
@@ -415,7 +462,75 @@ void run() {
         join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     }
-    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
+    // Follow-up 11: the world hold. The bridge entered by CALL exactly as installed: hold off, every flag as retail's
+    // test leaves it for every bit pattern; hold on, ZF=1 whatever the byte, no register changed, the skip counted.
+    // The window opens only through the production milestone of an ARMED late restart once the epoch saw the world
+    // loading and the loading flags are clear (`zone started`), idempotently; it closes first thing in the frame-0
+    // epoch (the production frame_gate_reseed: the release line precedes the RNG epoch line, the skip count logged),
+    // at a session's end (the production pump path with no first record) and by the watchdog exactly at its limit
+    // (the clock stubbed); a lobby START (never a late restart), [Dev] LateJoinWorldHold=0 and
+    // [Dev] LateJoinRestartReset=0 never open it.
+    {
+        join_in_progress::world_hold_clock=&world_fake_clock;world_clock_now=100000;
+        join_in_progress::restart_reset_enabled=true;join_in_progress::world_hold_enabled=true;join_in_progress::world_hold=0;
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();join_in_progress::epoch.active=false;
+        check_world_gate(0x00,true);check_world_gate(0x02,false);check_world_gate(0xfd,true);check_world_gate(0xff,false);
+        assert(join_in_progress::world_hold_skips==0);
+        // a lobby START's epoch (never a late restart): the milestone never opens the hold
+        join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
+        join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
+        // an armed late restart: closed while the world loads, open at `zone started`, idempotent; the bridge skips
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();
+        join_in_progress::world_hold_milestone(true);assert(!join_in_progress::world_hold);
+        const auto opened_at=observed_jip_logs.size();
+        join_in_progress::world_hold_milestone(false);
+        assert(join_in_progress::world_hold==1 && join_in_progress::world_hold_skips==0 && join_in_progress::world_holds==1);
+        assert(observed_jip_logs.size()==opened_at+1 && observed_jip_logs.back().find("is held from the zone start until the first shared frame on every peer")!=std::string::npos);
+        check_world_gate(0x02,true);check_world_gate(0xff,true);check_world_gate(0x00,true);
+        assert(join_in_progress::world_hold_skips==3);
+        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_hold_skips==3 && join_in_progress::world_holds==1);
+        world_clock_now+=world_hold_watchdog_ms-1;join_in_progress::world_hold_watchdog();assert(join_in_progress::world_hold==1); // not before the limit
+        // the frame-0 epoch through the production frame_gate_reseed: the release is its first step (the line precedes
+        // the RNG epoch line), the skip count is logged, the bridge is retail's test again
+        *frame=0;*seed=0x77777777u;*count=3;join_in_progress::late_restart_epoch_for_camera=false;
+        const auto epoch_at=observed_jip_logs.size();
+        join_in_progress::frame_gate_reseed();
+        assert(!join_in_progress::world_hold && *seed==native_seed && *count==0 && !join_in_progress::restart.armed && !join_in_progress::late_restart);
+        std::size_t release_line=0,rng_line=0;
+        for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) {
+            if(observed_jip_logs[i].find("the world update resumes at the first shared frame (3 world update(s) skipped on this PC while held)")!=std::string::npos) release_line=i+1;
+            if(observed_jip_logs[i].find("synchronized RNG epoch reset")!=std::string::npos && !rng_line) rng_line=i+1;
+        }
+        assert(release_line && rng_line && release_line<rng_line);
+        check_world_gate(0x02,false);check_world_gate(0x00,true);
+        join_in_progress::frame_gate_reseed();assert(!join_in_progress::world_hold); // not armed: nothing
+        // the watchdog releases a hold whose frame 0 never came, exactly at its limit, and names itself
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
+        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_holds==2);
+        check_world_gate(0x02,true);
+        world_clock_now+=world_hold_watchdog_ms-1;join_in_progress::world_hold_watchdog();assert(join_in_progress::world_hold==1);
+        world_clock_now+=1;join_in_progress::world_hold_watchdog();
+        assert(!join_in_progress::world_hold && observed_jip_logs.back().find("resumes at the watchdog")!=std::string::npos && observed_jip_logs.back().find("(1 world update(s) skipped")!=std::string::npos);
+        check_world_gate(0x02,false);
+        join_in_progress::world_hold_watchdog();assert(!join_in_progress::world_hold); // closed: nothing
+        // a session's end releases it through the production pump path (no first record): the seat machine, the arm,
+        // the late restart and the hold all go
+        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_holds==3); // still armed: a new window
+        machine.started=true;put(s,0x26c,static_cast<void*>(nullptr));
+        assert(!join_in_progress::guarded_advance(false,nullptr));
+        assert(!join_in_progress::world_hold && !machine.started && !join_in_progress::restart.armed && !join_in_progress::late_restart);
+        assert(observed_jip_logs.back().find("resumes at the session's end")!=std::string::npos);
+        put(s,0x26c,nodes[0]);check_world_gate(0x02,false);
+        // [Dev] LateJoinWorldHold=0 and [Dev] LateJoinRestartReset=0: the window never opens, the bridge stays retail
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
+        join_in_progress::world_hold_enabled=false;join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
+        join_in_progress::world_hold_enabled=true;join_in_progress::restart_reset_enabled=false;join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
+        join_in_progress::restart_reset_enabled=true;check_world_gate(0x02,false);
+        assert(join_in_progress::world_holds==3);
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();join_in_progress::epoch.active=false;
+        join_in_progress::world_hold_clock=&GetTickCount;
+    }
+    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the world-gate bridge entered by CALL returns retail's flags with the hold off and ZF=1 held, the hold opens at zone started of an armed late restart only and closes first at frame 0, at a session's end and by the watchdog\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
 // (vt+0xc, 0x68de20) BEFORE join_in_progress; a 16-byte vtable guard refused the whole install. This mode installs a

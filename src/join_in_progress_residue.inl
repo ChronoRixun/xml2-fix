@@ -654,3 +654,65 @@ void probe_camera_dump(unsigned frame)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:camdump-fault", "jip camdump: a line faulted"); }
 }
+// ---- follow-up 11: the world section held from `zone started` to the first shared frame ------------------------
+// (rules: world_gate_*). The game update's world section (0x46f0ca..0x46f60d, behind `test byte ptr [esi+0x728], 2`
+// at 0x46f0a9) runs on every main-loop iteration once bit 1 of game+0x728 is set; between `zone started` and frame 0
+// each peer runs it a different number of times (the barrier wait: AE9 host ~2, joiner ~7 iterations) and the
+// dt-independent per-tick settle parts heroes that were bit-identical at `zone started` (round 7). While the hold
+// is on, the bridge answers the gate's test with ZF=1 (the section is skipped) on every peer; the first shared frame
+// releases it first thing, so both peers enter frame 0 with the world exactly as the zone start left it. What keeps
+// running: the clock tick, the input manager update 0x55a2b0 (0x40219e on the main loop: the local frame-0 input is
+// sampled, broadcast and queued there by 0x559700), the scheduler tasks (the frame gate 0x606a50, this module's
+// pump with the controls resume), rendering. A watchdog releases a hold whose frame 0 never came (the restart then
+// proceeds as AE11 did) and says so; the session's end and a first-frame reset fault release it too.
+volatile std::uint8_t world_hold = 0;      // read by the bridge on the game thread; written on the game thread only
+bool world_hold_enabled = true;            // [Dev] LateJoinWorldHold=0: the A/B control
+std::uint32_t world_hold_opened_ms = 0;    // the clock at the window's opening (watchdog)
+unsigned world_hold_skips = 0;             // game updates whose world section was skipped on this PC (logged at the release)
+unsigned world_holds = 0;                  // windows opened (log numbering)
+DWORD (WINAPI* world_hold_clock)() = &GetTickCount; // mutable for the owned native fixture only
+// In place of `test byte ptr [esi+0x728], 2` at 0x46f0a9 (7 bytes: call rel32 + 2 nops; the site's `je 0x46f60d`
+// follows and reads ZF only - the instruction after the je is a call, so CF/OF/SF/PF/AF are dead), entered by CALL
+// with ESI = the game object exactly as at the site. Hold off: retail's own instruction, every flag as it leaves it.
+// Hold on: the flags of that test with the bit clear (ZF=1), no register changed, the skip counted.
+__declspec(naked) void world_gate_bridge()
+{
+	__asm {
+		cmp byte ptr [world_hold], 0
+		jne held
+		test byte ptr [esi+728h], 2
+		ret
+	held:
+		inc dword ptr [world_hold_skips]
+		test esp, 0
+		ret
+	}
+}
+void open_world_hold()
+{
+	if (world_hold || !join_in_progress_core::world_hold_wanted(restart_reset_enabled && world_hold_enabled, late_restart, restart.armed, true)) return;
+	world_hold_skips = 0;
+	world_hold_opened_ms = world_hold_clock();
+	world_hold = 1;
+	++world_holds;
+	logger::write("join in progress: canonical restart - the world update (the game update's world section) is held from the zone start until the first shared frame on every peer (hold %u; the watchdog releases it after %u ms)",
+		world_holds, world_hold_watchdog_ms);
+}
+void release_world_hold(const char* why)
+{
+	if (!world_hold) return;
+	world_hold = 0;
+	logger::write("join in progress: canonical restart - the world update resumes at %s (%u world update(s) skipped on this PC while held)", why, world_hold_skips);
+}
+// Every pump, whether or not the epoch is still active (`cohort synchronized` can land before frame 0).
+void world_hold_watchdog()
+{
+	if (join_in_progress_core::world_hold_watchdog_expired(world_hold != 0, world_hold_opened_ms, world_hold_clock(), world_hold_watchdog_ms))
+		release_world_hold("the watchdog - frame 0 did not arrive within the limit, so the first shared frame needs a world tick on this build (report it); the restart proceeds as before");
+}
+// From observe_epoch, every pump: the window opens at the `zone started` milestone (the epoch started, saw the world
+// loading, and the loading flags are now clear) - idempotent; a lobby START (never a late restart) never opens it.
+void world_hold_milestone(bool loading)
+{
+	if (!loading && late_restart && epoch.started && epoch.saw_loading) open_world_hold();
+}

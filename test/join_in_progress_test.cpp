@@ -550,6 +550,18 @@ int main(int argc, char** argv)
 		      && !event_pump_slot_accepted(0x50001000, 0x4b2d60, 0) && !event_pump_slot_accepted(0x12345678, 0x4b2d60, 0x50001000) && !event_pump_slot_accepted(0, 0x4b2d60, 0),
 		      "follow-up 8: the pump slot composes with the xml1 turrets hook only (retail, or the module's reported hook)");
 		check(std::none_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= 0x68de20 && 0x68de20 < g.va + g.hex.size() / 2; }), "follow-up 8: no retail guard covers the hooked pump slot 0x68de20");
+		// Follow-up 11: the world hold is wanted only inside an armed late restart with the reset on and the window open
+		// (`zone started` reached); the watchdog fires once the limit has passed since the window opened, never while
+		// closed, not before the limit, and across the tick wrap.
+		check(world_hold_wanted(true, true, true, true) && !world_hold_wanted(false, true, true, true) && !world_hold_wanted(true, false, true, true) && !world_hold_wanted(true, true, false, true) && !world_hold_wanted(true, true, true, false),
+		      "follow-up 11: the world hold needs the reset on, a late restart, the armed epoch and the open window");
+		check(!world_hold_watchdog_expired(false, 1000, 999999, 2000) && !world_hold_watchdog_expired(true, 1000, 2999, 2000) && world_hold_watchdog_expired(true, 1000, 3000, 2000)
+		      && world_hold_watchdog_expired(true, 0xfffffc18u, 1000, 2000) && !world_hold_watchdog_expired(true, 0xfffffc18u, 999, 2000),
+		      "follow-up 11: the watchdog fires at the limit, not before, never while closed, and across the tick wrap");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= join_in_progress_rules::world_gate_site && join_in_progress_rules::world_gate_site + join_in_progress_rules::world_gate_original.size() <= g.va + g.hex.size() / 2; }),
+		      "follow-up 11: one retail guard covers every byte of the world-section gate site");
+		check(join_in_progress_rules::world_gate_original.size() == 7 && join_in_progress_rules::world_gate_original[0] == 0xf6 && join_in_progress_rules::world_gate_original[1] == 0x86 && join_in_progress_rules::world_gate_original[6] == join_in_progress_rules::world_gate_flag_bit,
+		      "follow-up 11: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
 	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
