@@ -277,6 +277,201 @@ namespace join_in_progress_core
 		}
 	};
 
+	// Canonical cohort restart (p060fix/AE, join_in_progress_rules.hpp "Canonical cohort restart"): the camera singleton
+	// goes back to its constructed image on every peer before the native campaign start, and the synchronized RNG is
+	// reseeded by every peer at the first shared simulation frame (frame 0 of the restarted network epoch).
+	struct restart_reset
+	{
+		bool snapshot = false;  // the pristine camera image exists (taken when the game constructed the singleton)
+		bool armed = false;     // a cohort restart's load ran: the next frame-0 input run reseeds
+		bool reseeded = false;
+		unsigned restores = 0, reseeds = 0;
+		void arm() { armed = true; reseeded = false; }
+		void disarm() { armed = false; }
+		// At the input-manager run of a frame (the gate passed: every participant's input for this frame is here).
+		bool should_reseed(std::uint16_t frame)
+		{
+			if (!armed || reseeded || frame != 0) return false;
+			reseeded = true; armed = false; ++reseeds; return true;
+		}
+		// Before the native campaign start of a cohort restart: restore only with an image, only for a restart.
+		bool should_restore(bool cohort_restart) const { return snapshot && cohort_restart; }
+		// P1: inside a late restart's zone load, each deterministic segment (LoadMap entry, zone start) starts from the
+		// native seed: armed by the cohort load, before frame 0 took the final epoch.
+		unsigned segment_reseeds = 0;
+		bool should_reseed_segment() { if (!armed || reseeded) return false; ++segment_reseeds; return true; }
+	};
+	// Follow-up 3: the zone-start camera anchor comes from the party list only during an armed late restart.
+	inline bool camera_anchor_from_party(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// Follow-up 5: the dormant-entity respawn (CSmartEntMgr update) is held from an armed late restart's zone load to
+	// its frame-0 epoch on every peer; a lobby START (never armed) and [Dev] LateJoinRestartReset=0 keep retail.
+	inline bool smart_hold_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
+	// count, free count = the slots not held in the bitmap), so every peer allocates the same next slots even when a
+	// warm host still holds one (probe round: slot 31 held, bits 0x80000007). Returns the number of held slots.
+	inline unsigned rebuild_brain_ring(std::uint32_t bitmap, std::array<std::uint32_t, 32>& ring, std::int32_t& write, std::int32_t& read, std::int32_t& free_count)
+	{
+		unsigned held = 0, n = 0;
+		for (std::uint32_t slot = 0; slot < 32; ++slot)
+		{
+			if (bitmap & (1u << slot)) { ++held; continue; }
+			ring[n++] = slot;
+		}
+		for (unsigned i = n; i < 32; ++i) ring[i] = 0;
+		read = 0; write = std::int32_t(n % 32); free_count = std::int32_t(n);
+		return held;
+	}
+	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers) { return stage == 0 && controllers == 32; }
+	// Follow-up 7: the timed-event queue (every actor update is one of its entries) is rebuilt in a canonical order at
+	// the late restart's epochs on every peer. One entry = one heap pair resolved to its record.
+	struct event_entry
+	{
+		float time = 0; std::uint32_t index = 0;           // the heap pair
+		std::uint32_t handle = 0, event = 0;              // the record: owner handle (+0), event object (+4)
+		std::uint32_t owner = 0;                           // the resolved owner entity (0: none)
+		std::uint8_t payload[16]{};                        // the record's +8..+23
+		bool token = false, live = false;                  // a positive entity token; resolved to an entity
+	};
+	// Follow-up 9: the event object is either a member of its owner (the actor update at +0x320 and its siblings:
+	// its OFFSET is the process-independent name) or a static kind object in the executable's .data (round 6: the
+	// "moved" notification 0x6d7c5c, the table at 0x6d55a4..; an absolute address, identical in every process because
+	// XMen2.exe is never relocated). `event - owner` for a static kind is a per-process number (the actor pool moves
+	// between boots), so the key is the offset inside the owner, else the absolute address; every offset (< 0x2000)
+	// sorts before every address (>= 0x400000).
+	constexpr std::uint32_t event_member_span = 0x2000;
+	inline std::uint32_t event_kind_key(const event_entry& e)
+	{
+		const std::uint32_t offset = e.event - e.owner;
+		return (e.owner && offset < event_member_span) ? offset : e.event;
+	}
+	// Canonical order: time, then the owner's DENSE index (never its generation: the warm host's generations are
+	// higher than a cold joiner's for the same slots), then the event's kind key (offset inside its owner, or the
+	// static kind's address), then the payload bytes, then the raw handle (non-token owners).
+	inline bool canonical_event_less(const event_entry& a, const event_entry& b, std::uint32_t index_mask)
+	{
+		if (a.time != b.time) return a.time < b.time;
+		const std::uint32_t ia = a.token ? (a.handle & index_mask) : 0xffffffffu, ib = b.token ? (b.handle & index_mask) : 0xffffffffu;
+		if (ia != ib) return ia < ib;
+		const std::uint32_t oa = event_kind_key(a), ob = event_kind_key(b);
+		if (oa != ob) return oa < ob;
+		const int c = std::memcmp(a.payload, b.payload, sizeof a.payload);
+		if (c) return c < 0;
+		return (a.token ? 0u : a.handle) < (b.token ? 0u : b.handle); // a token's raw value (its generation) never orders
+	}
+	// An entry is dropped only when its owner is a positive entity token that no longer resolves (the old world's
+	// actors on a warm host: their fire is a no-op that still shapes the heap). Everything else is kept.
+	inline bool event_entry_dropped(const event_entry& e) { return e.token && !e.live; }
+	inline bool positive_entity_token(std::uint32_t handle) { return handle != 0 && (handle >> 31) == 0; }
+	inline bool event_queue_rebuild_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// Follow-up 9 (round 6): `cohort synchronized` landed BEFORE frame 0 on the joiner (1.3 s / 245 ms earlier) and
+	// AFTER it on the host, and it cleared `late_restart`, so the joiner's frame-0 epoch skipped every step gated on
+	// it (the FPU line was host-only); and should_reseed() consumed `armed` before the queue rebuild asked for it, so
+	// the frame-0 rebuild never ran on either peer (rebuilds=2 at the frame-0 epoch). While a frame-0 epoch is still
+	// armed, `cohort synchronized` keeps the flag: the epoch itself ends the late restart on every peer.
+	inline bool cohort_sync_clears_late_restart(bool armed) { return !armed; }
+	// Follow-up 8: the manager's pump slot composes with the one module that hooks it (xml1_turrets): retail, or that
+	// module's installed hook (never 0, never anything else).
+	inline bool event_pump_slot_accepted(std::uint32_t slot, std::uint32_t native, std::uint32_t module_hook) { return slot == native || (module_hook != 0 && slot == module_hook); }
+	// Follow-up 11: the world hold (the game update's world section skipped) is wanted only inside an armed late
+	// restart with the reset on, from the moment the epoch has seen the world loading and then not loading (the
+	// `zone started` milestone) until the frame-0 epoch; a lobby START never arms, [Dev] LateJoinWorldHold=0 turns it
+	// off. The watchdog releases an open hold once limit_ms have passed since it opened (frame 0 never came: the
+	// first shared frame needs a world tick on that build - logged, the restart proceeds as before).
+	inline bool world_hold_wanted(bool enabled, bool late_restart, bool armed, bool window_open) { return enabled && late_restart && armed && window_open; }
+	inline bool world_hold_watchdog_expired(bool open, std::uint32_t opened_ms, std::uint32_t now_ms, std::uint32_t limit_ms) { return open && now_ms - opened_ms >= limit_ms; }
+	// Follow-up 12 (round 8): at the frame-0 epoch the rebuild also drops a queued "moved" event (the static kind
+	// 0x6d7c5c) whose owner is one of the party heroes (by dense index), after their moved-check state was made
+	// canonical (last-known = current, pending bit clear) on every peer; other owners' moved events are kept.
+	inline bool moved_event_dropped(const event_entry& e, std::uint32_t moved_kind, const std::uint32_t* party, unsigned party_count, std::uint32_t index_mask)
+	{
+		if (!e.token || event_kind_key(e) != moved_kind) return false;
+		for (unsigned i = 0; i < party_count; ++i) if (party[i] && (party[i] & index_mask) == (e.handle & index_mask)) return true;
+		return false;
+	}
+	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
+	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
+	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.
+	inline std::uint32_t normalise_draw_caller(const std::uint32_t* sp, std::uint32_t float_return, std::uint32_t int_return_a, std::uint32_t int_return_b)
+	{
+		const std::uint32_t ret = sp[0];
+		if (ret == float_return) return sp[1];
+		if (ret == int_return_a || ret == int_return_b) return sp[3];
+		return ret;
+	}
+	// Follow-up 6: a and b name the actor behind a draw where the caller is known to decide per actor (the AI think
+	// branch 0x51e3c6/0x51e3e0: the actor's handle and controller; the touch-nudge 0x42974d..73: the touched entity's
+	// handle and its packed x/y). 0 when not applicable.
+	// AE7b: c and d add, for the think branch, the brain's next think time (the value compared at 0x51e3ab, as float
+	// bits) and the actor's distance to the camera eye (integer units).
+	struct draw_entry_record { std::uint32_t caller = 0, count = 0; std::uint16_t frame = 0; std::uint8_t phase = 0; std::uint32_t a = 0, b = 0, c = 0, d = 0; };
+	// Which register holds the actor at the draw (pushad order: sp[-9] = EDI, sp[-8] = ESI, where sp -> the return address).
+	enum class draw_actor_register { none, edi, esi };
+	inline draw_actor_register draw_actor_of(std::uint32_t caller)
+	{
+		if (caller == 0x51e3c6 || caller == 0x51e3e0) return draw_actor_register::edi; // the AI think branch: EDI = the actor
+		if (caller == 0x42974d || caller == 0x429763 || caller == 0x429773) return draw_actor_register::esi; // the touch nudge: ESI = the entity
+		return draw_actor_register::none;
+	}
+	constexpr unsigned draw_ring_size = 32768; // power of two; ~384 KiB, static (the probe round overflowed 8192 in phase 0)
+	struct draw_trace
+	{
+		std::array<draw_entry_record, draw_ring_size> ring{};
+		unsigned head = 0, flushed = 0, overflow = 0;
+		std::uint8_t phase = 0;
+		void note(std::uint32_t caller, std::uint32_t count, std::uint16_t frame, std::uint32_t a = 0, std::uint32_t b = 0, std::uint32_t c = 0, std::uint32_t d = 0)
+		{
+			if (head - flushed >= draw_ring_size) { ++overflow; ++flushed; } // the oldest unflushed entry is lost, counted
+			ring[head++ & (draw_ring_size - 1)] = {caller, count, frame, phase, a, b, c, d};
+		}
+		unsigned pending() const { return head - flushed; }
+	};
+	// The pristine image is only meaningful when taken right after construction: never from a running camera.
+	inline bool snapshot_wanted(bool constructed_before_the_fix) { return !constructed_before_the_fix; }
+	// The 0x47 prepare body's two unused tail bytes (body+6): "LJ" while the host restarts a running session for a
+	// late joiner, 0 at a lobby START. Every host with the fix writes them, so a receiver never sees stack residue.
+	constexpr std::uint16_t late_restart_marker = 0x4a4c;
+	constexpr std::size_t prepare_body_size = 8, prepare_marker_at = 6;
+	inline std::uint16_t prepare_stamp(bool late_restart) { return late_restart ? late_restart_marker : 0; }
+	inline bool prepare_is_late_restart(const void* body, std::size_t size)
+	{
+		if (!body || size < prepare_body_size) return false;
+		std::uint16_t marker = 0;
+		std::memcpy(&marker, static_cast<const std::uint8_t*>(body) + prepare_marker_at, sizeof marker);
+		return marker == late_restart_marker;
+	}
+
+	// First-shared-frame agreement across roles (the live-060y evidence and the offline tool scripts/jip_components.py):
+	// the producer's inputs as the fix logs them ("jip checksum hero" / "jip checksum produced" lines).
+	struct component_sample
+	{
+		std::uint16_t frame = 0;
+		unsigned heroes = 0;
+		std::array<std::array<std::uint32_t, 6>, 8> transform{};
+		std::array<bool, 8> have{};
+		std::uint32_t hero_sum = 0, camera = 0, rng_draws = 0, hash = 0;
+		bool produced = false;
+	};
+	enum disagreement : unsigned { agree = 0, hero_differs = 1, camera_differs = 2, rng_differs = 4, frame_differs = 8, incomplete = 16 };
+	inline unsigned compare_components(const component_sample& a, const component_sample& b)
+	{
+		unsigned d = agree;
+		if (!a.produced || !b.produced) d |= incomplete;
+		if (a.frame != b.frame) d |= frame_differs;
+		if (a.heroes != b.heroes || a.hero_sum != b.hero_sum) d |= hero_differs;
+		for (unsigned i = 0; i < 8; ++i)
+		{
+			if (a.have[i] != b.have[i]) { d |= hero_differs; continue; }
+			if (a.have[i] && a.transform[i] != b.transform[i]) d |= hero_differs;
+		}
+		if (a.camera != b.camera) d |= camera_differs;
+		if (a.rng_draws != b.rng_draws) d |= rng_differs;
+		// The retail hash is the modulo-32 sum; equal hashes with unequal terms (live-060y run 4 frame 30) are still a
+		// disagreement: the next period breaks.
+		return d;
+	}
+	// The additive identity the retail producer uses; a sample must reconcile or its parse is wrong.
+	inline bool reconciles(const component_sample& s) { return s.produced && (s.hero_sum + s.camera + s.rng_draws) == s.hash; }
+
 	// A 0x25 mesh reply (stock 0x604e93 -> 0x607210) binds the record of the participant being added (manager+0x221c)
 	// to the reply's sender. The fix completes every mesh at once (one 0x1f each), so the "participant being added" is
 	// only the last one completed and a reply from ANOTHER participant would rebind that record to the wrong peer and

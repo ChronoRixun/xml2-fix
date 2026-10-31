@@ -30,7 +30,8 @@ namespace gameplay_agreement {
 bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool) { assert(false);return false; }
 }
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
-namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } }
+namespace xml1_turrets { std::uint32_t fixture_hook = 0; std::uint32_t installed_process_hook() { return fixture_hook; } }
+namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }
@@ -69,6 +70,7 @@ void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_lo
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
 #include "join_in_progress_checksum.inl"
+#include "join_in_progress_restart.inl"
 }
 int main(int argc,char** argv) {
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
@@ -88,6 +90,8 @@ int main(int argc,char** argv) {
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
+        if(std::string_view(argv[2])=="restart") { restart_fixture::run();return 0; }
+        if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();return 0; }
         assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
         gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
     }

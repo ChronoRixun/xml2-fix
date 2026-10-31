@@ -1,0 +1,3 @@
+[
+  {"module": "xml1_turrets", "va": 6872608, "size": 4, "what": "timed-event manager vtable vt+0xc (0x68de20): the scheduler dispatch pointer xml1_turrets::process_hook replaces (installed before join_in_progress)"}
+]

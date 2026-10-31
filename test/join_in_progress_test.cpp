@@ -366,6 +366,223 @@ int main(int argc, char** argv)
 			return g.va <= join_in_progress_rules::loaded_flag_call && g.va + g.hex.size() / 2 >= join_in_progress_rules::loaded_flag_call + 5;
 		}), "the 0x25 completion call and the 0x5b flag call are guarded retail bytes");
 	}
+	{
+		// AE: the canonical cohort restart decisions (join_in_progress_core::restart_reset).
+		restart_reset r;
+		check(!r.should_restore(true) && !r.should_restore(false), "AE: no pristine camera image - no restore, whatever the epoch");
+		r.snapshot = true;
+		check(r.should_restore(true) && !r.should_restore(false), "AE: the camera is restored only for a cohort restart");
+		check(!r.should_reseed(0), "AE: an unarmed first frame never reseeds (ordinary play, lobby START)");
+		r.arm();
+		check(!r.should_reseed(5) && r.armed, "AE: armed but not frame 0 (the old world still ticking): no reseed, stays armed");
+		check(r.should_reseed(0) && !r.armed && r.reseeds == 1, "AE: frame 0 of the restarted epoch reseeds exactly once");
+		check(!r.should_reseed(0), "AE: a repeated frame 0 (arbitration retry) cannot reseed twice");
+		r.arm(); r.disarm();
+		check(!r.should_reseed(0), "AE: a session that ends before its first frame disarms");
+		check(snapshot_wanted(false) && !snapshot_wanted(true), "AE: the pristine image is taken only when the camera is not yet constructed");
+		// The 0x47 prepare marker: a lobby START (host outside the epoch) must never make the guests restore/reseed alone.
+		std::uint8_t body[8]{2,0,0,0, 0, 0, 0,0};
+		check(prepare_stamp(false) == 0 && prepare_stamp(true) == late_restart_marker, "AE: the host stamps the marker only for a late-join restart");
+		check(!prepare_is_late_restart(body, 8), "AE: a lobby START prepare (zero tail bytes) is not a late restart");
+		std::memcpy(body + prepare_marker_at, &late_restart_marker, 2);
+		check(prepare_is_late_restart(body, 8), "AE: the stamped prepare is a late restart");
+		check(!prepare_is_late_restart(body, 6) && !prepare_is_late_restart(nullptr, 8), "AE: a short or missing body is never a late restart");
+		body[6] ^= 1; check(!prepare_is_late_restart(body, 8), "AE: residue one bit off the marker is not a late restart");
+	}
+	{
+		// AE failing-first evidence: live-060y run 1 (E1, one PC) and run 4 (E1, two PCs) first periods, as logged by
+		// AC's producer observer. The old restart must be reported as disagreeing on exactly the camera and RNG terms,
+		// with every hero transform equal; run 4 frame 30 has EQUAL hashes and must still disagree.
+		auto sample = [](std::uint16_t frame, std::uint32_t hero_sum, std::uint32_t camera, std::uint32_t rng, std::uint32_t hash,
+		                 std::array<std::array<std::uint32_t, 6>, 4> t) {
+			component_sample s; s.frame = frame; s.heroes = 4; s.hero_sum = hero_sum; s.camera = camera; s.rng_draws = rng; s.hash = hash; s.produced = true;
+			for (unsigned i = 0; i < 4; ++i) { s.transform[i] = t[i]; s.have[i] = true; }
+			return s;
+		};
+		const std::array<std::array<std::uint32_t, 6>, 4> e1{{{0x44FA6DA5,0x44CF125B,0x3F8117A5,0,0,0x4096CBE4},{0x44FA6DA5,0x44D9ADA5,0x3F8117A5,0,0,0x4096CBE4},
+			{0x44EFD25B,0x44D9ADA5,0x3F8117A5,0,0,0x4096CBE4},{0x44EFD25B,0x44CF125B,0x3F8117A5,0,0,0x4096CBE4}}};
+		const auto run1_host = sample(30, 0x08BD60DC, 0x1FA6, 195, 0x08BD8145, e1), run1_guest = sample(30, 0x08BD60DC, 0x1F60, 272, 0x08BD814C, e1);
+		check(reconciles(run1_host) && reconciles(run1_guest), "AE: live-060y run 1 samples reconcile (hash = hero_sum + camera + rng)");
+		check(compare_components(run1_host, run1_guest) == (camera_differs | rng_differs), "AE: run 1 frame 30 disagrees on camera and RNG only (heroes equal)");
+		const auto run4_host = sample(30, 0x08BD60DC, 0x1FA6, 194, 0x08BD8144, e1), run4_guest = sample(30, 0x08BD60DC, 0x1F60, 264, 0x08BD8144, e1);
+		check(run4_host.hash == run4_guest.hash && compare_components(run4_host, run4_guest) == (camera_differs | rng_differs),
+		      "AE: run 4 frame 30 (two PCs): equal hashes by cancellation still disagree on camera and RNG");
+		const auto run4_host60 = sample(60, 0x08BD60DC, 0x1FA7, 256, 0x08BD8183, e1), run4_guest60 = sample(60, 0x08BD60DC, 0x1F60, 341, 0x08BD8191, e1);
+		check(reconciles(run4_host60) && reconciles(run4_guest60) && compare_components(run4_host60, run4_guest60) == (camera_differs | rng_differs),
+		      "AE: run 4 frame 60 disagrees on the same two terms (the hashes break)");
+		std::array<std::array<std::uint32_t, 6>, 4> e2h = e1, e2g = e1;
+		e2h[3] = {0x44EF325B,0x44BF525B,0x3F811165,0,0,0x4096CBE4}; e2g[3] = {0x44F0C5F6,0x44BFF47D,0x3F782773,0,0,0x4096CBE4};
+		const auto run2_host = sample(30, 0x086D6C14, 0x1E8E, 202, 0x086D8B6C, e2h), run2_guest = sample(30, 0x08701D26, 0x1E9A, 206, 0x08703C8E, e2g);
+		check(compare_components(run2_host, run2_guest) == (hero_differs | camera_differs | rng_differs), "AE: run 2 (E2) also disagrees on the AI hero in slot 3");
+		auto canonical_guest = run1_host; // what the canonical restart must produce: every term equal
+		check(compare_components(run1_host, canonical_guest) == agree, "AE: identical producer inputs agree");
+		component_sample missing; check(compare_components(run1_host, missing) & incomplete, "AE: a missing sample is reported, not treated as agreement");
+		auto other_frame = run1_host; other_frame.frame = 60;
+		check(compare_components(run1_host, other_frame) & frame_differs, "AE: samples pair by native frame");
+	}
+	{
+		// AE: the restart sites are guarded retail bytes.
+		using namespace join_in_progress_rules;
+		auto covered = [](std::uint32_t va, std::size_t n) {
+			return std::any_of(guards.begin(), guards.end(), [&](const auto& g) { return g.va <= va && g.va + g.hex.size() / 2 >= va + n; });
+		};
+		check(covered(camera_construct_call, 5) && covered(frame_gate_run_call, 5) && covered(camera_constructor, 8) && covered(seed_setter, 8),
+		      "AE: camera construction call, frame-gate input run, constructor and seed setter are guarded");
+		check(camera_object + camera_bytes == camera_guard_byte, "AE: the pristine image spans exactly the singleton (up to its construction guard byte)");
+	}
+	{
+		// AE state-machine edges: a second joiner during a bring-in, a joiner leaving mid-transfer.
+		machine m; m.started = true;
+		check(m.defer_add(&r1, 1, false, 0), "edge: first newcomer pending");
+		auto& s = *m.find(&r1);
+		m.step(s, seen(true, false, false, false, false), 10); m.step(s, seen(true, false, false, false, true), 20);
+		check(s.at == stage::streaming && m.holding(), "edge: the first newcomer's image is streaming");
+		check(m.defer_add(&r2, 2, false, 30) && m.pending(&r2), "edge: a second joiner arriving mid-transfer is pending, not added");
+		auto& t = *m.find(&r2);
+		check(m.step(t, seen(false, false, false, false, true), 40) == action::none && t.at == stage::pending, "edge: the second joiner waits for the NEXT zone load");
+		m.gone(&r1);
+		check(!m.find(&r1) && !m.holding() && m.pending(&r2), "edge: the streaming joiner left - its seat is free, nothing held, the second still waits");
+		check(m.defer_add(&r3, 3, false, 50), "edge: a replacement can take the freed seat");
+	}
+	{
+		// latejoin-residue P1/P2/P3 decisions.
+		restart_reset r;
+		check(!r.should_reseed_segment(), "P1: no segment epoch unless the cohort load armed the restart");
+		r.arm();
+		check(r.should_reseed_segment() && r.should_reseed_segment() && r.segment_reseeds == 2, "P1: LoadMap entry and the zone start each take an epoch while armed");
+		check(r.should_reseed(0) && !r.should_reseed_segment(), "P1: after frame 0 took the final epoch no segment epoch follows");
+		check(brain_ring_reset_wanted(0, 32, 32) && brain_ring_reset_wanted(0, 31, 32) && !brain_ring_reset_wanted(2, 32, 32) && !brain_ring_reset_wanted(0, 0, 0),
+		      "P2: the brain ring is made canonical on the stock pool (follow-up 4: also with held slots), never on a relocated pool");
+		const std::uint32_t direct[4]{0x4990a5, 1, 2, 3}, wrapped_float[4]{0x5601bd, 0x4870c5, 2, 3}, wrapped_int[4]{0x5601fb, 0, 0, 0x48aea7}, wrapped_int_b[4]{0x56023f, 0, 0, 0x46e605};
+		check(normalise_draw_caller(direct, 0x5601bd, 0x5601fb, 0x56023f) == 0x4990a5, "P3: a tail-jumped bool draw names its caller directly");
+		check(normalise_draw_caller(wrapped_float, 0x5601bd, 0x5601fb, 0x56023f) == 0x4870c5, "P3: the float wrapper's caller is one frame up");
+		check(normalise_draw_caller(wrapped_int, 0x5601bd, 0x5601fb, 0x56023f) == 0x48aea7 && normalise_draw_caller(wrapped_int_b, 0x5601bd, 0x5601fb, 0x56023f) == 0x46e605,
+		      "P3: the int wrapper's caller is three frames up (esi/edi pushed)");
+		auto* trace = new draw_trace();
+		for (unsigned i = 0; i < draw_ring_size + 10; ++i) trace->note(i, i, std::uint16_t(i));
+		check(trace->pending() == draw_ring_size && trace->overflow == 10 && trace->ring[trace->flushed & (draw_ring_size - 1)].caller == 10,
+		      "P3: the draw ring is bounded; the oldest unflushed entries are dropped and counted");
+		delete trace;
+		auto guarded = [](std::uint32_t va) { return std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [&](const auto& g) { return g.va == va; }); };
+		check(guarded(0x484101) && guarded(0x4867f8) && guarded(0x522f70) && guarded(0x560090), "P1-P3: the zone-load sites, the ring init and the draw entry are guarded");
+	}
+	{
+		check(camera_anchor_from_party(true, true, true) && !camera_anchor_from_party(true, false, true) && !camera_anchor_from_party(true, true, false) && !camera_anchor_from_party(false, true, true),
+		      "follow-up 3: the zone-start camera anchors on the party list only during an armed late restart with the reset on");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x4868f4; }) &&
+		      std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x486968; }),
+		      "follow-up 3: the anchor table load and the camera vt+0x74 call are guarded");
+	}
+	{
+		// follow-up 5: the dormant-entity respawn hold (CSmartEntMgr update) and the spawn-entry probe.
+		using namespace join_in_progress_rules;
+		check(smart_hold_wanted(true, true, true) && !smart_hold_wanted(true, false, true) && !smart_hold_wanted(true, true, false) && !smart_hold_wanted(false, true, true),
+		      "follow-up 5: the respawn is held only during an armed late restart with the reset on (a lobby START never arms)");
+		auto guarded_span = [](std::uint32_t va, std::size_t n) {
+			return std::any_of(guards.begin(), guards.end(), [&](const auto& g) { return g.va <= va && g.va + g.hex.size() / 2 >= va + n; });
+		};
+		check(guarded_span(smart_update_call, 5) && guarded_span(spawn_entry, spawn_entry_original.size()) && guarded_span(smart_manager_vtable, 32),
+		      "follow-up 5: the game update's getter call, the spawn entry prologue and the manager vtable are guarded retail bytes");
+		check(smart_update_call + 5 + 0x0004840c == smart_manager_getter, "follow-up 5: the replaced call's rel32 reaches the CSmartEntMgr getter");
+		check(spawn_resume == spawn_entry + spawn_entry_original.size() && spawn_entry_original[4] == 0x33 && spawn_entry_original[5] == 0xf6,
+		      "follow-up 5: the displaced prologue ends on an instruction boundary (xor esi,esi) and resumes right after it");
+		// follow-up 6: the per-actor deciders the draw trace names (AI think branch: EDI; touch nudge: ESI), nothing else.
+		check(draw_actor_of(0x51e3c6) == draw_actor_register::edi && draw_actor_of(0x51e3e0) == draw_actor_register::edi &&
+		      draw_actor_of(0x42974d) == draw_actor_register::esi && draw_actor_of(0x429773) == draw_actor_register::esi &&
+		      draw_actor_of(0x423698) == draw_actor_register::none && draw_actor_of(0x4ee0f4) == draw_actor_register::none,
+		      "follow-up 6: the draw trace names the actor only for the AI think branch and the touch nudge");
+		auto* t = new draw_trace(); t->note(0x51e3c6, 1, 2, 0x3804u, 0xffffffffu); t->note(0x4204a6, 2, 2);
+		check(t->ring[0].a == 0x3804u && t->ring[0].b == 0xffffffffu && t->ring[1].a == 0 && t->ring[1].b == 0, "follow-up 6: a draw entry carries the actor's handle and controller when given, 0 otherwise");
+		delete t;
+	}
+	{
+		std::array<std::uint32_t, 32> ring{}; std::int32_t w = 7, r = 11, f = 28;
+		check(rebuild_brain_ring(0x80000007u, ring, w, r, f) == 4 && w == 28 && r == 0 && f == 28 && ring[0] == 3 && ring[27] == 30 && ring[28] == 0,
+		      "follow-up 4: the brain ring is rebuilt over the free slots in ascending order (held slots kept out)");
+		check(rebuild_brain_ring(0u, ring, w, r, f) == 0 && w == 0 && r == 0 && f == 32 && ring[31] == 31, "follow-up 4: with every brain free the rebuilt ring is identity");
+		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a relocated pool");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x484069; }), "follow-up 4: the LoadZone site is guarded");
+	}
+	{
+		// Follow-up 7: the timed-event queue's canonical order and drop rule.
+		auto entry = [](float time, std::uint32_t handle, std::uint32_t owner, std::uint32_t event, std::uint8_t tag) {
+			event_entry e{}; e.time = time; e.handle = handle; e.owner = owner; e.event = event; e.payload[0] = tag;
+			e.token = positive_entity_token(handle); e.live = owner != 0; return e; };
+		const auto host_hero = entry(2.0f, 0x3801, 0x10000, 0x10320, 0), joiner_hero = entry(2.0f, 0x1801, 0x10000, 0x10320, 0);
+		const auto other = entry(2.0f, 0x3802, 0x20000, 0x20320, 0), later = entry(2.5f, 0x3801, 0x10000, 0x10320, 0);
+		const auto second_event = entry(2.0f, 0x3801, 0x10000, 0x10328, 0), payload_b = entry(2.0f, 0x3801, 0x10000, 0x10320, 1);
+		const auto dead = entry(2.0f, 0x35ce, 0, 0x12345678, 0), non_token = entry(2.0f, 0, 0, 0x6d55fc, 0), negative = entry(2.0f, 0x80000001u, 0, 0x6d5604, 0);
+		check(!canonical_event_less(host_hero, joiner_hero, 0x3ff) && !canonical_event_less(joiner_hero, host_hero, 0x3ff), "follow-up 7: the owner's generation never orders (warm host 0x3801 = cold joiner 0x1801)");
+		check(canonical_event_less(host_hero, other, 0x3ff) && !canonical_event_less(other, host_hero, 0x3ff), "follow-up 7: same time: the lower dense index first");
+		check(canonical_event_less(host_hero, later, 0x3ff) && canonical_event_less(other, later, 0x3ff), "follow-up 7: the earlier time first whatever the owner");
+		check(canonical_event_less(host_hero, second_event, 0x3ff) && !canonical_event_less(second_event, host_hero, 0x3ff), "follow-up 7: the same owner's events by their offset (+0x320 before +0x328)");
+		check(canonical_event_less(host_hero, payload_b, 0x3ff), "follow-up 7: equal otherwise: the payload bytes decide");
+		check(canonical_event_less(other, non_token, 0x3ff) && canonical_event_less(non_token, negative, 0x3ff), "follow-up 7: non-token owners sort after every token, by raw handle");
+		check(event_entry_dropped(dead) && !event_entry_dropped(host_hero) && !event_entry_dropped(non_token) && !event_entry_dropped(negative), "follow-up 7: only a dead entity token is dropped");
+		{
+			// Follow-up 9 (round 6): the static "moved" kind 0x6d7c5c scheduled on the host's actor (pool at one address) and
+			// on the joiner's (another) must have one key; a member event keys by its offset and sorts before any static kind.
+			event_entry hk{}, jk{}, mem{}, dk{};
+			hk.time = jk.time = mem.time = dk.time = 2.0f; hk.token = jk.token = mem.token = dk.token = true; hk.live = jk.live = mem.live = true;
+			hk.handle = 0x3801; hk.owner = 0x03290008; hk.event = 0x6d7c5c;
+			jk.handle = 0x1801; jk.owner = 0x032d0008; jk.event = 0x6d7c5c;
+			mem.handle = 0x1801; mem.owner = 0x032d0008; mem.event = 0x032d0008 + 0x320;
+			dk.handle = 0x35ce; dk.owner = 0; dk.event = 0x6d7c5c; // a dead owner: the raw event address
+			check(event_kind_key(hk) == 0x6d7c5c && event_kind_key(jk) == 0x6d7c5c && event_kind_key(dk) == 0x6d7c5c, "follow-up 9: a static kind's key is its address in every process whatever the owner's address");
+			check(event_kind_key(mem) == 0x320 && canonical_event_less(mem, jk, 0x3ff) && !canonical_event_less(jk, mem, 0x3ff), "follow-up 9: a member event (its offset) sorts before a static kind on the same owner");
+			check(!canonical_event_less(hk, jk, 0x3ff) && !canonical_event_less(jk, hk, 0x3ff), "follow-up 9: the same kind on the same slot is equal across processes");
+			check(cohort_sync_clears_late_restart(false) && !cohort_sync_clears_late_restart(true), "follow-up 9: cohort synchronized ends the late restart only when no frame-0 epoch is still armed");
+			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
+			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
+			// epoch saw the loading flags, and never before.
+			cohort ep{}; ep.begin(); ep.start();
+			check(!ep.resume_controls(true), "follow-up 10: no resume before the epoch has seen the world loading");
+			ep.observe(true, false);
+			check(!ep.resume_controls(false) && ep.resume_controls(true) && !ep.resume_controls(true), "follow-up 10: the pump resumes once, when the world is no longer loading");
+		}
+		check(event_queue_rebuild_wanted(true, true, true) && !event_queue_rebuild_wanted(true, false, true) && !event_queue_rebuild_wanted(true, true, false) && !event_queue_rebuild_wanted(false, true, true), "follow-up 7: the rebuild runs only in an armed late restart with the reset on");
+		check(join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_at + 8 * join_in_progress_rules::event_records <= join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_count_at
+		      && join_in_progress_rules::event_record_bytes * join_in_progress_rules::event_records == join_in_progress_rules::event_used_bitmap_at, "follow-up 7: the manager layout is self-consistent (1125 records of 24 bytes, 1125 heap pairs before the count)");
+		for (const auto va : {0x4b2fc0u, 0x68de14u, 0x4b2d70u, 0x4b2c10u, 0x4b2b80u, 0x4b2c90u, 0x4b2a10u, 0x41a76bu, 0x41e440u, 0x4b2de0u})
+			check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 7: every timed-event site is guarded");
+		check(join_in_progress_rules::game_x87_control_word == 0x027f && join_in_progress_rules::game_mxcsr == 0x1f80, "follow-up 7: the canonical FPU control state is the game's (CRT _PC_53, Windows MXCSR)");
+		check(event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0) && event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0x50001000) && event_pump_slot_accepted(0x50001000, 0x4b2d60, 0x50001000)
+		      && !event_pump_slot_accepted(0x50001000, 0x4b2d60, 0) && !event_pump_slot_accepted(0x12345678, 0x4b2d60, 0x50001000) && !event_pump_slot_accepted(0, 0x4b2d60, 0),
+		      "follow-up 8: the pump slot composes with the xml1 turrets hook only (retail, or the module's reported hook)");
+		check(std::none_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= 0x68de20 && 0x68de20 < g.va + g.hex.size() / 2; }), "follow-up 8: no retail guard covers the hooked pump slot 0x68de20");
+		// Follow-up 11: the world hold is wanted only inside an armed late restart with the reset on and the window open
+		// (`zone started` reached); the watchdog fires once the limit has passed since the window opened, never while
+		// closed, not before the limit, and across the tick wrap.
+		check(world_hold_wanted(true, true, true, true) && !world_hold_wanted(false, true, true, true) && !world_hold_wanted(true, false, true, true) && !world_hold_wanted(true, true, false, true) && !world_hold_wanted(true, true, true, false),
+		      "follow-up 11: the world hold needs the reset on, a late restart, the armed epoch and the open window");
+		check(!world_hold_watchdog_expired(false, 1000, 999999, 2000) && !world_hold_watchdog_expired(true, 1000, 2999, 2000) && world_hold_watchdog_expired(true, 1000, 3000, 2000)
+		      && world_hold_watchdog_expired(true, 0xfffffc18u, 1000, 2000) && !world_hold_watchdog_expired(true, 0xfffffc18u, 999, 2000),
+		      "follow-up 11: the watchdog fires at the limit, not before, never while closed, and across the tick wrap");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= join_in_progress_rules::world_gate_site && join_in_progress_rules::world_gate_site + join_in_progress_rules::world_gate_original.size() <= g.va + g.hex.size() / 2; }),
+		      "follow-up 11: one retail guard covers every byte of the world-section gate site");
+		check(join_in_progress_rules::world_gate_original.size() == 7 && join_in_progress_rules::world_gate_original[0] == 0xf6 && join_in_progress_rules::world_gate_original[1] == 0x86 && join_in_progress_rules::world_gate_original[6] == join_in_progress_rules::world_gate_flag_bit,
+		      "follow-up 11: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
+		{
+			// Follow-up 12 (round 8): a party hero's queued "moved" event (static kind 0x6d7c5c) is dropped by dense index
+			// whatever its generation; another owner's moved event, a member event of a party hero and a non-token owner stay.
+			event_entry mv_joiner{}, mv_host{}, mv_other{}, member{}, non_token{};
+			mv_joiner.time = mv_host.time = mv_other.time = member.time = non_token.time = 2.0f;
+			mv_joiner.token = mv_host.token = mv_other.token = member.token = true; mv_joiner.live = mv_host.live = mv_other.live = member.live = true;
+			mv_joiner.handle = 0x1802; mv_joiner.owner = 0x032d0010; mv_joiner.event = 0x6d7c5c;
+			mv_host.handle = 0x3802; mv_host.owner = 0x03290010; mv_host.event = 0x6d7c5c;
+			mv_other.handle = 0x1805; mv_other.owner = 0x032d0040; mv_other.event = 0x6d7c5c;
+			member.handle = 0x1802; member.owner = 0x032d0010; member.event = 0x032d0010 + 0x320;
+			non_token.handle = 0; non_token.owner = 0; non_token.event = 0x6d7c5c;
+			const std::uint32_t party[4] = {0x3801, 0x3802, 0x3803, 0x3804};
+			check(moved_event_dropped(mv_joiner, 0x6d7c5c, party, 4, 0x3ff) && moved_event_dropped(mv_host, 0x6d7c5c, party, 4, 0x3ff), "follow-up 12: a party hero's moved event is dropped on both peers whatever its generation");
+			check(!moved_event_dropped(mv_other, 0x6d7c5c, party, 4, 0x3ff) && !moved_event_dropped(member, 0x6d7c5c, party, 4, 0x3ff) && !moved_event_dropped(non_token, 0x6d7c5c, party, 4, 0x3ff), "follow-up 12: another owner's moved event, a party hero's member event and a non-token owner are kept");
+			check(!moved_event_dropped(mv_joiner, 0x6d7c5c, party, 0, 0x3ff), "follow-up 12: no party (the canonicalisation did not run): nothing dropped");
+			for (const auto va : {0x471740u, 0x47178cu, 0x4729b0u})
+				check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 12: the moved check, its schedule and the fire are guarded");
+			check(join_in_progress_rules::actor_last_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_last_orientation_at
+			      && join_in_progress_rules::actor_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_orientation_at, "follow-up 12: the last-known vectors are adjacent 12-byte copies of position/orientation");
+		}
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

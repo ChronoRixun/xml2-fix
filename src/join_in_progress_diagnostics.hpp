@@ -16,13 +16,14 @@ struct window {
     std::uint16_t last_frame = 0;
     bool have_frame = false;
     bool armed = false;
+    unsigned limit = periods; // follow-up 13: the probe raises it (30 periods = frame 900) for a late restart's epoch
     void begin(std::uint32_t now) { ++epoch; produced = compared = 0; since = now; armed = true; have_frame = false; }
     bool active(std::uint32_t now) const { return armed && std::uint32_t(now - since) < 180000; }
-    bool capture(std::uint32_t now) const { return active(now) && produced < periods; }
+    bool capture(std::uint32_t now) const { return active(now) && produced < limit; }
     bool compare(std::uint32_t now, bool complete, std::uint16_t frame) {
         // Native arbitration repeats while remote packets arrive. Observe each
         // completed period once, before arbitration can clear its lists.
-        if (!active(now) || !complete || compared >= periods || (have_frame && frame == last_frame)) return false;
+        if (!active(now) || !complete || compared >= limit || (have_frame && frame == last_frame)) return false;
         ++compared; have_frame = true; last_frame = frame; return true;
     }
 };

@@ -9,9 +9,10 @@ bool checksum_read(std::uintptr_t address, void* out, std::size_t size) {
     __try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+unsigned checksum_period_budget = join_in_progress_diagnostics::periods; // follow-up 13: 30 with [Dev] LateJoinProbe=1 (frames 30..900)
 void arm_checksums() {
-    checksum_window.begin(GetTickCount()); checksum_heroes = {}; checksum_camera_readable = false;
-    logger::write("jip checksum: epoch=%u armed for first %u native periods; observation only", checksum_window.epoch, join_in_progress_diagnostics::periods);
+    checksum_window.begin(GetTickCount()); checksum_window.limit = checksum_period_budget; checksum_heroes = {}; checksum_camera_readable = false;
+    logger::write("jip checksum: epoch=%u armed for first %u native periods; observation only", checksum_window.epoch, checksum_window.limit);
 }
 void __cdecl checksum_actor_observe(const std::uint32_t* regs) {
     if (!checksum_window.capture(GetTickCount()) || regs[2] >= checksum_heroes.size()) return;
@@ -72,9 +73,10 @@ void __cdecl checksum_produced(const std::uint32_t* regs) {
         logger::write("jip checksum: epoch=%u sample=%u diagnostic read fault; native checksum unchanged", checksum_window.epoch, checksum_window.produced);
     }
     checksum_heroes = {}; checksum_camera_readable = false;
+    probe_period(std::uint16_t(regs[1] & 0xffff));
 }
 void __cdecl checksum_heads_observe(void* m) {
-    if (!checksum_window.active(GetTickCount()) || checksum_window.compared >= join_in_progress_diagnostics::periods) return;
+    if (!checksum_window.active(GetTickCount()) || checksum_window.compared >= checksum_window.limit) return;
     __try {
         // Match the native walk's active records, without using its cursor.
         std::array<gns_transport_core::checksum_head, 4> heads{};

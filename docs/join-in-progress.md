@@ -266,3 +266,277 @@ GNS handoff, not that every native game packet was absent. New reports include
 bound/switched/native-send-pending; four-period owner snapshots include active,
 pending and native-send backlog. The earlier same-frame checksum variant still
 requires live component comparison; LateJoin=0 remains the release recommendation.
+
+## Canonical cohort restart (0.6.0, p060fix/AE)
+
+The late admission already reloads EVERY peer from one campaign image: the host
+serialises the live campaign at the zone-load boundary (`start_image`, the same
+`save_format::serialize_wrapper` a save uses), hands it to the native campaign
+manager exactly as Load Saved Campaign does, and the native sender / `J`
+completion / `0x26` broadcast restart every participant through the retail
+campaign start `0x5f3c20` (`resetgame`, mode-2 restore, zone load). What the
+060y component logs showed is that this restart is not identical on a warm host
+and a cold joiner: the retail checksum is `hero_sum + camera + synchronized RNG
+draw count`, and at the first period every hero transform matched (E1) while the
+camera term differed by -70 in 4/4 runs and the draw count by +70..+85
+(`O:/Projects/agent-work/live-060y/evidence/latejoin`, run 4 frame 30 even
+cancelled to equal hashes and broke at frame 60).
+
+The camera is a process-lifetime singleton (`0x7171d0`, vtable `0x684cc4`),
+constructed once inside its getter (`0x4457e0`, the call at `0x445819`) and
+never rebuilt by `resetgame` or the network soft reset. The zone-start camera
+init (`vt+0x74 = 0x4458a0`) keeps the CURRENT yaw `+0x74` unless the seat
+manager asks for a snap (`0x445958..0x44596f`), and the full reset (`vt+0x68 =
+0x440c70`) copies the yaw history `+0x2f0 -> +0x2f4`. The constructor zeroes
+`+0x74`; that is the joiner's observed yaw 0.0, while the host carried the 22.6
+degrees it had turned during play (decoded from the logged eye/target vectors:
+same distance 374.8 and pitch on both, only the yaw differs).
+
+The fix:
+
+1. **Pristine camera image.** The construction call is bridged; right after the
+   retail constructor returns, the singleton's `0x4dc` bytes (up to its
+   construction guard byte `0x7176ac`) are copied. If the singleton was already
+   constructed when the fix installed, no image is kept and the restart logs
+   that it keeps the running camera.
+2. **Every peer restores it before the native campaign start of a cohort
+   restart** (`deferred_campaign_start`, the scheduler task outside packet
+   delivery, after the existing member's soft reset). Warm host and cold joiner
+   then run the restored zone's camera init from identical inputs. A foreign
+   vtable refuses the restore. `[Dev] LateJoinRestartReset=0` keeps the 060y
+   behaviour as an A/B control.
+3. **Synchronized RNG epoch at the first shared frame.** The native setup
+   reseeds both streams after the mode-2 load (`0x606fb0 -> 0x613df0(2)`), but
+   the zone loads afterwards and the warm/cold paths draw differently while it
+   does. `campaign_load_bridge` arms the epoch; the input-manager run after the
+   frame gate (`0x606b98 -> 0x5587c0`, every participant's input for the frame
+   present) reseeds the synchronized stream once with the native constant when
+   the native frame `0xa3bbf4` is 0, on every peer at the same lockstep point.
+   Ordinary play and lobby START are never armed.
+
+4. **Only for a late-join restart, on every peer alike.** A lobby START of a
+   saved campaign sends the same 0x47 prepare (mode 2) and only the guests
+   enter the cohort epoch there (the host never receives its own 0x47), so an
+   unconditional restore/reseed would run on the guests alone and break the
+   proven lobby START. The host therefore stamps the 0x47 body's two unused
+   tail bytes (`0x6095a5`, body+6; stack residue in retail) with `"LJ"` while
+   `start_image` runs `native_campaign_start` for a late joiner and with 0 at a
+   lobby START; receivers gate the restore and the epoch arming on the marker,
+   the host on its own `start_image`. `campaign_notice` logs which kind it saw.
+
+   The stamp bridge is entered by JUMP (no return address): the opcode write is at the
+   site's `[esp+0x30]` and the tail bytes at `[esp+0x1e]` (`[esp+0x22]` under the pushed
+   EAX). The first AE build used CALL offsets there and sent opcode 0xa4 for every
+   saved-campaign prepare (live-060y-ae); the fixture now enters the bridge by jump on a
+   patterned Start Game frame. The construction bridge (0x445819) and the frame-gate
+   bridge (0x606b98) are installed as CALLs and handle their return address.
+5. **A given-up seat is released.** When the add's wait, the image or the load outlives
+   its limit after the native add, the host drops that participant natively (0x6133a0
+   with the retail slow-player codes 0x10ce/0x10cf), so the hero returns to AI and the
+   joiner gets the stock drop notice and can join again; a never-added pending seat is
+   simply freed.
+
+6. **Zone-load RNG epochs (latejoin-residue P1).** Retail draws the synchronized
+   stream before frame 0 while the zone loads and starts (loading-screen chooser
+   `0x487000`, spawner store `0x48adc0`, the touched nudge `0x498ef0`, drops
+   `0x46e490`, AI), and a warm host and a cold joiner reach those draws from
+   different states. A late restart therefore takes an epoch at CMap::LoadMap entry
+   (`0x484108`, the `call 0x4457e0` after the loading bits) and at the zone-loaded
+   finish entry (`0x4867fe`, its first call `0x596890`): call-shape bridges that
+   keep the site's return address and tail-jump to the getter, gated on the late
+   restart being armed and frame 0 not yet taken. Lobby STARTs and ordinary zone
+   transitions never arm.
+7. **AI brain free ring (P2).** The AI system's 32-entry ring (`0x78ba14`
+   +0xc384[32], write/read/free at +0xc408/+0xc40c/+0xc410) is only ordered by the
+   constructor (`0x522f70`); at a late restart's zone load, with every brain free,
+   it goes back to identity through that retail init on the stock pool (a relocated
+   e4 pool is left to the e4 core). Brain and world generations are untouched.
+8. **Probe (P3, `[Dev] LateJoinProbe=1`, off by default).** `jip snapshot:
+   where=...` lines at every milestone (deferred start, mode-2 load, zone load
+   entry/epoch, zone start/epoch, zone started, frame 0 (+epoch), frame N samples)
+   with the native frame, session phases, clock, game time, both RNG streams, the
+   world and brain rings, the camera and each hero's handle/brain/controller/flags/
+   transform/health; and `jip rng: phase= frame= count= caller=` lines from a
+   bounded ring (8192) fed by a jump at the synchronized draw entry `0x560090`
+   (wrapper returns `0x5601bd`/`0x5601fb`/`0x56023f` normalised to the real
+   caller), flushed at the milestones off the draw path.
+   `scripts/jip_components.py HOST.log GUEST.log --mode snapshot|rng` pairs them.
+
+Logs: `the game constructed its camera; pristine image kept`, `canonical
+restart - synchronized RNG epoch armed`, `canonical restart (<role>) - the
+camera is back at its constructed state ... (was yaw ... mode ...)`, `first
+shared frame 0 - synchronized RNG epoch reset`. `scripts/jip_components.py
+HOST.log GUEST.log` pairs the `jip checksum produced/hero` samples by epoch and
+frame and reports every term; `xml2_join_in_progress_boundary_test <retail exe>
+restart` runs the bridges and the real retail seed setter on the mapped image.
+Room listings now advertise a started room as joinable exactly when the host
+admits late joiners (`late_join_enabled()`), so Browse and the broker's
+`room_not_joinable` agree with the host's DROP-IN choice; a code join to a
+started room with DROP-IN off gets the broker's "Not taking players right now"
+before the tunnel instead of the tagged native notice after it.
+
+What only a live round can prove: that the restored camera init and the frame-0
+epoch leave the first four checksum periods equal on both PCs with movement,
+and that the E2 AI-hero displacement (run 2 slot 3) was downstream of the same
+two terms.
+
+Follow-up 5 (probe round 2): with the camera and the rings canonical, the joiner
+still placed four more AI actors than the host at E1 (brains 16 vs 12 at "zone
+started", four extra 7-draw actor groups before frame 0 and two more at frame 0)
+and made the actor touch-nudge draws (`0x42974d`) at E2. A visited zone is
+restored from its record: the live actors through the dynamic list (equal on
+both peers) and the dormant monsters its spawners stored as CSmartEntMgr
+records, which only the manager's update (vt+4 `0x4b7100`: the records inside
+a box around the camera, 750 units ahead, 40 per call from a round-robin
+cursor) respawns - from the game update every tick (`0x46f2df`), including the
+ticks each peer spends waiting at the barrier before frame 0 with a camera that
+drifts differently. During a late restart the call site hands the game update
+a stand-in whose update does nothing, from the zone load to the frame-0 epoch,
+where the real manager's cursor goes to 0 on every peer and the first respawn
+runs in lockstep from the re-anchored camera. Logs: `the dormant-entity
+respawn (CSmartEntMgr update) is held from the zone load until the first shared
+frame` and `the dormant-entity respawn resumes at the first shared frame (N
+update(s) held; M dormant record(s), cursor C -> 0)`. The probe adds
+`smart=n: cursor: held:` to every snapshot and, from a jump at the spawn-by-
+names entry `0x4612e0`, one `jip spawn: phase= frame= n= caller= def= inst=
+at= draws=` line per entity the zone spawns (bounded, 2048 per epoch);
+`scripts/jip_components.py HOST.log GUEST.log --mode spawn` names the extras.
+
+Follow-up 7 (probe round 4): every actor update is a timed event of the
+manager `0x75d340` (the actor's members +0x320/+0x328/+0x330 fire `0x434540`
+when the queued time equals the stored one; scheduled through `0x41d380` ->
+`0x41a730` -> manager vt+8; pumped by the game update through vt+0xc). The
+pending entries are a binary heap of (time, record index) at body+0x7c40 that
+compares TIMES ONLY, so the order of a frame's same-time updates - and so the
+order in which due AI brains think and draw - is the heap's shape, which each
+process's push/pop history decides (round 4: the same three brains re-armed
+with the same three draws in a different order on the two peers at frame
+16/17, in a different rotation per run). At the late restart's epochs (zone
+load, zone start, first shared frame) every peer rebuilds the queue in a
+canonical order: entries whose owner is a dead entity token are dropped (their
+fire is a no-op that still shapes the heap), the rest are sorted by (time,
+owner's dense index - never the generation, event offset, payload), the pool
+is re-initialised by the retail pool init and every entry re-added through the
+retail alloc / store / heap push. Logs: `the timed-event queue (every actor
+update) is rebuilt in canonical order at <epoch> on every peer: N entries kept
+(D whose owner is gone dropped, S cancelled kept), heap A -> B, records ...`.
+The frame-0 epoch also logs the game thread's x87 control word and MXCSR and
+sets them to the game's own values (0x027f: the CRT's `_PC_53`; 0x1f80) should
+either have drifted (`FPU control state at the first shared frame is the
+game's` / `CORRECTED`). Probe additions: `fpu=` on every snapshot and cam line,
+`jip events: where= heap= records= ring= live= dead= stale= rebuilds= head=`
+at every milestone, before and after the rebuilds, and at frames 1..3;
+`jip camdump: frame= off= <32 dwords>` of the whole camera object at the
+frame-0 epoch and frames 1 and 2. Tool modes `--mode events` and
+`--mode camdump`; `--mode rng` now compares the actor's dense index, controller,
+think time and distance as well as the caller; `--mode cam` accepts the `t=`
+field.
+
+Follow-up 8 (live round 5): `xml1_turrets` installs its scheduler dispatch hook
+at the timed-event manager's pump slot (vt+0xc, `0x68de20`) before this module,
+so the vtable guard covers only slots 0..2 and the install checks the pump slot
+separately: retail `0x4b2d60` or `xml1_turrets::installed_process_hook()` are
+accepted (logged `JoinInProgress composes with the xml1 turrets scheduler
+dispatch hook ...`), anything else refuses the install. The rebuild and the
+probe never call the pump (retail pool init / alloc / store / push and reads
+only). `test/module_hook_sites.json` lists such slots for the guard scan's
+cross-module table; the native fixture mode `turrets` installs a stand-in of
+the hook first and drains a canonically rebuilt queue through it.
+
+Follow-up 9 (live round 6): the frame-0 epoch never rebuilt the queue on
+either peer (`should_reseed` consumed `armed` before the rebuild asked for
+it) and `cohort synchronized` cleared `late_restart` BEFORE the joiner's frame
+0 (245 ms earlier; after it on the host), so the joiner skipped the FPU step:
+the epoch differed by role. Now the epoch's steps follow `should_reseed`
+unconditionally in a fixed order on every peer - RNG epoch, camera re-anchor,
+respawn release, FPU control state, the queue rebuild LAST - and the epoch
+itself ends the late restart (`the frame-0 epoch is complete on this peer ...;
+the late restart ends here`); `cohort synchronized` keeps the flag while an
+epoch is still armed. Follow-up 10 (live round 7): AE10 also resumed an existing member's native
+controls at the zone start and marked the pump's resume spent; the host then
+never produced its frame-0 input and every late restart froze at the barrier.
+Reverted: the pump resumes the controls after the world restore, as before
+(the fixture drives the production zone-start notice as an existing member and
+asserts the pump's resume is still due). The AE10 logs show every hero
+transform bit-identical on both peers at `zone started`; the settle that parts
+them runs in the barrier-wait ticks, whose count differs per peer.
+The canonical order keys an event by its offset
+inside its owner or, for a static kind object (the "moved" notification
+0x6d7c5c and the table at 0x6d55a4), by its address, which every process
+shares; the probe's `jip events:` lines now carry every entry (`part=k/n`,
+16 per line, `time:index:handle:kind:payload`) and the snapshot's hero lines
+walk the party list (game vt+0x11c). `--mode events` lists the entries present
+on one peer only.
+
+Follow-up 11 (the world hold, design in the work folder's REPORT section 16):
+the remaining frame-0 difference is the world ticking a different number of
+times per peer between `zone started` and frame 0 (the barrier wait: AE9 host
+~2 iterations, joiner ~7). The main-loop iteration (0x401d70) calls the game
+update (game vt+0x16c = 0x46eef0) at 0x40235a, and that update gates its whole
+world section 0x46f0ca..0x46f60d (timed-event pump, countdowns, the physics
+and collision singletons, the camera update, the smart-entity update, the AI)
+on `test byte ptr [esi+0x728], 2; je 0x46f60d` at 0x46f0a9. A CALL-shape
+bridge over that 7-byte test returns ZF=1 (skip) while the hold is on and
+executes retail's own test otherwise. The hold opens at the `zone started`
+milestone of an ARMED late restart only (the pump poll that also resumes an
+existing member's controls; a lobby START never arms) and closes first thing
+in the frame-0 epoch, at the session's end, on a first-frame reset fault, and
+by a 2 s watchdog that logs (`resumes at the watchdog ...`: frame 0 never
+came, the restart proceeds as AE11 did). What keeps running while held: the
+clock tick, the input manager update 0x55a2b0 (called at 0x40219e on the main
+loop, before the game update; its 0x559700 samples the local pad, broadcasts
+the record through 0x611270 and advances the ring's write cursor +0x3174 - the
+host's frame-0 input is produced THERE, outside the held section), the
+scheduler tasks (the frame gate 0x606a50 from the pump at 0x401f74, this
+module's pump with the controls resume), rendering. The game update's direct
+callees include none of the input-manager, controllers or net-step functions.
+Log: `the world update ... is held from the zone start until the first shared
+frame on every peer (hold N; the watchdog releases it after 2000 ms)` at the
+opening and `the world update resumes at the first shared frame (N world
+update(s) skipped on this PC while held)` first in the frame-0 epoch, N per
+peer. `[Dev] LateJoinWorldHold=0` is the A/B control. Retail guard
+0x46f0a0..0x46f0bb (the vt+0x20 call tail, the test, the je, the seats getter
+call); the native fixture enters the bridge by CALL with every register known
+and asserts retail's flags for every bit pattern with the hold off, ZF=1 held,
+and every open/close trigger including the watchdog with a stubbed clock.
+Live round 8 (AE11) showed the game clock, the world counters and the camera
+yaw history unchanged between `zone started` and frame 0 on both peers with
+the native pause byte set through the wait, so the world section does not run
+there and this hold is inert; it stays behind the toggle.
+
+Follow-up 12 (round 8): the joiner alone held a queued "moved" event (the
+static kind 0x6d7c5c) for its OWN hero at frame 0 and the host alone
+registered them for the AI heroes at frames 1-3, with every hero transform
+identical. The moved check is the entity's vt+0xf4 = 0x471740(time):
+position +0x20 vs last-known +0x1e8, orientation +0x2c vs +0x1f4, or 0x470b30
+(+0x23c / +0x240), and with bit 2 of +0x258 clear it sets the bit and
+schedules the kind at game time + arg (0x41a730); the kind's payload getter
+0x419c40 returns size 0, so the record's 16 payload bytes are stale residue
+(never compared). The fire 0x4729b0 clears the bit, refreshes the last-known
+vectors (vt+0x148 -> 0x471400; a non-AI hero also notifies its position
+through vt+0x158) and re-runs the check with 0. The caller that registers
+the joiner's hero during its wait is not traced (vt+0xf4 is a slot offset
+~80 call sites share across classes). At the frame-0 epoch, on every peer,
+before the queue rebuild, every party hero (game vt+0x11c) gets the state of
+an entity that has not moved since it was placed - +0x1e8 = +0x20, +0x1f4 =
++0x2c, bit 2 of +0x258 clear - and the rebuild drops the party heroes'
+queued moved events (by dense index; other owners' stay). Log: `the party
+heroes' moved-check state is canonical at the first shared frame on every
+peer: N hero(s), last-known = current (D differed), P pending flag(s)
+cleared; their queued moved events go in the rebuild (run 1)`; the rebuild
+line counts `M party-hero moved event(s) dropped`. `[Dev]
+LateJoinMovedCanonical=0` is the A/B control. The probe's hero lines carry
+`lk:` (the last-known vectors) and `mv:` (+0x258, +0x23c, +0x240).
+
+Follow-up 13 (round 9: both E1 admissions agreed through frame 120 with the
+queue 43/43, then the joiner self-dropped at frame 840 / 720 with no input;
+E2 still parts at Storm's placement touch-nudge on the joiner alone, and the
+host's heroes reach the zone start with warm last-known vectors): with
+`[Dev] LateJoinProbe=1` the checksum diagnostics window's period budget is 30
+(frames 30..900; the default four periods otherwise) - component samples,
+draw-ring flushes and snapshots every 30 frames, an events dump every 60 -
+and the three touch-nudge draws log `jip touch:` (the touched entity, its
+moved-check fields and the return-address chain above the draw, 24 lines per
+epoch). The party heroes' moved-check state is also made cold at the
+zone-start notice, before the players are placed (same toggle); the frame-0
+pass stays.

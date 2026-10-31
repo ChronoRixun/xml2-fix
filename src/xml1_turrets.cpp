@@ -495,6 +495,7 @@ u32 fnv(const std::vector<std::string>& all){
 }
 }
 bool requested(){return was_requested;}
+std::uint32_t installed_process_hook(){return installed?static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&process_hook)):0u;}
 xml1_capability_rules::registration capability(){
     return xml1_capability_rules::turrets(was_requested,installed,static_cast<std::uint32_t>(turrets.size()),fnv(lines));
 }
