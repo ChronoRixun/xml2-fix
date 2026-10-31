@@ -17,6 +17,7 @@
 #include "save_format.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_turrets.hpp"
+#include "pad_prompts.hpp"
 #include "xml1_hook_transaction.hpp"
 #include <algorithm>
 #include <atomic>
@@ -249,11 +250,11 @@ namespace join_in_progress
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
 		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
-		void canonical_event_queue(const char* where); void canonical_event_queue(const char* where, bool wanted); void fpu_canonical(const char* where); void fpu_canonical(const char* where, bool wanted); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue); follow-up 9: the frame-0 epoch forces both
+		void canonical_event_queue(const char* where); void canonical_event_queue(const char* where, bool wanted); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue); follow-up 9: the frame-0 epoch forces the rebuild
 		extern unsigned event_rebuilds;
 		bool event_pump_slot_ok(); // follow-up 8 (residue): the pump slot is retail or the xml1 turrets hook
-		void open_world_hold(); void release_world_hold(const char* why); void world_hold_watchdog(); void world_hold_milestone(bool loading); // follow-up 11 (residue): the world hold
-		void canonical_party_moved_state(const char* where, bool wanted); extern bool moved_canonical_enabled; // follow-up 12 (residue): the party heroes' moved-check state
+				void canonical_party_moved_state(const char* where, bool wanted); extern bool moved_canonical_enabled; // follow-up 12 (residue): the party heroes' moved-check state
+		void canonical_party_ground(const char* where, bool wanted); // follow-up 14 (residue): the party heroes' ground re-probed at frame 0
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -422,19 +423,18 @@ namespace join_in_progress
 				// consumed and never ran; the joiner's `late_restart` had been cleared by `cohort synchronized` 245 ms before
 				// its frame 0, so its FPU step was skipped too - the epoch differed by role).
 				if (!restart.should_reseed(frame)) return;
-				release_world_hold("the first shared frame"); // follow-up 11: first thing in the epoch, before any other step
 				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
 				logger::write("join in progress: first shared frame %u - synchronized RNG epoch reset (this PC had drawn %u since the last epoch, seed %08x); every peer continues from the native seed %06x with count 0",
 					unsigned(frame), count, seed, native_seed);
-				reanchor_camera_at_frame0();
+				reanchor_camera_at_frame0(); // follow-up 14: the derived camera spans back to the pristine image first, then vt+0x74 from the party anchor
 				release_smart_hold("the first shared frame");
-				fpu_canonical("the first shared frame", restart_reset_enabled);
 				canonical_party_moved_state("the first shared frame", restart_reset_enabled && moved_canonical_enabled); // follow-up 12: before the rebuild, which drops the party heroes' queued moved events
+				canonical_party_ground("the first shared frame", restart_reset_enabled); // follow-up 14: after the RNG epoch (the nudge draws count alike), before the rebuild
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
-				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, camera re-anchor, respawn release, FPU control state, queue rebuild %u); the late restart ends here", event_rebuilds);
+				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release, moved state, ground re-probe, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
 				snapshot("frame 0 epoch");
 				probe_events("frame 0 epoch");
@@ -445,7 +445,6 @@ namespace join_in_progress
 			{
 				restart.disarm();
 				release_smart_hold("a first-frame reset fault");
-				release_world_hold("a first-frame reset fault"); // follow-up 11 (defensive: the release above precedes every faultable step)
 				logger::write_once("jip:reseed-fault", "join in progress: the first-frame RNG reset faulted - disarmed");
 			}
 		}
@@ -513,7 +512,6 @@ namespace join_in_progress
 			const bool start_menu = menu && std::strcmp(reinterpret_cast<const char*>(menu) + 0xc, "start") == 0;
 			const bool loading = zone_load_pending() || start_menu || (pause && at<std::uint8_t>(pause, 0x6c));
 			if (!loading && late_restart && epoch.started && epoch.saw_loading && !probe_zone_started) { probe_zone_started = true; probe_milestone("zone started", 3); }
-			world_hold_milestone(loading); // follow-up 11: the world section is held from `zone started` (this poll) to frame 0
 			if (existing_cohort_member && epoch.resume_controls(!loading))
 			{
 				// Existing-world teardown disables controllers after network setup enabled them. The first input
@@ -628,7 +626,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); release_world_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1614,15 +1612,13 @@ namespace join_in_progress
 		probe_enabled = ini::flag(L"Dev", L"LateJoinProbe", false);
 		if (probe_enabled)
 		{
-			static join_in_progress_core::draw_trace trace;
-			draws = &trace;
-			checksum_period_budget = 30; // follow-up 13: component samples, draw flushes and (every 60 frames) events dumps through frame 900
-			logger::write("join in progress: [Dev] LateJoinProbe=1 - milestone snapshots and the synchronized-draw caller trace (bounded ring of %u) are on; think-branch scales [0x6819a0]=%08x (with controller) [0x6801ac]=%08x +[0x682ffc]=%08x (without)",
-				join_in_progress_core::draw_ring_size, probe_at<std::uint32_t>(0x6819a0), probe_at<std::uint32_t>(0x6801ac), probe_at<std::uint32_t>(0x682ffc));
+			draws = new (std::nothrow) join_in_progress_core::draw_trace(); // follow-up 14 (review S5): heap, only with the probe (1 MiB); never freed (process lifetime)
+			checksum_log_every_period = true; // AE15: the producer sample at every period while the probe is on
+			checksum_period_budget = 30; // follow-up 13: component samples, draw flushes and (every 60 frames) events dumps through frame 900 (late restarts only: S6)
+			logger::write("join in progress: [Dev] LateJoinProbe=1 (for bug reports only) - milestone snapshots and the synchronized-draw caller trace (bounded heap ring of %u%s) are on; think-branch scales [0x6819a0]=%08x (with controller) [0x6801ac]=%08x +[0x682ffc]=%08x (without)",
+				join_in_progress_core::draw_ring_size, draws ? "" : "; ring allocation FAILED - no draw trace", probe_at<std::uint32_t>(0x6819a0), probe_at<std::uint32_t>(0x6801ac), probe_at<std::uint32_t>(0x682ffc));
 		}
 		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
-		world_hold_enabled = ini::flag(L"Dev", L"LateJoinWorldHold", true);
-		if (!world_hold_enabled) logger::write("join in progress: [Dev] LateJoinWorldHold=0 - the world update keeps ticking during a late restart's barrier wait (AE11 behaviour; A/B control only)");
 		moved_canonical_enabled = ini::flag(L"Dev", L"LateJoinMovedCanonical", true);
 		if (!moved_canonical_enabled) logger::write("join in progress: [Dev] LateJoinMovedCanonical=0 - the party heroes' moved-check state and queued moved events stay as each PC left them at frame 0 (AE12 behaviour; A/B control only)");
 #ifndef NDEBUG
@@ -1730,8 +1726,10 @@ namespace join_in_progress
 			// with the probe only, the spawn-by-names entry (JMP, six bytes displaced).
 			writes.push_back({smart_update_call, bytes(smart_update_original), rel(0xe8, smart_update_call, reinterpret_cast<const void*>(&smart_update_getter_bridge), 5)});
 			if (probe_enabled) writes.push_back({spawn_entry, bytes(spawn_entry_original), rel(0xe9, spawn_entry, reinterpret_cast<const void*>(&spawn_entry_bridge), spawn_entry_original.size())});
-			// Follow-up 11: the world-section gate (CALL replacement of the 7-byte bit test + two nops; the site's je reads the ZF the bridge returns).
-			writes.push_back({world_gate_site, bytes(world_gate_original), rel(0xe8, world_gate_site, reinterpret_cast<const void*>(&world_gate_bridge), world_gate_original.size())});
+			// Follow-up 14: the CActor OnAttached override entry (JMP, eight bytes displaced) and the zone-loaded finish's
+			// getter call right after the party binding (CALL replacement; the site's return address stays).
+			writes.push_back({attach_override, bytes(attach_override_original), rel(0xe9, attach_override, reinterpret_cast<const void*>(&attach_override_bridge), attach_override_original.size())});
+			writes.push_back({party_bound_call, bytes(party_bound_original), rel(0xe8, party_bound_call, reinterpret_cast<const void*>(&party_bound_bridge), 5)});
 		}
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
@@ -1740,8 +1738,7 @@ namespace join_in_progress
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
-				restart_reset_enabled ? (world_hold_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera, dormant-entity respawn held to frame 0, timed-event queue in canonical order, FPU control state, world update held from the zone start to frame 0)"
-					: "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera, dormant-entity respawn held to frame 0, timed-event queue in canonical order, FPU control state; world hold OFF by [Dev] LateJoinWorldHold=0)") : "OFF ([Dev] LateJoinRestartReset=0)");
+				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera made canonical at frame 0, dormant-entity respawn held to frame 0, timed-event queue in canonical order, party moved state and ground re-probed at frame 0, party-hero ground attach suppressed before it)" : "OFF ([Dev] LateJoinRestartReset=0)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");
@@ -1878,7 +1875,7 @@ namespace join_in_progress
 		// Also clears started on a return to the front end, before another session can be admitted.
 		guarded_advance(false, nullptr);
 		if (!first(session())) { epoch = {}; area_load = false; checksum_window.armed = false; return; }
-		world_hold_watchdog(); // follow-up 11: every pump, even after `cohort synchronized` ended the epoch before frame 0
+		device_switch_probe(); // AE15 (probe only): a prompt device change re-arms the window, the draw ring and the camera lines on this PC
 		observe_epoch();
 		if (!machine.any()) { area_load = false; return; }
 		// A mid-game zone load runs synchronously between pump ticks and never opens the initial Start Game menu.

@@ -161,8 +161,9 @@ def rng_mode(host, guest):
 def events_mode(host, guest):
     """Follow-up 7/9: the timed-event queue lines per milestone (heap/records/ring/live/dead/stale and every heap pair as
     time:index:handle:kind[:payload], several `part=k/n` lines per milestone since AE10); the handle's generation is
-    masked before comparing; the kind is the event's offset inside its owner or the static kind object's address (the
-    same in every process). Entries present on one peer only are listed by (time, slot, kind, payload)."""
+    masked before comparing; the kind is the event's offset inside its owner, the static kind object's address or (AE15,
+    a heap kind) its vtable - the same in every process. Entries present on one peer only are listed by (time, slot,
+    kind); the payload is never compared (follow-up 14, review S7: per-process pointers / stale residue)."""
     def parse(path):
         out, seen_parts = {}, {}
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
@@ -190,7 +191,11 @@ def events_mode(host, guest):
     bad = 0
     for where in [w for w in h if w in g]:
         a, b = h[where], g[where]
-        ka, kb = [e[:4] for e in a[7]], [e[:4] for e in b[7]]
+        # Follow-up 14 (review S7): the 16 payload bytes carry per-process pointers for several kinds (round 10 frame 900:
+        # one pointer byte apart on an otherwise identical entry) and are stale residue for the "moved" kind, so an entry
+        # is compared by (time, slot, kind) only; the payload is printed for reference on the one-sided entries.
+        pa, pb = {e[:3]: e[3] for e in a[7]}, {e[:3]: e[3] for e in b[7]}
+        ka, kb = [e[:3] for e in a[7]], [e[:3] for e in b[7]]
         same = a[0] == b[0] and a[3] == b[3] and ka == kb
         verdict = 'AGREE  ' if same else 'DIFFERS'
         print(f"{verdict} {where}: host heap {a[0]} records {a[1]} ring {a[2]} live {a[3]} dead {a[4]} stale {a[5]} rebuilds {a[6]} | guest heap {b[0]} records {b[1]} ring {b[2]} live {b[3]} dead {b[4]} stale {b[5]} rebuilds {b[6]}")
@@ -202,9 +207,9 @@ def events_mode(host, guest):
                     break
             from collections import Counter
             ca, cb = Counter(ka), Counter(kb)
-            for who, extra in (('host', ca - cb), ('guest', cb - ca)):
+            for who, extra, payloads in (('host', ca - cb, pa), ('guest', cb - ca, pb)):
                 for key, n in sorted(extra.items()):
-                    print(f'  only on the {who} ({n}x): time {key[0]} slot {key[1]:#x} kind {key[2]} payload {key[3] or "-"}')
+                    print(f'  only on the {who} ({n}x): time {key[0]} slot {key[1]:#x} kind {key[2]} payload {payloads.get(key) or "-"} (payload not compared)')
     for who, only in (('host', [w for w in h if w not in g]), ('guest', [w for w in g if w not in h])):
         for w in only:
             print(f'  only on the {who}: {w}')

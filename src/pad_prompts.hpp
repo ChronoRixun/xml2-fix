@@ -33,4 +33,6 @@ namespace pad_prompts
 	// A key the co-op screens consumed before the game's poll (online_menus::keyboard zeroes it): the device tracker counts the
 	// keyboard as used at the next poll, so the prompts switch back to it (060r live: F5 on Browse; fix K).
 	void note_keyboard();
+	// How many times any player's prompts changed device since start (AE15: join_in_progress's probe re-arms on a change).
+	unsigned device_switches();
 }

@@ -111,52 +111,47 @@ void check_stamp(bool late) {
     assert(tail==(late ? join_in_progress_core::late_restart_marker : 0)); // the body's tail bytes [esp+0x1e..0x1f]
     for(unsigned i=0;i<0x40;++i) if(i!=0x30 && i!=0x1e && i!=0x1f) assert(stamp_frame[i]==0xee); // nothing else touched
 }
-// Follow-up 11: the world-gate bridge is installed as a CALL over the 7-byte `test byte ptr [esi+0x728], 2` at
-// 0x46f0a9 (ESI = the game object at the site). The probe enters it by CALL - the same frame shape as the installed
-// site - with ESI = a fake game object and every other register a known value, and captures EFLAGS and the
-// registers right after the bridge returns: hold off, the flags are exactly the retail instruction's; hold on, ZF=1.
-alignas(16) unsigned char world_game[0x800]{};
-const void* world_bridge_target=reinterpret_cast<const void*>(&join_in_progress::world_gate_bridge);
-unsigned world_flags=0,world_regs[7]{},world_clock_now=0;
-DWORD WINAPI world_fake_clock() { return world_clock_now; }
-__declspec(naked) void world_probe() {
+// Follow-up 14: the CActor OnAttached override bridge (installed as a JMP at 0x429710: [esp] = the caller's return,
+// [esp+4] = the child, ecx = this) is entered by a thiscall CALL - the same frame shape - with the resume redirected
+// to a stub that undoes the displaced prologue; FindGround is redirected to a counter; the party-binding tail bridge
+// (a CALL over `call 0x495350`) has its getter redirected to the counting fake getter.
+unsigned override_runs=0,find_ground_calls=0;void* find_ground_order[4]{};
+__declspec(naked) void attach_resume_stub() { __asm { inc dword ptr [override_runs]
+                                                      pop esi
+                                                      add esp, 18h
+                                                      ret 4 } }
+char __fastcall fake_find_ground(void* self,void*) { if(find_ground_calls<4) find_ground_order[find_ground_calls]=self;++find_ground_calls;return 1; }
+unsigned attach_eax=0,attach_regs[6]{};
+const void* attach_bridge_target=reinterpret_cast<const void*>(&join_in_progress::attach_override_bridge);
+// ecx = the parent (fake entity 1), the child pushed; EAX/EBX/EDX/ESI/EDI/EBP known and captured after the bridge.
+__declspec(naked) void attach_probe(void* parent,void* child) {
     __asm {
         push ebx
         push esi
         push edi
         push ebp
-        lea esi, world_game
+        mov ecx, dword ptr [esp+14h]
+        mov eax, dword ptr [esp+18h]
+        push eax
         mov eax, 11111111h
         mov ebx, 22222222h
-        mov ecx, 33333333h
         mov edx, 44444444h
-        mov edi, 55555555h
-        mov ebp, 66666666h
-        call dword ptr [world_bridge_target]
-        pushfd
-        pop dword ptr [world_flags]
-        mov dword ptr [world_regs], eax
-        mov dword ptr [world_regs+4], ebx
-        mov dword ptr [world_regs+8], ecx
-        mov dword ptr [world_regs+12], edx
-        mov dword ptr [world_regs+16], esi
-        mov dword ptr [world_regs+20], edi
-        mov dword ptr [world_regs+24], ebp
+        mov esi, 55555555h
+        mov edi, 66666666h
+        mov ebp, 77777777h
+        call dword ptr [attach_bridge_target]
+        mov dword ptr [attach_eax], eax
+        mov dword ptr [attach_regs], ebx
+        mov dword ptr [attach_regs+4], edx
+        mov dword ptr [attach_regs+8], esi
+        mov dword ptr [attach_regs+12], edi
+        mov dword ptr [attach_regs+16], ebp
         pop ebp
         pop edi
         pop esi
         pop ebx
         ret
     }
-}
-// flag byte -> the bridge's ZF: a zero result (bit 1 clear, or held) leaves ZF=1 PF=1 SF=0 CF=0 OF=0 (0x44 of the
-// mask 0x8c5), a set bit (result 2: odd parity) leaves all five clear - exactly what retail's test produces.
-void check_world_gate(unsigned char flag_byte,bool expect_skip) {
-    world_game[join_in_progress_rules::world_gate_flag_at]=flag_byte;
-    world_probe();
-    assert((world_flags&0x8c5u)==(expect_skip ? 0x44u : 0x00u));
-    assert(world_regs[0]==0x11111111u && world_regs[1]==0x22222222u && world_regs[2]==0x33333333u && world_regs[3]==0x44444444u);
-    assert(world_regs[4]==unsigned(reinterpret_cast<std::uintptr_t>(world_game)) && world_regs[5]==0x55555555u && world_regs[6]==0x66666666u);
 }
 void run() {
     using namespace join_in_progress_rules;
@@ -165,6 +160,7 @@ void run() {
     // start, never the retail getter/resolver on the mapped image.
     redirect(game_getter,anchor_game_get);anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
+    join_in_progress::find_ground_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_find_ground)); // follow-up 14: every frame-0 epoch re-probes the fake party's ground
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
     std::memset(camera,0,camera_bytes);
     // The construction bridge: the (stubbed) constructor runs with this = the singleton and its stack argument, then
@@ -469,74 +465,6 @@ void run() {
         join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     }
-    // Follow-up 11: the world hold. The bridge entered by CALL exactly as installed: hold off, every flag as retail's
-    // test leaves it for every bit pattern; hold on, ZF=1 whatever the byte, no register changed, the skip counted.
-    // The window opens only through the production milestone of an ARMED late restart once the epoch saw the world
-    // loading and the loading flags are clear (`zone started`), idempotently; it closes first thing in the frame-0
-    // epoch (the production frame_gate_reseed: the release line precedes the RNG epoch line, the skip count logged),
-    // at a session's end (the production pump path with no first record) and by the watchdog exactly at its limit
-    // (the clock stubbed); a lobby START (never a late restart), [Dev] LateJoinWorldHold=0 and
-    // [Dev] LateJoinRestartReset=0 never open it.
-    {
-        join_in_progress::world_hold_clock=&world_fake_clock;world_clock_now=100000;
-        join_in_progress::restart_reset_enabled=true;join_in_progress::world_hold_enabled=true;join_in_progress::world_hold=0;
-        join_in_progress::late_restart=false;join_in_progress::restart.disarm();join_in_progress::epoch.active=false;
-        check_world_gate(0x00,true);check_world_gate(0x02,false);check_world_gate(0xfd,true);check_world_gate(0xff,false);
-        assert(join_in_progress::world_hold_skips==0);
-        // a lobby START's epoch (never a late restart): the milestone never opens the hold
-        join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
-        join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
-        // an armed late restart: closed while the world loads, open at `zone started`, idempotent; the bridge skips
-        join_in_progress::late_restart=true;join_in_progress::restart.arm();
-        join_in_progress::world_hold_milestone(true);assert(!join_in_progress::world_hold);
-        const auto opened_at=observed_jip_logs.size();
-        join_in_progress::world_hold_milestone(false);
-        assert(join_in_progress::world_hold==1 && join_in_progress::world_hold_skips==0 && join_in_progress::world_holds==1);
-        assert(observed_jip_logs.size()==opened_at+1 && observed_jip_logs.back().find("is held from the zone start until the first shared frame on every peer")!=std::string::npos);
-        check_world_gate(0x02,true);check_world_gate(0xff,true);check_world_gate(0x00,true);
-        assert(join_in_progress::world_hold_skips==3);
-        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_hold_skips==3 && join_in_progress::world_holds==1);
-        world_clock_now+=world_hold_watchdog_ms-1;join_in_progress::world_hold_watchdog();assert(join_in_progress::world_hold==1); // not before the limit
-        // the frame-0 epoch through the production frame_gate_reseed: the release is its first step (the line precedes
-        // the RNG epoch line), the skip count is logged, the bridge is retail's test again
-        *frame=0;*seed=0x77777777u;*count=3;join_in_progress::late_restart_epoch_for_camera=false;
-        const auto epoch_at=observed_jip_logs.size();
-        join_in_progress::frame_gate_reseed();
-        assert(!join_in_progress::world_hold && *seed==native_seed && *count==0 && !join_in_progress::restart.armed && !join_in_progress::late_restart);
-        std::size_t release_line=0,rng_line=0;
-        for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) {
-            if(observed_jip_logs[i].find("the world update resumes at the first shared frame (3 world update(s) skipped on this PC while held)")!=std::string::npos) release_line=i+1;
-            if(observed_jip_logs[i].find("synchronized RNG epoch reset")!=std::string::npos && !rng_line) rng_line=i+1;
-        }
-        assert(release_line && rng_line && release_line<rng_line);
-        check_world_gate(0x02,false);check_world_gate(0x00,true);
-        join_in_progress::frame_gate_reseed();assert(!join_in_progress::world_hold); // not armed: nothing
-        // the watchdog releases a hold whose frame 0 never came, exactly at its limit, and names itself
-        join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
-        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_holds==2);
-        check_world_gate(0x02,true);
-        world_clock_now+=world_hold_watchdog_ms-1;join_in_progress::world_hold_watchdog();assert(join_in_progress::world_hold==1);
-        world_clock_now+=1;join_in_progress::world_hold_watchdog();
-        assert(!join_in_progress::world_hold && observed_jip_logs.back().find("resumes at the watchdog")!=std::string::npos && observed_jip_logs.back().find("(1 world update(s) skipped")!=std::string::npos);
-        check_world_gate(0x02,false);
-        join_in_progress::world_hold_watchdog();assert(!join_in_progress::world_hold); // closed: nothing
-        // a session's end releases it through the production pump path (no first record): the seat machine, the arm,
-        // the late restart and the hold all go
-        join_in_progress::world_hold_milestone(false);assert(join_in_progress::world_hold==1 && join_in_progress::world_holds==3); // still armed: a new window
-        machine.started=true;put(s,0x26c,static_cast<void*>(nullptr));
-        assert(!join_in_progress::guarded_advance(false,nullptr));
-        assert(!join_in_progress::world_hold && !machine.started && !join_in_progress::restart.armed && !join_in_progress::late_restart);
-        assert(observed_jip_logs.back().find("resumes at the session's end")!=std::string::npos);
-        put(s,0x26c,nodes[0]);check_world_gate(0x02,false);
-        // [Dev] LateJoinWorldHold=0 and [Dev] LateJoinRestartReset=0: the window never opens, the bridge stays retail
-        join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::epoch.begin();join_in_progress::epoch.start();join_in_progress::epoch.observe(true,false);
-        join_in_progress::world_hold_enabled=false;join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
-        join_in_progress::world_hold_enabled=true;join_in_progress::restart_reset_enabled=false;join_in_progress::world_hold_milestone(false);assert(!join_in_progress::world_hold);
-        join_in_progress::restart_reset_enabled=true;check_world_gate(0x02,false);
-        assert(join_in_progress::world_holds==3);
-        join_in_progress::late_restart=false;join_in_progress::restart.disarm();join_in_progress::epoch.active=false;
-        join_in_progress::world_hold_clock=&GetTickCount;
-    }
     // Follow-up 12: the party heroes' moved-check state canonical at the first shared frame, then the rebuild drops
     // their queued "moved" events. Party = {0x3802} (fake entity slot 2); 0x1801 (slot 1) is a live non-party owner.
     {
@@ -588,7 +516,74 @@ void run() {
         join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     }
-    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the world-gate bridge entered by CALL returns retail's flags with the hold off and ZF=1 held, the hold opens at zone started of an armed late restart only and closes first at frame 0, at a session's end and by the watchdog\n";
+    // Follow-up 14 (AE15). (1) The camera's derived spans back to the pristine image: junk in every span and in two
+    // configured fields; the restore puts the spans back, leaves the configured fields, counts the dwords; nothing
+    // without a pristine image or on a foreign vtable.
+    {
+        put(camera,0,camera_vtable_value);
+        for(const auto& x:camera_derived_spans) for(unsigned i=0;i<x.bytes;++i) camera[x.at+i]=static_cast<unsigned char>(0xa5+i);
+        put(camera,camera_mode_at,3u);put(camera,camera_flags_at,0x5528u);
+        const unsigned changed=join_in_progress::restore_camera_derived("fixture");
+        bool spans_back=true;for(const auto& x:camera_derived_spans) spans_back&=std::memcmp(camera+x.at,join_in_progress::camera_pristine+x.at,x.bytes)==0;
+        assert(spans_back && changed>0 && *reinterpret_cast<unsigned*>(camera+camera_mode_at)==3u && *reinterpret_cast<unsigned*>(camera+camera_flags_at)==0x5528u);
+        assert(join_in_progress::restore_camera_derived("fixture: again")==0);
+        put(camera,0,0x12345678u);camera[0x104]=0x99;
+        assert(join_in_progress::restore_camera_derived("fixture: foreign vtable")==0 && camera[0x104]==0x99);
+        put(camera,0,camera_vtable_value);
+        const bool had=join_in_progress::restart.snapshot;join_in_progress::restart.snapshot=false;
+        assert(join_in_progress::restore_camera_derived("fixture: no image")==0 && camera[0x104]==0x99);
+        join_in_progress::restart.snapshot=had;
+    }
+    // (2) The OnAttached override bridge, entered exactly as installed. Party = {0x3802} (fake entity slot 2) through
+    // the fake game; slot 1 (0x1801) is a non-party entity. Outside a late restart the override runs (the displaced
+    // prologue, then the resume) for everyone; armed, a party hero's call is answered `ret 4` with every register
+    // kept and the stack balanced, a non-party child's still runs; after the frame-0 epoch (armed consumed) it runs again.
+    {
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&moved_party));
+        join_in_progress::attach_override_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&attach_resume_stub));
+        unsigned char* parent=fake_entities[1];unsigned char* hero=fake_entities[2];put(parent,0x1c,0x1801u);put(hero,0x1c,0x3802u);
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();override_runs=0;join_in_progress::attach_suppressions=0;
+        attach_probe(parent,hero);assert(override_runs==1 && join_in_progress::attach_suppressions==0);
+        assert(join_in_progress::last_attach_parent==unsigned(reinterpret_cast<std::uintptr_t>(parent)) && join_in_progress::last_attach_child==unsigned(reinterpret_cast<std::uintptr_t>(hero)));
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();
+        attach_probe(parent,hero);
+        assert(override_runs==1 && join_in_progress::attach_suppressions==1); // suppressed: ret 4, the override never ran
+        assert(attach_regs[0]==0x22222222u && attach_regs[1]==0x44444444u && attach_regs[2]==0x55555555u && attach_regs[3]==0x66666666u && attach_regs[4]==0x77777777u);
+        assert(observed_jip_logs.back().find("ground attach callback (CActor OnAttached 0x429710")!=std::string::npos && observed_jip_logs.back().find("hero 00003802 on entity 00001801")!=std::string::npos);
+        attach_probe(hero,parent);assert(override_runs==2 && join_in_progress::attach_suppressions==1); // a non-party child: the override runs
+        attach_probe(parent,nullptr);assert(override_runs==3 && join_in_progress::attach_suppressions==1); // a null child: never suppressed (the override's own null test would follow)
+        join_in_progress::restart_reset_enabled=false;attach_probe(parent,hero);assert(override_runs==4 && join_in_progress::attach_suppressions==1); // [Dev] LateJoinRestartReset=0: retail
+        join_in_progress::restart_reset_enabled=true;
+        // (3) The frame-0 epoch (the production frame_gate_reseed): the party hero's ground entity goes back to 0 and
+        // FindGround runs on it (the redirected counter) with the override no longer suppressed; a probe-time attach
+        // callback is counted, not suppressed.
+        put(hero,actor_ground_at,0x1801u);find_ground_calls=0;join_in_progress::late_restart_epoch_for_camera=false;
+        *frame=0;*seed=0x88888888u;*count=4;
+        const auto epoch_at=observed_jip_logs.size();
+        join_in_progress::frame_gate_reseed();
+        assert(!join_in_progress::restart.armed && !join_in_progress::late_restart && *seed==native_seed);
+        assert(find_ground_calls==1 && find_ground_order[0]==hero && *reinterpret_cast<unsigned*>(hero+actor_ground_at)==0);
+        bool ground_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) ground_line|=observed_jip_logs[i].find("ground is re-probed at the first shared frame on every peer: 1 hero(s), 1 had a ground entity before, 1 ray hit(s), 0 attach callback(s)")!=std::string::npos;
+        assert(ground_line && join_in_progress::attach_suppressions==0);
+        attach_probe(parent,hero);assert(override_runs==5); // after the epoch: retail again
+        // a callback during the re-probe itself (FindGround finding an actor below) runs and is counted on every peer
+        join_in_progress::ground_probe_running=true;attach_probe(parent,hero);assert(override_runs==6 && join_in_progress::attach_calls_during_probe==1);join_in_progress::ground_probe_running=false;join_in_progress::attach_calls_during_probe=0;
+        // (4) The party-binding tail bridge (a CALL over `call 0x495350`, the getter redirected): the cold moved pass
+        // runs on the (now bound) party only in an armed late restart; the site's getter result comes back either way.
+        join_in_progress::party_bound_target_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_getter));
+        const auto bound_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::party_bound_bridge);
+        const float pos[3]={2003.f,1741.f,1.01f},old[3]={1.f,2.f,3.f};
+        std::memcpy(hero+actor_position_at,pos,12);std::memcpy(hero+actor_last_position_at,old,12);hero[actor_moved_flags_at]=0x0a;
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();const auto runs_before=join_in_progress::moved_canonical_runs;const auto getter_before=getter_calls;
+        assert(bound_bridge()==&getter_object && getter_calls==getter_before+1 && join_in_progress::moved_canonical_runs==runs_before && hero[actor_moved_flags_at]==0x0a);
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();
+        assert(bound_bridge()==&getter_object && getter_calls==getter_before+2 && join_in_progress::moved_canonical_runs==runs_before+1);
+        assert(hero[actor_moved_flags_at]==0x08 && std::memcmp(hero+actor_last_position_at,pos,12)==0 && join_in_progress::moved_drop_count==1 && join_in_progress::moved_drop_handles[0]==0x3802u);
+        assert(observed_jip_logs.back().find("moved-check state is canonical at the zone start (after the party is bound, before the first physics step)")!=std::string::npos);
+        join_in_progress::moved_drop_count=0;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
+    }
+    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
 // (vt+0xc, 0x68de20) BEFORE join_in_progress; a 16-byte vtable guard refused the whole install. This mode installs a
