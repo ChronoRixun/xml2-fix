@@ -160,3 +160,6 @@ DISASM test/online_menus_live_input.inl # Original fixture thunk sets the parser
 DISASM test/join_in_progress_gamespy.inl # Authored synthetic ESI/stack callers and peer-pump recorder exercise the production bridge against the locally owned PE; no extracted game body or instruction listing.
 DISASM src/join_in_progress_diagnostics.inl # Authored register/flags/x87/XMM-preserving observer bridges; only short guarded instructions are replayed, while the retail checksum producer executes from the locally owned PE. No extracted game body or listing.
 DISASM src/online_native_flow.inl # Authored native-refusal, session-clear and console ABI adapters replay only short guarded entries; no extracted retail function body or instruction listing.
+
+DISASM src/join_in_progress_residue.inl # Authored register-preserving zone/anchor/probe and world-gate ABI adapters replay only short guarded entries; no extracted game function or listing.
+DISASM test/join_in_progress_restart.inl # Authored synthetic stack/register/flag probes exercise production restart bridges against a locally mapped owned PE; no extracted retail function body.
