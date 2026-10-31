@@ -740,3 +740,26 @@ image is in). `scripts/jip_components.py --mode spawn` reports `spawn frames
 differ: host {...} / guest {...}` when the same entities spawn at different
 frames. Guards: 0x4685b0 (the setter), 0x46f2b7 (the compare), 0x6872d0 (the
 threshold), 0x4869c4 (the finish's call).
+
+p060fix/AJ2 (live-060zb ZB-4Pb, the host and the lobby guest parting at frame 60
+after a second newcomer was given up): a party hero's +0x3d8 bit 0x20 means "a
+timed event of the static kind 0x6d5e30 is pending" - set once by actor
+vt+0x1ec = 0x42a460 and scheduled through 0x41a730; the fire 0x42ef30 clears it
+and, for a player hero (AI bit clear), re-arms it every 0.1 s, for an AI hero
+clears +0x774. The zone-start binding gives a player hero the event (0x70) and an
+AI hero none (0x51); the participant drop releases a hero through 0x41da60,
+which ORs the AI bit only (0x71), so the hero keeps its queued event. The host
+dropped the given-up seat before its own reload (hero 3 AI from the zone start,
+no event), the lobby guest restored with the seat still listed and removed it
+35 ms before its frame 0 (one more queued event at t=3.0 on hero 3: rebuild 3
+kept 45 entries there, 44 on the host); the pop at frame 30 reshaped the heap
+and the same-time think order swapped at frame 31 (rng 160 vs 150 by frame 60).
+A cold newcomer never activates the seat and restores like the host (ZB-3Pb
+held). Now the frame-0 epoch makes the periodic event follow the AI bit on every
+peer: an AI party hero loses the pending bit and the rebuild drops its queued
+kind-0x6d5e30 events (log `the party heroes' periodic event (kind 0x6d5e30)
+follows the AI bit at the first shared frame on every peer: N hero(s), A AI ...,
+C pending bit(s) cleared on released seats, M player hero(s) without one; flags
+(slot:before->after/+0x774) ...`, and the rebuild line counts `AI-hero periodic
+event(s) dropped`). Party-size independent: per party slot, decided by that
+hero's own AI bit, on every peer alike. Guards 0x42a460, 0x42ef3d, 0x41da63.

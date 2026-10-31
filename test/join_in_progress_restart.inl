@@ -568,6 +568,40 @@ void run() {
         // a rebuild with no canonicalisation before it drops no moved event
         join_in_progress::restart.arm();join_in_progress::canonical_event_queue("fixture: again");
         assert(join_in_progress::moved_dropped_last==0 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==4);
+        // p060fix/AJ2 (ZB-4Pb): the party hero w is an AI hero released at runtime (0x71: AI bit + the pending bit of the
+        // periodic kind 0x6d5e30) with its event still queued, as the lobby guest had it; the non-party c is a player
+        // hero (0x70) with its own. The pass clears w's bit and the rebuild drops w's event only.
+        w[hero_ai_flags]=0x71;c[hero_ai_flags]=0x70;put(w,0x774,0x12340001u);
+        add(3.0f,0x3802,hero_event_kind);add(3.0f,0x1801,hero_event_kind);
+        join_in_progress::canonical_party_seat_events("fixture: off",false);
+        assert(join_in_progress::seat_drop_count==0 && w[hero_ai_flags]==0x71);
+        const auto seat_logs_at=observed_jip_logs.size();
+        join_in_progress::canonical_party_seat_events("fixture: the first shared frame",true);
+        assert(join_in_progress::seat_drop_count==1 && join_in_progress::seat_drop_handles[0]==0x3802u && w[hero_ai_flags]==0x51 && c[hero_ai_flags]==0x70 && *reinterpret_cast<unsigned*>(w+0x774)==0x12340001u);
+        {
+            bool seat_line=false;for(std::size_t i=seat_logs_at;i<observed_jip_logs.size();++i) seat_line|=observed_jip_logs[i].find("periodic event (kind 0x6d5e30) follows the AI bit at fixture: the first shared frame on every peer: 1 hero(s), 1 AI (their queued periodic events go in the rebuild), 1 pending bit(s) cleared on released seats, 0 player hero(s) without one; flags (slot:before->after/+0x774) 0:71->51/12340001")!=std::string::npos;
+            assert(seat_line);
+        }
+        join_in_progress::restart.arm();const auto seat_logs_at2=observed_jip_logs.size();join_in_progress::canonical_event_queue("fixture: the first shared frame");
+        assert(join_in_progress::seat_dropped_last==1 && join_in_progress::seat_drop_count==0 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==5);
+        {
+            unsigned kept=0;
+            for(unsigned i=0;i<5;++i) {
+                unsigned index,handle,event;std::memcpy(&index,body+event_heap_at+i*8+4,4);std::memcpy(&handle,body+index*event_record_bytes,4);std::memcpy(&event,body+index*event_record_bytes+4,4);
+                assert(!(handle==0x3802u && event==hero_event_kind));
+                if(event==hero_event_kind) ++kept;
+            }
+            assert(kept==1); // the player hero's stays
+            bool rebuild_line=false;for(std::size_t i=seat_logs_at2;i<observed_jip_logs.size();++i) rebuild_line|=observed_jip_logs[i].find("0 party-hero moved event(s) dropped, 1 AI-hero periodic event(s) dropped")!=std::string::npos;
+            assert(rebuild_line);
+        }
+        // a player hero (AI bit clear) keeps its pending bit; one without the bit is only counted
+        w[hero_ai_flags]=0x70;c[hero_ai_flags]=0x50;
+        join_in_progress::canonical_party_seat_events("fixture: player",true);
+        assert(join_in_progress::seat_drop_count==0 && w[hero_ai_flags]==0x70 && observed_jip_logs.back().find("1 hero(s), 0 AI (their queued periodic events go in the rebuild), 0 pending bit(s) cleared on released seats, 0 player hero(s) without one")!=std::string::npos);
+        w[hero_ai_flags]=0x50;join_in_progress::canonical_party_seat_events("fixture: player without",true);
+        assert(join_in_progress::seat_drop_count==0 && w[hero_ai_flags]==0x50 && observed_jip_logs.back().find("1 player hero(s) without one")!=std::string::npos);
+        w[hero_ai_flags]=0;c[hero_ai_flags]=0;
         anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
         join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();

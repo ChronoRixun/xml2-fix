@@ -165,6 +165,15 @@ namespace join_in_progress_rules
 	inline constexpr std::array<unsigned char, 6> seat_binding_original{0xff,0x95,0x88,0x01,0x00,0x00};
 	// A hero's AI flag (+0x3d8 bit 0, the manual switch 0x423eb0 tests it); its controller is actor_controller (+0x3d4).
 	constexpr std::uint32_t hero_ai_flags = 0x3d8, hero_record = 0x35c; // +0x35c: the hero's registry record (live probe)
+	// p060fix/AJ2 (live-060zb ZB-4Pb): +0x3d8 bit 0x20 is "a timed event of the static kind 0x6d5e30 is pending" - set once
+	// by actor vt+0x1ec = 0x42a460 (`test 0x20; jne; or 0x20; 0x41a730(kind, time)`), cleared by the kind's fire 0x42ef30
+	// (`and 0xdf`; a player hero (bit 0 clear) re-arms it every 0x3dcccccd s, an AI hero (bit 0 set) clears +0x774
+	// instead). The zone-start binding gives a player hero the pending event and an AI hero none (0x70 / 0x51); a hero
+	// released to AI at runtime by the participant drop keeps its pending event (0x71: 0x41da7e `or 1` only), so a seat
+	// given up on the host before its reload and removed on a guest after its restore leaves that guest one more
+	// queued event, popped at t=3.0 (frame 30): the heap shape and the think order parted at frame 31 (rng 160 vs 150).
+	constexpr std::uint32_t hero_ai_bit = 0x01, hero_event_pending_bit = 0x20, hero_event_kind = 0x6d5e30,
+		hero_event_arm = 0x42a460, hero_event_fire = 0x42ef30, hero_ai_switch_on = 0x41da60;
 	constexpr std::uint32_t hero_registry_getter = 0x44b8f0, hero_registry_find_slot = 0x40;
 	// The native slow-player guard (host only, 0x559190): a participant whose reported frame time is over 50 ms counts a
 	// slow frame (300 good frames in a row reset the count); 200 -> PLAYER_LAG1, 600 more -> PLAYER_LAG2, 900 more ->
@@ -368,7 +377,10 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
 	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
 		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
-	inline constexpr std::array<guard, 140> guards{{
+	inline constexpr std::array<guard, 143> guards{{
+		{0x42a460,"8a81d8030000a82075170c208881d8030000", "actor vt+0x1ec: +0x3d8 bit 0x20 = the static kind 0x6d5e30 is pending; set once, then scheduled"},
+		{0x42ef3d,"8a96d803000080e2df8ac2a8018896d80300007511", "kind 0x6d5e30 fire: clears +0x3d8 bit 0x20, branches on the AI bit (player: re-arm through vt+0x1ec; AI: +0x774 := 0)"},
+		{0x41da63,"f686d803000001751951", "AI switch-on 0x41da60: tests the AI bit and ORs it (bit 0x20 untouched: a released player hero keeps its pending event)"},
 		{0x4685b0,"83ec0c566a006a008bf168caf249718d4c2410ff15c8f96700508d8ef0010000ff152cfa6700", "game vt+0x28 (0x4685b0): the far marker igVec3f(1e30, 0, 0) assigned into game+0x1f0 - the next dormant-entity update examines every record"},
 		{0x46f2b7,"8dbef0010000578d4c2430c644241400ff15ccf96700d81dd0726800dfe0f6c441", "game update: all = distance2(camera eye, game+0x1f0) > [0x6872d0] decided before the respawn site (the eye is stored into game+0x1f0 after it)"},
 		{0x6872d0,"00401c46", "the respawn sweep threshold 10000.0f"},
