@@ -763,3 +763,39 @@ C pending bit(s) cleared on released seats, M player hero(s) without one; flags
 (slot:before->after/+0x774) ...`, and the rebuild line counts `AI-hero periodic
 event(s) dropped`). Party-size independent: per party slot, decided by that
 hero's own AI bit, on every peer alike. Guards 0x42a460, 0x42ef3d, 0x41da63.
+
+p060fix/AK (live-060zd ZD-3P-E2 / E2p, three peers with the newcomer admitted
+at E2): the three peers reached frame 0 identical (draws, brains, heroes, the
+128-entry timed-event queue in order), yet at frame 1 the fourteen AI actors of
+mansion2_2 (the sp_civiliankid_* kids, dense 0x114..0x121) re-armed their actor
+update at two cadences: seven every frame, seven every 0.1 s - and the two
+sets differed between the newcomer and the existing peers ({0x116,0x11a,0x11f}
+fast on the host and the lobby guest, {0x115,0x11e,0x121} fast on the newcomer;
+the one-PC 2-peer control agreed on one set). The cadence is the actor update's
+tail 0x434fc3..0x43500c: `+6 bit 0` or a positive move speed (+0x180 / +0x184,
+set with the move goal +0x1d0 / start +0x1dc by 0x422840, cleared together by
+0x421b90) re-arms through vt+0xf8 with 0.001 s, else 0.1 s. A kid updated every
+frame thinks on the first frame its brain is due, a kid updated every 0.1 s up
+to three frames later (actor 0x115: frame 14 on the newcomer, 17 on the host,
+the same next-think 2.602), so the same brains drew in a different order from
+frame 13 and the counts parted (82 vs 78 at frame 30). The speeds were a
+one-step goal (fast at frame 1 only, every kid slow from frame 2 on); which kids
+carried one into frame 1 depended on the party and on the PC - the exact
+writer before frame 0 is not traced (no draw, no think and no actor update runs
+between the zone start and frame 0; the settle passes vt+0x98 = 0x41e280 ->
+0x474080 only place actors on the floor). Now the frame-0 epoch makes every
+non-party AI actor's move intent canonical on every peer (after the motion
+pass, before the seat-events pass and the rebuild): the installed world is
+walked by dense index (CWorld vt+0x10), every entity with the CActor vtable
+0x682ccc, no controller (+0x3d4 = -1) and not in the party gets 0x421b90's
+values (goal and start FLT_MIN, speeds 0); the +6 flag, a follow handle and the
+goal vector are counted, not written. Log `the AI actors' move intent is
+canonical at the first shared frame on every peer: N AI actor(s) (CActor without
+a controller; H party hero(s) left to their own passes, C entity slot(s)
+walked), S had a move speed (...), G a move goal (+0x1d0), F the fast-update
+flag (+6 bit 0, counted only), L a follow handle (+0x3ec, counted only); goal,
+start and speeds now 0x421b90's values on all; with a speed: <dense indices>
+(run k)`; the completion line gains `AI move intent`. Party-size and exit
+independent: every live NPC on every peer, nothing keyed on a seat, a role or
+a PC; the heroes keep their own passes. Guards 0x434fc3 (the tail, 0x49 bytes)
+and 0x421bb0 (the clear's body, 0x45 bytes).

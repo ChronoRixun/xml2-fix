@@ -43,6 +43,10 @@ alignas(16) unsigned char event_manager_image[join_in_progress_rules::event_body
 alignas(16) unsigned char fake_entity_storage[4][0x900]{};
 unsigned char* fake_entities[4]={fake_entity_storage[0],fake_entity_storage[1],fake_entity_storage[2],fake_entity_storage[3]};
 void* __fastcall fake_entity_of(const unsigned* handle,void*) { const unsigned slot=*handle&0xff;return (*handle==0x1801u||*handle==0x3802u)?fake_entities[slot]:nullptr; }
+// p060fix/AK: a fake world behind the redirected getter: vt+0x10 (entity by dense index) answers slots 1 and 2 only.
+unsigned fake_world_vtable[8]{};unsigned* fake_world_object=fake_world_vtable;unsigned fake_world_walks=0;
+void* __fastcall fake_world_entity_at(void*,void*,unsigned index) { ++fake_world_walks;return (index==1||index==2)?fake_entities[index]:nullptr; }
+void* __cdecl fake_world_get() { return &fake_world_object; }
 // Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
 unsigned smart_vtable[8]{};unsigned char smart_object[0x20]{};unsigned smart_getter_calls=0;
 int __fastcall fake_smart_count(void*,void*) { return 3; }
@@ -161,6 +165,9 @@ void run() {
     redirect(game_getter,anchor_game_get);anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
     join_in_progress::find_ground_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_find_ground)); // follow-up 14: every frame-0 epoch re-probes the fake party's ground
+    // p060fix/AK: every frame-0 epoch walks the world through the getter's vt+0x10; the fake world (slots 1 and 2) stands in from the start, never the retail getter
+    fake_world_vtable[world_entity_by_index_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_entity_at));
+    join_in_progress::world_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_get));
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
     std::memset(camera,0,camera_bytes);
     // The construction bridge: the (stubbed) constructor runs with this = the singleton and its stack argument, then
@@ -651,6 +658,12 @@ void run() {
         // AE16: warm motion stamps and a velocity on the party hero; a non-party entity keeps its own
         put(hero,actor_gravity_hold_at,0x43340000u);put(hero,actor_last_fall_at,0x42b40000u);put(hero,actor_last_update_at,0x42b40000u);put(hero,actor_velocity_at,0x3f800000u);put(hero,actor_velocity_prev_at+8,0x40000000u);put(hero,actor_angular_at+4,0x3e800000u);put(hero,hero_auto_move_flag_at,1u);
         put(parent,actor_gravity_hold_at,0x43340000u);put(parent,actor_last_update_at,0x42b40000u);
+        // p060fix/AK: the non-party entity is a CActor without a controller carrying a one-step move goal (a speed, a
+        // goal vector, the +6 flag, a follow handle); the party hero carries a speed too and must keep it (its passes own it).
+        fake_world_vtable[world_entity_by_index_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_entity_at));
+        join_in_progress::world_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_get));fake_world_walks=0;
+        put(parent,0,actor_vtable);put(parent,actor_controller,0xffffffffu);put(parent,actor_move_speed_a_at,0x3f800000u);put(parent,actor_move_speed_b_at,0u);put(parent,actor_move_goal_at,0x40a00000u);put(parent,actor_move_start_at+8,0x3f000000u);parent[actor_entity_flags6_at]=0x01;put(parent,actor_follow_handle_at,0x1917u);
+        put(hero,0,actor_vtable);put(hero,actor_controller,0u);put(hero,actor_move_speed_a_at,0x3f800000u);put(hero,actor_move_goal_at,0x41200000u);
         *frame=0;*seed=0x88888888u;*count=4;
         const auto epoch_at=observed_jip_logs.size();
         join_in_progress::frame_gate_reseed();
@@ -665,6 +678,23 @@ void run() {
             assert(*reinterpret_cast<unsigned*>(hero+hero_auto_move_flag_at)==1u && *reinterpret_cast<unsigned*>(parent+actor_gravity_hold_at)==0x43340000u && *reinterpret_cast<unsigned*>(parent+actor_last_update_at)==0x42b40000u);
             bool motion_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) motion_line|=observed_jip_logs[i].find("motion fields are canonical at the first shared frame on every peer")!=std::string::npos && observed_jip_logs[i].find("1 hero(s); gravity hold cleared on 1, last fall set on 1, last update set on 1, velocity zeroed on 1, auto-move flag set on 1 (not written)")!=std::string::npos;
             assert(motion_line);
+        }
+        { // p060fix/AK: the NPC pass walked the world once (256 slots through vt+0x10): the NPC's speeds := 0, goal and start := FLT_MIN; the party hero's speed and goal untouched
+            assert(fake_world_walks==256);
+            assert(*reinterpret_cast<unsigned*>(parent+actor_move_speed_a_at)==0 && *reinterpret_cast<unsigned*>(parent+actor_move_speed_b_at)==0);
+            for(unsigned i=0;i<24;i+=4) assert(*reinterpret_cast<unsigned*>(parent+actor_move_goal_at+i)==move_goal_none_bits);
+            assert(parent[actor_entity_flags6_at]==0x01 && *reinterpret_cast<unsigned*>(parent+actor_follow_handle_at)==0x1917u); // counted, not written
+            assert(*reinterpret_cast<unsigned*>(hero+actor_move_speed_a_at)==0x3f800000u && *reinterpret_cast<unsigned*>(hero+actor_move_goal_at)==0x41200000u);
+            bool npc_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) npc_line|=observed_jip_logs[i].find("the AI actors' move intent is canonical at the first shared frame on every peer: 1 AI actor(s) (CActor without a controller; 1 party hero(s) left to their own passes, 256 entity slot(s) walked), 1 had a move speed")!=std::string::npos && observed_jip_logs[i].find("1 a move goal (+0x1d0), 1 the fast-update flag (+6 bit 0, counted only), 1 a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: 1 (run ")!=std::string::npos; // the run counter counts the fixture's earlier epochs too
+            if(!npc_line) for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) if(observed_jip_logs[i].find("intent")!=std::string::npos) std::cerr<<"npc pass logged: "<<observed_jip_logs[i]<<"\n";
+            assert(npc_line);
+            // a second epoch with nothing carrying a speed logs `with a speed: none`
+            join_in_progress::canonical_npc_move_intent("fixture: again",true);
+            assert(observed_jip_logs.back().find("0 had a move speed")!=std::string::npos && observed_jip_logs.back().find("with a speed: none (run ")!=std::string::npos);
+            const auto runs_logged=observed_jip_logs.size();
+            join_in_progress::canonical_npc_move_intent("fixture: off",false);
+            assert(observed_jip_logs.size()==runs_logged); // not wanted: nothing walked, nothing logged
+            put(parent,0,0u);put(hero,0,0u);put(hero,actor_move_speed_a_at,0u);put(hero,actor_move_goal_at,0u);parent[actor_entity_flags6_at]=0;put(parent,actor_follow_handle_at,0u);put(parent,actor_controller,0u);
         }
         attach_probe(parent,hero);assert(override_runs==5); // after the epoch: retail again
         // a callback during the re-probe itself (FindGround finding an actor below) runs and is counted on every peer

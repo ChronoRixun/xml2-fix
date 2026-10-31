@@ -379,9 +379,44 @@ def hero_mode(host, guest):
     return 0
 
 
+def cadence_mode(host, guest, where='frame 1'):
+    """p060fix/AK (ZD-3P-E2p): the actor-update cadence after the first shared frame. Every actor update is the
+    kind-0x320 entry of the queue; at `frame 1` its time is the re-arm the update chose: now + 0.001 s (an actor
+    updated every frame: +6 bit 0 or a positive move speed) or now + 0.1 s. The entries of the milestone are keyed by
+    the owner's dense index; an owner whose time differs between the peers is named with both times. Exit 1 when any
+    differs (the ZD-3P-E2p signature: six kids every frame on one peer, six others on the other), 0 otherwise."""
+    def parse(path):
+        out, seen = {}, set()
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            m = EVENTS.search(line)
+            if not m or m['where'].strip() != where:
+                continue
+            part = int(m['part'] or 1)
+            if part in seen:
+                break  # a later epoch's repeat of the milestone: keep the first
+            seen.add(part)
+            for item in m['head'].split(',') if m['head'] else []:
+                fields = item.split(':')
+                if fields[3] != '320':
+                    continue
+                handle = int(fields[2], 16)
+                out.setdefault(handle & 0x3ff, []).append(fields[0])
+        return {k: sorted(v) for k, v in out.items()}
+    h, g = parse(host), parse(guest)
+    if not h or not g:
+        print(f'no `{where}` actor-update entries (host {len(h)} owner(s), guest {len(g)} owner(s))')
+        return 2
+    differ = [(k, h.get(k), g.get(k)) for k in sorted(set(h) | set(g)) if h.get(k) != g.get(k)]
+    if differ:
+        print(f'update cadence differs at {where}: ' + ', '.join(f'{k:x}: host {a} guest {b}' for k, a, b in differ))
+        return 1
+    print(f'every actor re-arms its update at the same time at {where} ({len(h)} owner(s))')
+    return 0
+
+
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode, 'hero': hero_mode}[mode](sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode, 'hero': hero_mode, 'cadence': cadence_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

@@ -63,6 +63,24 @@ class ComponentsTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(tool.spawn_mode(str(self.host), str(self.guest)), 0)
 
+    def test_cadence_mode_names_the_actors_updated_at_another_cadence(self):
+        # p060fix/AK (ZD-3P-E2p): the same kids, three of them every frame (now + 0.001) on one peer and three others on the other
+        def dump(fast):
+            head = ','.join(f'{"40023284" if i in fast else "40088888"}:{i}:{0x1800 + i:08x}:320:00' for i in range(0x114, 0x11a))
+            return f'jip events: where=frame 1 heap=6 records=6 ring=r:6/w:0/n:1119 live=6 dead=0 stale=0 rebuilds=3 part=1/1 head={head}\n'
+        host, guest = dump({0x116, 0x117, 0x119}), dump({0x115, 0x117, 0x119})
+        self.write_pair(host, guest)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(tool.cadence_mode(str(self.host), str(self.guest)), 1)
+        self.assertIn("update cadence differs at frame 1: 115: host ['40088888'] guest ['40023284'], 116: host ['40023284'] guest ['40088888']", out.getvalue())
+        self.write_pair(host, host)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(tool.cadence_mode(str(self.host), str(self.guest)), 0)
+        self.write_pair('nothing\n', host)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(tool.cadence_mode(str(self.host), str(self.guest)), 2)
+
     def test_per_process_dwords_and_local_controllers_together_still_agree(self):
         line = 'jip hero: frame=30 slot=0 handle=00003802 ctl={ctl} t=40000000 dt=3d088889 d20=3f800000 d21c={count},{ptr}\n'
         self.write_pair(line.format(ctl=0, count='00000001', ptr='02000000'), line.format(ctl=1, count='00000002', ptr='03000000'))
