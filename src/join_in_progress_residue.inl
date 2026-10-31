@@ -227,9 +227,11 @@ void probe_milestone(const char* where, std::uint8_t phase)
 // AE7b: the 32 brains' next think times (brain +0x1c, the value the think step compares with game time at 0x51e3ab)
 // for every held slot of the stock pool (slot i at pool + i * 0x61c; AI brain alloc 0x522e90 / layout actor_ai_layout.hpp),
 // and each controller-table hero's brain slot (actor +0x7dc handle & 31), one line per frame and at the frame-0 epoch.
+void probe_npc(unsigned frame); // p060fix/AL (below): the NPCs' active bit and speeds per gated frame
 void probe_think(unsigned frame)
 {
 	if (!probe_enabled) return;
+	probe_npc(frame);
 	__try
 	{
 		const auto& dsc = actor_ai::installed();
@@ -1048,6 +1050,7 @@ void canonical_npc_move_intent(const char* where, bool wanted)
 		const auto entity_at = fn<void*(__thiscall*)(void*, std::uint32_t)>(at<std::uint32_t>(at<void*>(world, 0), world_entity_by_index_slot));
 		unsigned actors = 0, heroes = 0, speeds = 0, goals = 0, flags = 0, follows = 0;
 		char detail[200]{}; int n = 0;
+		char fdetail[200]{}; int fn_ = 0; // p060fix/AL: the dense indices that carried the active bit
 		for (std::uint32_t i = 0; i < capacity; ++i)
 		{
 			auto* actor = static_cast<std::uint8_t*>(entity_at(world, i));
@@ -1063,20 +1066,60 @@ void canonical_npc_move_intent(const char* where, bool wanted)
 			++actors;
 			if (d.had_speed) { ++speeds; if (n >= 0 && n < int(sizeof detail) - 8) n += std::snprintf(detail + n, sizeof detail - n, "%s%x", n ? "," : "", i); }
 			if (at<std::uint32_t>(actor, actor_move_goal_at) != move_goal_none_bits) ++goals;
-			if (d.had_fast_flag) ++flags;
+			// p060fix/AL (live-060ze ZE-3P-E2p: S = 0 on every peer, F = 7 on every peer but on OTHER kids on the newcomer):
+			// the entity's active bit (+4 bit 16 = +6 bit 0; CEntity vt+0x5c = 0x4601f0 through the generic setter
+			// 0x41a190(16, v), driven by the grid/query activation 0x466b10 / 0x466dde / setInvisible 0x4a8910 before frame
+			// 0 with each PC's own camera) is the other every-frame input of the re-arm tail. From frame 2 on every kid is
+			// at 0.1 s on every peer, so the bit is cleared here directly (not through the setter: its true-to-false path
+			// removes the entity through the grid / vt+8); the first update after frame 0 then re-arms every NPC alike.
+			if (d.had_fast_flag)
+			{
+				++flags; if (fn_ >= 0 && fn_ < int(sizeof fdetail) - 8) fn_ += std::snprintf(fdetail + fn_, sizeof fdetail - fn_, "%s%x", fn_ ? "," : "", i);
+				at<std::uint8_t>(actor, actor_entity_flags6_at) = std::uint8_t(at<std::uint8_t>(actor, actor_entity_flags6_at) & ~actor_fast_update_bit);
+			}
 			if (d.had_follow) ++follows;
 			for (std::uint32_t off = 0; off < 2 * actor_vector_bytes; off += 4) at<std::uint32_t>(actor, actor_move_goal_at + off) = move_goal_none_bits; // +0x1d0..+0x1e7: goal, start
 			at<std::uint32_t>(actor, actor_move_speed_a_at) = 0;
 			at<std::uint32_t>(actor, actor_move_speed_b_at) = 0;
 		}
 		++npc_intent_runs;
-		logger::write("join in progress: canonical restart - the AI actors' move intent is canonical at %s on every peer: %u AI actor(s) (CActor without a controller; %u party hero(s) left to their own passes, %u entity slot(s) walked), %u had a move speed (+0x180/+0x184 > 0: updated every frame instead of every 0.1 s), %u a move goal (+0x1d0), %u the fast-update flag (+6 bit 0, counted only), %u a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: %s (run %u)",
-			where, actors, heroes, capacity, speeds, goals, flags, follows, n ? detail : "none", npc_intent_runs);
+		logger::write("join in progress: canonical restart - the AI actors' move intent is canonical at %s on every peer: %u AI actor(s) (CActor without a controller; %u party hero(s) left to their own passes, %u entity slot(s) walked), %u had a move speed (+0x180/+0x184 > 0: updated every frame instead of every 0.1 s), %u a move goal (+0x1d0), %u the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on %s), %u a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: %s (run %u)",
+			where, actors, heroes, capacity, speeds, goals, flags, fn_ ? fdetail : "none", follows, n ? detail : "none", npc_intent_runs);
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
 		logger::write_once("jip:npc-intent-fault", "join in progress: the AI actors' move intent could not be made canonical (read fault) - left as each PC has it");
 	}
+}
+// p060fix/AL (probe only): one `jip npc:` line per gated frame - every non-party CActor's dense index with its active
+// bit, move speeds and next re-arm inputs, so a probed run names the per-PC set at frame 1 directly.
+void probe_npc(unsigned frame)
+{
+	if (!probe_enabled) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		std::uint32_t bits = 8;
+		__try { bits = entity_capacity::installed().tokens.index_bits; } __except (EXCEPTION_EXECUTE_HANDLER) { bits = 8; }
+		if (bits < 1 || bits > 16) bits = 8;
+		void* world = fn<getter_t>(world_getter_at)();
+		const auto entity_at = fn<void*(__thiscall*)(void*, std::uint32_t)>(at<std::uint32_t>(at<void*>(world, 0), world_entity_by_index_slot));
+		char line[900]; int n = std::snprintf(line, sizeof line, "jip npc: frame=%u", frame);
+		for (std::uint32_t i = 0; i < (1u << bits) && n > 0 && n < int(sizeof line) - 40; ++i)
+		{
+			auto* actor = static_cast<std::uint8_t*>(entity_at(world, i));
+			if (!actor || at<std::uint32_t>(actor, 0) != actor_vtable || at<std::int32_t>(actor, actor_controller) != -1) continue;
+			bool party_hero = false;
+			for (std::uint32_t k = 0; k < 4 && k < count; ++k) party_hero |= party[k] != 0 && party[k] == at<std::uint32_t>(actor, 0x1c);
+			if (party_hero) continue;
+			n += std::snprintf(line + n, sizeof line - n, " %x:%u/%08x/%08x", i, unsigned(at<std::uint8_t>(actor, actor_entity_flags6_at) & actor_fast_update_bit), at<std::uint32_t>(actor, actor_move_speed_a_at), at<std::uint32_t>(actor, actor_move_speed_b_at));
+		}
+		logger::write("%s", line);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:npc-line-fault", "jip npc: a line faulted"); }
 }
 // In place of `call 0x495350` at 0x4868ad (the zone-loaded finish, right after 0x422520 bound the party; an
 // argument-less cdecl getter whose result the site reads): the cold moved pass on the party that now exists, then the

@@ -799,3 +799,22 @@ start and speeds now 0x421b90's values on all; with a speed: <dense indices>
 independent: every live NPC on every peer, nothing keyed on a seat, a role or
 a PC; the heroes keep their own passes. Guards 0x434fc3 (the tail, 0x49 bytes)
 and 0x421bb0 (the clear's body, 0x45 bytes).
+
+p060fix/AL (live-060ze ZE-3P-E2p, 4/4 failures on the AK build): the AK line
+read `S 0, F 7` on every peer - no kid had a move speed at the epoch, seven
+carried the OTHER every-frame input, the entity's active bit (+4 bit 16 = +6
+bit 0), and `--mode cadence` named the same six kids. The bit has one writer:
+CEntity vt+0x5c = 0x4601f0(bool) through the generic flag setter 0x41a190(16,
+v) (a true-to-false change also removes the entity through the grid / vt+8),
+called from the grid/query activation code (0x466b10 deactivates a query's
+results, 0x466dde activates a list, setInvisible 0x4a8910 pairs it with bit 15)
+- camera/query driven before frame 0 with each PC's own camera (the zone-start
+camera history differs per PC until the frame-0 re-anchor), so 7 of the 14
+kids were active on the existing peers and 7 others on the newcomer. From
+frame 2 on every kid re-arms at 0.1 s on every peer (nobody re-activates them),
+so the epoch clears the bit directly on every non-party CActor (never through
+the setter), logs the dense indices that had it (`F the active bit (... cleared
+on <indices>)`), and the probe adds one `jip npc: frame=N <index>:<bit>/<speed
+a>/<speed b> ...` line per gated frame. The first update after frame 0 then
+re-arms every NPC at 0.1 s alike on 2..4 peers at any exit: per entity, on
+every peer, nothing keyed on a seat, a role, a PC or a zone.
