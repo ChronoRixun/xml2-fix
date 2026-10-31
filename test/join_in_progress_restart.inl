@@ -288,6 +288,36 @@ void run() {
     assert(*reinterpret_cast<int*>(pool+brain_ring_write)==28 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==28);
     for(unsigned i=0;i<28;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i+3);
     assert(*reinterpret_cast<unsigned*>(pool+brain_ring_bitmap)==0x80000007u);
+    // p060fix/AI S2: the same rebuild on a synthetic E4 96-slot pool (stage 2 / 96 controllers published, the ring,
+    // counters and three held words at the E4 ledger's operands): held 0,1,2 / 40 / 95 -> the 91 free slots in
+    // ascending order, read 0, write 91, free 91; the held words, the live count and the stock pool untouched.
+    {
+        static alignas(16) unsigned char e4_pool[0x24e00]{};
+        std::memset(e4_pool,0,sizeof e4_pool);
+        const auto cai=unsigned(reinterpret_cast<std::uintptr_t>(e4_pool));
+        actor_ai::published={2,cai,cai+4,0x61c,96,cai+0x24db8,0x268,96,2,0x24db0,0x525302};
+        unsigned char* e4=e4_pool+4;
+        put(e4,0x24c10,17);put(e4,0x24c14,23);put(e4,0x24c18,91);put(e4,0x24c1c,0x7u);put(e4,0x24c20,0x100u);put(e4,0x24c24,0x80000000u);put(e4,0x24c28,5);
+        for(unsigned i=0;i<96;++i) put(e4,0x24a8c+4*i,unsigned((i*11+5)%96));
+        const auto stock_before=std::vector<unsigned char>(pool+0xc384,pool+0xc41c);
+        join_in_progress::canonical_brain_ring();
+        assert(*reinterpret_cast<int*>(e4+0x24c10)==91 && *reinterpret_cast<int*>(e4+0x24c14)==0 && *reinterpret_cast<int*>(e4+0x24c18)==91 && *reinterpret_cast<int*>(e4+0x24c28)==5);
+        unsigned expect=3;
+        for(unsigned i=0;i<91;++i) { if(expect==40)++expect; assert(*reinterpret_cast<unsigned*>(e4+0x24a8c+4*i)==expect); ++expect; }
+        for(unsigned i=91;i<96;++i) assert(*reinterpret_cast<unsigned*>(e4+0x24a8c+4*i)==0);
+        assert(*reinterpret_cast<unsigned*>(e4+0x24c1c)==0x7u && *reinterpret_cast<unsigned*>(e4+0x24c20)==0x100u && *reinterpret_cast<unsigned*>(e4+0x24c24)==0x80000000u);
+        assert(std::vector<unsigned char>(pool+0xc384,pool+0xc41c)==stock_before);
+        // a stage-2 descriptor with another controller count is left alone (unknown layout)
+        put(e4,0x24c14,23);actor_ai::published.controllers=32;join_in_progress::canonical_brain_ring();assert(*reinterpret_cast<int*>(e4+0x24c14)==23);
+        // stage 1 (the standalone ActorPools=124 install publishes the stock layout) rebuilds the stock pool as stage 0 does
+        actor_ai::published=actor_ai::stock;actor_ai::published.stage=1;
+        put(pool,brain_ring_write,7);put(pool,brain_ring_read,11);put(pool,brain_ring_free,28);put(pool,brain_ring_bitmap,0x80000007u);
+        for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*5+3)%32));
+        join_in_progress::canonical_brain_ring();
+        assert(*reinterpret_cast<int*>(pool+brain_ring_write)==28 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==28);
+        for(unsigned i=0;i<28;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i+3);
+        actor_ai::published=actor_ai::stock;
+    }
     // The LoadZone bridge (the zone load a mode-2 restore takes), entered by call: an epoch while armed.
     join_in_progress::zone_load_zone_entry_target_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_getter));
     const auto zone_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::zone_load_zone_entry_bridge);
@@ -640,5 +670,65 @@ void run_turrets() {
     *slot=event_manager_pump;xml1_turrets::fixture_hook=0;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
     std::cout<<"PASS turrets composition: the xml1 turrets dispatch hook at the timed-event manager's pump slot is accepted by the JoinInProgress install check (retail accepted, a foreign pointer and an unreported hook refused), the retail guards still match, and a canonically rebuilt queue drains through the hooked pump (dispatcher ran, retail fired/freed/popped every record)\n";
+}
+// p060fix/AI S1: the standalone ActorPools=124 install (no Actors=96) relocates the brain alloc's ring read at
+// 0x522a18 into its W11 cave BEFORE join_in_progress installs (exports.cpp order). The production plan
+// (actor_pools_plan::make, the code the DLL commits) is built against a fixture cave and ONLY its W11 relocation is
+// applied to the mapped retail image, the module stub reporting the committed bytes as the DLL does; the brain alloc
+// guard composes them, every other prefix byte stays guarded, and a ring rebuilt canonically on the stock pool is
+// popped IN ORDER through the relocated alloc (the cave ran the displaced read, the observer saw pool 3 / the slot).
+unsigned w11_observer_calls=0,w11_observer_pool=0,w11_observer_slot=0;
+void __cdecl w11_observer(unsigned pool,unsigned live) { ++w11_observer_calls;w11_observer_pool=pool;w11_observer_slot=live; }
+void run_actor_pools() {
+    using namespace join_in_progress_rules;
+    auto* site=reinterpret_cast<unsigned char*>(static_cast<std::uintptr_t>(brain_ring_pop_relocated));
+    const auto guard=std::find_if(guards.begin(),guards.end(),[](const auto& g){return g.va==brain_ring_pop;});
+    assert(guard!=guards.end() && guard->hex.size()==32 && join_in_progress::mismatch()==nullptr);
+    const std::vector<unsigned char> retail_site(site,site+7);
+    assert(patch_transaction::bytes_of(entity_capacity_b_sites::controller_reset.before)==retail_site); // the module's own guard = the mapped retail bytes
+    // the module installed first: its production plan against a fixture cave, only the W11 relocation applied
+    auto* block=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x3674,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+    auto* caves=static_cast<unsigned char*>(VirtualAlloc(nullptr,4096,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE));
+    assert(block && caves);
+    const auto plan=actor_pools_plan::make(unsigned(reinterpret_cast<std::uintptr_t>(block)),unsigned(reinterpret_cast<std::uintptr_t>(caves)),unsigned(reinterpret_cast<std::uintptr_t>(&w11_observer)));
+    assert(plan.has_value() && plan->code.size()<=4096);
+    std::memcpy(caves,plan->code.data(),plan->code.size());
+    const auto w11=std::find_if(plan->contribution.writes.begin(),plan->contribution.writes.end(),[](const auto& w){return w.va==brain_ring_pop_relocated;});
+    assert(w11!=plan->contribution.writes.end() && w11->bytes.size()==7 && w11->bytes[0]==0xe9 && w11->bytes[5]==0x90 && w11->bytes[6]==0x90);
+    const auto w11_guard=std::find_if(plan->contribution.guards.begin(),plan->contribution.guards.end(),[](const auto& g){return g.va==brain_ring_pop_relocated;});
+    assert(w11_guard!=plan->contribution.guards.end() && w11_guard->bytes==retail_site);
+    std::memcpy(site,w11->bytes.data(),7);
+    actor_ai::published=actor_ai::stock;actor_ai::published.stage=1; // what the standalone install publishes
+    // failing-first: the raw guard refuses the relocated site while the module reports nothing (int11 at f9ffb9f)
+    actor_pools::fixture_controller_reset.clear();
+    assert(join_in_progress::mismatch()==&*guard);
+    // the module reports its committed bytes: accepted; every one of the 16 prefix bytes stays guarded
+    actor_pools::fixture_controller_reset=w11->bytes;
+    assert(join_in_progress::mismatch()==nullptr);
+    for(unsigned i=0;i<16;++i) { auto* b=reinterpret_cast<unsigned char*>(static_cast<std::uintptr_t>(brain_ring_pop+i));*b^=1;assert(join_in_progress::mismatch()==&*guard);*b^=1; }
+    assert(join_in_progress::mismatch()==nullptr);
+    // a report that differs from the image (another cave), a report at stage 0, or E4 reporting installation: refused
+    auto other=w11->bytes;other[1]^=0x10;actor_pools::fixture_controller_reset=other;assert(join_in_progress::mismatch()==&*guard);
+    actor_pools::fixture_controller_reset=w11->bytes;actor_ai::published.stage=0;assert(join_in_progress::mismatch()==&*guard);actor_ai::published.stage=1;
+    e4_core::fixture_installed=true;assert(join_in_progress::mismatch()!=nullptr);e4_core::fixture_installed=false;
+    assert(join_in_progress::mismatch()==nullptr);
+    // a ring rebuilt canonically on the stock pool (held 0,1,2,31; stage 1 = the stock layout) is popped in ascending
+    // order through the relocated alloc: the cave executes the displaced read, the observer sees pool 3 with the
+    // slot, retail marks the slot held, advances read, drops free and raises live.
+    auto* pool=reinterpret_cast<unsigned char*>(brain_pool_stock);
+    put(pool,brain_ring_write,7);put(pool,brain_ring_read,11);put(pool,brain_ring_free,28);put(pool,brain_ring_bitmap,0x80000007u);put(pool,0xc418,4);
+    for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*5+3)%32));
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    join_in_progress::canonical_brain_ring();
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    assert(*reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_write)==28 && *reinterpret_cast<int*>(pool+brain_ring_free)==28);
+    const auto alloc=reinterpret_cast<unsigned(__thiscall*)(void*)>(static_cast<std::uintptr_t>(brain_ring_pop));
+    assert(alloc(pool)==3 && w11_observer_calls==1 && w11_observer_pool==3 && w11_observer_slot==3);
+    assert(*reinterpret_cast<int*>(pool+brain_ring_read)==1 && *reinterpret_cast<int*>(pool+brain_ring_free)==27 && *reinterpret_cast<unsigned*>(pool+brain_ring_bitmap)==0x8000000fu && *reinterpret_cast<int*>(pool+0xc418)==5);
+    assert(alloc(pool)==4 && w11_observer_calls==2 && w11_observer_slot==4 && *reinterpret_cast<int*>(pool+brain_ring_read)==2 && *reinterpret_cast<int*>(pool+brain_ring_free)==26);
+    // retail restored: nothing composes, the raw guard matches again
+    std::memcpy(site,retail_site.data(),7);actor_pools::fixture_controller_reset.clear();actor_ai::published=actor_ai::stock;
+    assert(join_in_progress::mismatch()==nullptr);
+    std::cout<<"PASS ActorPools composition: the standalone ActorPools=124 W11 controller-reset relocation (production plan, installed first) at the AI brain alloc is accepted by the JoinInProgress guards when the module reports its committed bytes (unreported, differing, stage-0 and E4-installed reports refused; every prefix byte still guarded), and a canonically rebuilt stock ring is popped in ascending order through the relocated alloc (cave ran, observer saw the slot)\n";
 }
 }

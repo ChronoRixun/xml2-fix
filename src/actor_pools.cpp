@@ -29,6 +29,7 @@ namespace actor_pools
         std::array<counters,3> counts;
         bool attempted=false,applied=false;
         std::string last_sample;
+        std::vector<std::uint8_t> controller_reset_written; // the committed W11 bytes at 0x522a18 (standalone only)
         void __cdecl observe(unsigned pool,unsigned live)
         {
             if(pool==3) { if(actor_ai::reset_controller_slot)actor_ai::reset_controller_slot(live);return; }
@@ -81,8 +82,11 @@ namespace actor_pools
         { release();logger::write("ActorPools: cave protection/flush failed; nothing written; online unverified");register_result();return; }
         auto c=p->contribution;
         bool retained=false;
+        // The W11 relocation this plan writes at the controller-reset site, published for later guards to compose.
+        std::vector<std::uint8_t> w11;
+        for(const auto& w:c.writes)if(w.va==entity_capacity_b_sites::controller_reset.va)w11=w.bytes;
         c.retain=[&] { retained=true;game_version::refuse_startup(); };
-        c.publish=[&] { applied=true;actor_ai::published=actor_ai::stock;actor_ai::published.stage=1; };
+        c.publish=[&] { applied=true;actor_ai::published=actor_ai::stock;actor_ai::published.stage=1;controller_reset_written=w11; };
         patch_transaction::transaction transaction;transaction.add(std::move(c));
         const auto result=transaction.commit(
 #ifdef XML2_ACTOR_POOLS_TEST
@@ -118,6 +122,7 @@ namespace actor_pools
         c.retain=[s]{s->retained=true;game_version::refuse_startup();};
         return tx.add(std::move(c));
     }
+    const std::vector<std::uint8_t>& installed_controller_reset() { return controller_reset_written; }
     std::string telemetry_json()
     {
         std::string out="{\"installed\":"+std::string(applied?"true":"false");

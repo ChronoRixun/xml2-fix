@@ -347,10 +347,17 @@ The fix:
    restart being armed and frame 0 not yet taken. Lobby STARTs and ordinary zone
    transitions never arm.
 7. **AI brain free ring (P2).** The AI system's 32-entry ring (`0x78ba14`
-   +0xc384[32], write/read/free at +0xc408/+0xc40c/+0xc410) is only ordered by the
-   constructor (`0x522f70`); at a late restart's zone load, with every brain free,
-   it goes back to identity through that retail init on the stock pool (a relocated
-   e4 pool is left to the e4 core). Brain and world generations are untouched.
+   +0xc384[32], write/read/free at +0xc408/+0xc40c/+0xc410, held bits +0xc414) is
+   only ordered by the constructor (`0x522f70`); at a late restart's zone load it
+   is rebuilt over the FREE slots in ascending order (read 0, write = free count).
+   p060fix/AI: the rebuild runs on the pool the published CAI descriptor names
+   (`actor_ai_layout.hpp` ring offsets): the stock pool at stage 0 and at stage 1
+   (the standalone `[Limits] ActorPools=124` install keeps the stock layout), and
+   E4's 96-slot pool at stage 2 (`cai+4` +0x24a8c[96], +0x24c10/+0x24c14/+0x24c18,
+   three held words at +0x24c1c: the E4 ledger's operands at 0x522a12/18/25/59 and
+   0x522f74, checked by the unit test). Held bits, free/live counts (E4's
+   reservation accounting reads them) and the brain/world generations are
+   untouched; another stage/count pairing is left as it is and logged.
 8. **Probe (P3, `[Dev] LateJoinProbe=1`, off by default).** `jip snapshot:
    where=...` lines at every milestone (deferred start, mode-2 load, zone load
    entry/epoch, zone start/epoch, zone started, frame 0 (+epoch), frame N samples)
@@ -549,3 +556,30 @@ guarded. The mapped-image `e4-guards` fixture refuses uninstalled, wrong-layout,
 unreported-observer and individually corrupted prefixes. This restores JIP
 installation for that optional configuration; it does not establish late-restart
 determinism with 96 controllers, whose stock-ring canonicalisation remains off.
+
+p060fix/AI (after integration 11) closes the two gaps the int11 review named:
+
+* `[Limits] ActorPools=124` without `Actors=96` (the standalone W11 actor-pools
+  install, stage 1) relocates the brain alloc's ring read at 0x522a18 into its
+  cave before this module installs, inside the 0x522a10 guard, so JIP was refused
+  on every `--actor-pools 124` build. The guard now composes exactly the bytes
+  `actor_pools::installed_controller_reset()` reports it committed there (the
+  module's own verified relocation: 5-byte JMP plus 2 pad), only at stage 1 with
+  E4 off; everything else in the 16-byte span stays retail, and a report that
+  differs from the image, a report at stage 0 or an E4 installation are refused.
+  The site is composed like the E4 observer rather than listed in
+  `test/module_hook_sites.json` (the guard scan allows no literal guard over a
+  listed site). The boundary mode `actorpools` installs the production plan's
+  W11 relocation first (actor_pools_plan::make against a fixture cave), proves the
+  raw guard refused it (failing-first), the composed guard accepts it with every
+  prefix byte still guarded, and pops a canonically rebuilt stock ring in order
+  through the relocated alloc. The install logs `JoinInProgress composes with the
+  standalone ActorPools W11 controller-reset relocation ...`.
+* With `Actors=96` the canonical restart's brain-ring rebuild (step 7) now runs on
+  E4's 96-slot pool at its published offsets instead of being skipped, so the
+  ring order no longer depends on each PC's allocation history there; the
+  `restart` mode proves it on a synthetic 96-slot pool (held slots across the
+  three words kept out, counts and held bits untouched, the stock pool untouched)
+  and the unit test ties the offsets to the E4 ledger rows. Live admissions with
+  Actors=96 remain unverified (the other restart steps never depended on the
+  pool layout).

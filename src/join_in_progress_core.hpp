@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 // [Online] JoinInProgress: the host's per-newcomer state machine, free of game memory (test/join_in_progress_test.cpp).
 //
@@ -307,21 +308,30 @@ namespace join_in_progress_core
 	// its frame-0 epoch on every peer; a lobby START (never armed) and [Dev] LateJoinRestartReset=0 keep retail.
 	inline bool smart_hold_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
 	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
-	// count, free count = the slots not held in the bitmap), so every peer allocates the same next slots even when a
-	// warm host still holds one (probe round: slot 31 held, bits 0x80000007). Returns the number of held slots.
-	inline unsigned rebuild_brain_ring(std::uint32_t bitmap, std::array<std::uint32_t, 32>& ring, std::int32_t& write, std::int32_t& read, std::int32_t& free_count)
+	// count mod slots, free count = the slots not held in the bitmap words, one word per 32 slots), so every peer
+	// allocates the same next slots even when a warm host still holds one (probe round: slot 31 held, bits
+	// 0x80000007). One entry per controller slot (the stock 32 or E4's 96). Returns the number of held slots.
+	inline unsigned rebuild_brain_ring(std::span<const std::uint32_t> held, std::span<std::uint32_t> ring, std::int32_t& write, std::int32_t& read, std::int32_t& free_count)
 	{
-		unsigned held = 0, n = 0;
-		for (std::uint32_t slot = 0; slot < 32; ++slot)
+		const auto slots = static_cast<std::uint32_t>(ring.size());
+		unsigned held_count = 0, n = 0;
+		for (std::uint32_t slot = 0; slot < slots; ++slot)
 		{
-			if (bitmap & (1u << slot)) { ++held; continue; }
+			if (held[slot / 32] & (1u << (slot % 32))) { ++held_count; continue; }
 			ring[n++] = slot;
 		}
-		for (unsigned i = n; i < 32; ++i) ring[i] = 0;
-		read = 0; write = std::int32_t(n % 32); free_count = std::int32_t(n);
-		return held;
+		for (unsigned i = n; i < slots; ++i) ring[i] = 0;
+		read = 0; write = std::int32_t(n % slots); free_count = std::int32_t(n);
+		return held_count;
 	}
-	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers) { return stage == 0 && controllers == 32; }
+	inline unsigned rebuild_brain_ring(std::uint32_t bitmap, std::array<std::uint32_t, 32>& ring, std::int32_t& write, std::int32_t& read, std::int32_t& free_count)
+	{ return rebuild_brain_ring(std::span<const std::uint32_t>(&bitmap, 1), std::span<std::uint32_t>(ring), write, read, free_count); }
+	// The rebuild runs only on a pool layout this module knows exactly (actor_ai_layout.hpp ring offsets): the stock
+	// 32-controller pool at stage 0, the same pool at stage 1 (the standalone ActorPools=124 install observes the pop
+	// and keeps the stock layout), or E4's relocated 96-controller pool at stage 2. Anything else is left as it is.
+	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers)
+	{ return (stage <= 1 && controllers == 32) || (stage == 2 && controllers == 96); }
+	inline std::uint32_t brain_ring_held_words(std::uint32_t controllers) { return (controllers + 31) / 32; }
 	// Follow-up 7: the timed-event queue (every actor update is one of its entries) is rebuilt in a canonical order at
 	// the late restart's epochs on every peer. One entry = one heap pair resolved to its record.
 	struct event_entry

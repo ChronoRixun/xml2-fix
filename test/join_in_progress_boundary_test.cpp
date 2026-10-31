@@ -1,5 +1,6 @@
 // Production bridge with synthetic native services; maps the owned PE, never launches it.
 #include "../src/join_in_progress.cpp"
+#include "actor_pools_plan.hpp" // p060fix/AI: the production W11 relocation plan, installed first in the `actorpools` mode
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
@@ -37,6 +38,7 @@ bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool)
 }
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
 namespace xml1_turrets { std::uint32_t fixture_hook = 0; std::uint32_t installed_process_hook() { return fixture_hook; } }
+namespace actor_pools { std::vector<std::uint8_t> fixture_controller_reset; const std::vector<std::uint8_t>& installed_controller_reset() { return fixture_controller_reset; } }
 namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }
 namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
@@ -132,6 +134,7 @@ int main(int argc,char** argv) {
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
         if(std::string_view(argv[2])=="restart") { restart_fixture::run();return 0; }
         if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();return 0; }
+        if(std::string_view(argv[2])=="actorpools") { restart_fixture::run_actor_pools();return 0; }
         assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
         gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
     }

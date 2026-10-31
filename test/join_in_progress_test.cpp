@@ -2,6 +2,9 @@
 #include "join_in_progress_rules.hpp"
 #include "join_in_progress_diagnostics.hpp"
 #include "gameplay_capabilities.hpp"
+#include "actor_ai_layout.hpp" // p060fix/AI: the brain ring layout per stage, checked against E4's ledger rows
+#include "e4_core_sites.hpp"
+#include <cstdlib>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -500,7 +503,28 @@ int main(int argc, char** argv)
 		check(rebuild_brain_ring(0x80000007u, ring, w, r, f) == 4 && w == 28 && r == 0 && f == 28 && ring[0] == 3 && ring[27] == 30 && ring[28] == 0,
 		      "follow-up 4: the brain ring is rebuilt over the free slots in ascending order (held slots kept out)");
 		check(rebuild_brain_ring(0u, ring, w, r, f) == 0 && w == 0 && r == 0 && f == 32 && ring[31] == 31, "follow-up 4: with every brain free the rebuilt ring is identity");
-		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a relocated pool");
+		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a layout it does not know");
+		// p060fix/AI S2: the rebuild also runs on the stock pool at stage 1 (the standalone ActorPools=124 install) and on
+		// E4's 96-slot pool at stage 2; any other stage/count pairing is left alone.
+		check(brain_ring_reset_wanted(1, 28, 32) && brain_ring_reset_wanted(2, 91, 96) && !brain_ring_reset_wanted(1, 32, 96) && !brain_ring_reset_wanted(0, 32, 96) && !brain_ring_reset_wanted(3, 96, 96),
+		      "AI: the rebuild runs at stage 0/1 with 32 controllers and at stage 2 with 96, nowhere else");
+		{
+			const std::array<std::uint32_t, 3> held{0x7u, 0x100u, 0x80000000u}; std::array<std::uint32_t, 96> ring96{}; w = 17; r = 23; f = 91;
+			const auto kept = rebuild_brain_ring(std::span<const std::uint32_t>(held), std::span<std::uint32_t>(ring96), w, r, f);
+			bool ascending = true; unsigned expect = 3;
+			for (unsigned i = 0; i < 91; ++i) { if (expect == 40) ++expect; ascending &= ring96[i] == expect; ++expect; }
+			check(kept == 5 && w == 91 && r == 0 && f == 91 && ascending && ring96[91] == 0 && ring96[95] == 0 && brain_ring_held_words(96) == 3 && brain_ring_held_words(32) == 1,
+			      "AI: the 96-slot ring is rebuilt over the free slots in ascending order across the three held words (0,1,2 / 40 / 95 kept out)");
+			// The stage-2 ring layout the rebuild writes equals the E4 ledger's operands at the alloc/init/release sites
+			// (e4_core_sites.hpp rows), and the stock layout equals those rows' retail operands.
+			const actor_ai::descriptor e4{2, 0x30000000, 0x30000004, 0x61c, 96, 0x30024db8, 0x268, 96, 2, 0x24db0, 0x525302};
+			const auto row = [](std::uint32_t va) { for (const auto& e : e4_core_sites::edits) if (e.va == va) return &e; return static_cast<const e4_core_sites::edit*>(nullptr); };
+			const auto operand = [](const e4_core_sites::edit* e) { std::uint32_t v = 0; for (unsigned i = 0; i < e->size; ++i) v |= std::uint32_t(std::strtoul(std::string(e->hex + 2 * (e->offset + i), 2).c_str(), nullptr, 16)) << (8 * i); return v; };
+			const auto layout = [&](std::uint32_t va, std::uint32_t (*field)(const actor_ai::descriptor&)) { const auto* e = row(va); return e && !e->dynamic && e->size == 4 && e->value == field(e4) && operand(e) == field(actor_ai::stock); };
+			check(layout(0x522a12, actor_ai::ring_read) && layout(0x522a18, actor_ai::ring) && layout(0x522a25, actor_ai::ring_held) && layout(0x522a59, actor_ai::ring_free) && layout(0x522f74, actor_ai::ring_write) &&
+			      row(0x522a44) && row(0x522a44)->value == 96 && operand(row(0x522a44)) == 32,
+			      "AI: the stage-2 ring/read/write/free/held offsets are the E4 ledger's operands at 0x522a12/18/25/59 and 0x522f74 (stock = their retail operands), capacity 32 -> 96");
+		}
 		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x484069; }), "follow-up 4: the LoadZone site is guarded");
 	}
 	{

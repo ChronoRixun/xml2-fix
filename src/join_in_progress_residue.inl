@@ -19,29 +19,37 @@ void segment_reseed(const char* segment)
 	}
 }
 // ---- P2: the AI brain free ring back to identity order at a late restart's zone load --------------------------------
+// p060fix/AI: on the pool the published CAI descriptor names: the stock 32-slot pool (stage 0, and stage 1 = the
+// standalone ActorPools=124 install, same layout) or E4's 96-slot pool (stage 2: ring/counters/held words at the E4
+// ledger's operands, actor_ai_layout.hpp). The rebuild writes the ring and its counters only; held bits, free/live
+// counts and the brain generations (E4's reservation accounting reads the counts) are untouched.
 void canonical_brain_ring()
 {
 	if (!restart_reset_enabled || !late_restart || !restart.armed) return;
 	const auto& d = actor_ai::installed();
 	const std::uint32_t stage = d.stage, controllers = d.controllers ? d.controllers : brain_slots;
 	auto* pool = reinterpret_cast<std::uint8_t*>(d.primary_base ? d.primary_base : brain_pool_stock);
+	const auto ring_at = actor_ai::ring(d), write_at = actor_ai::ring_write(d), read_at = actor_ai::ring_read(d), free_at = actor_ai::ring_free(d), held_at = actor_ai::ring_held(d);
 	__try
 	{
-		const auto free_count = at<std::int32_t>(pool, brain_ring_free), read = at<std::int32_t>(pool, brain_ring_read), write = at<std::int32_t>(pool, brain_ring_write);
-		const auto bitmap = at<std::uint32_t>(pool, brain_ring_bitmap);
+		const auto free_count = at<std::int32_t>(pool, free_at), read = at<std::int32_t>(pool, read_at), write = at<std::int32_t>(pool, write_at);
+		const auto bitmap = at<std::uint32_t>(pool, held_at);
 		if (!join_in_progress_core::brain_ring_reset_wanted(stage, free_count, controllers))
 		{
 			logger::write("join in progress: canonical restart - the AI brain free ring is left as it is (stage %u, %u controllers, %d free, read %d write %d, held %08x)",
 				stage, controllers, free_count, read, write, bitmap);
 			return;
 		}
-		std::array<std::uint32_t, 32> ring{};
+		const auto words = join_in_progress_core::brain_ring_held_words(controllers);
+		std::array<std::uint32_t, 3> held_words{};
+		for (unsigned w = 0; w < words; ++w) held_words[w] = at<std::uint32_t>(pool, held_at + 4 * w);
+		std::array<std::uint32_t, 96> ring{};
 		std::int32_t new_write = 0, new_read = 0, new_free = 0;
-		const auto held = join_in_progress_core::rebuild_brain_ring(bitmap, ring, new_write, new_read, new_free);
-		std::memcpy(pool + 0xc384, ring.data(), sizeof ring);
-		at<std::int32_t>(pool, brain_ring_write) = new_write; at<std::int32_t>(pool, brain_ring_read) = new_read; at<std::int32_t>(pool, brain_ring_free) = new_free;
-		logger::write("join in progress: canonical restart - AI brain free ring rebuilt over the %d free slots in ascending order (was read %d write %d free %d; held %08x = %u slot(s) kept); brain generations untouched",
-			new_free, read, write, free_count, bitmap, held);
+		const auto held = join_in_progress_core::rebuild_brain_ring(std::span<const std::uint32_t>(held_words.data(), words), std::span<std::uint32_t>(ring.data(), controllers), new_write, new_read, new_free);
+		std::memcpy(pool + ring_at, ring.data(), controllers * sizeof(std::uint32_t));
+		at<std::int32_t>(pool, write_at) = new_write; at<std::int32_t>(pool, read_at) = new_read; at<std::int32_t>(pool, free_at) = new_free;
+		logger::write("join in progress: canonical restart - AI brain free ring rebuilt over the %d free slots in ascending order (stage %u pool %08x, %u controllers; was read %d write %d free %d; held %08x %08x %08x = %u slot(s) kept); brain generations untouched",
+			new_free, stage, unsigned(reinterpret_cast<std::uintptr_t>(pool)), controllers, read, write, free_count, held_words[0], held_words[1], held_words[2], held);
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{

@@ -23,6 +23,15 @@ namespace actor_ai
     inline std::uint32_t team_generations(const descriptor& d){return d.stage==2?0xe8ac:0x9cc;}
     inline std::uint32_t team_active(const descriptor& d){return d.stage==2?0xe89c:0x9c4;}
     inline std::uint32_t team_mask(const descriptor& d){return d.stage==2?0x337e4:0xce84;}
+    // The primary pool's brain free ring (the FIFO of free controller slots the alloc 0x522a10 pops and the release
+    // 0x522ed0 pushes) with its write/read/free counters and the held-slot bitmap words (one per 32 controllers):
+    // stock 0x78ba14 +0xc384[32] / +0xc408 / +0xc40c / +0xc410 / +0xc414[1]; stage 2 (E4 rows 0x522a12/18/25/59,
+    // 0x522f74 of e4_core_sites.hpp) cai+4 +0x24a8c[96] / +0x24c10 / +0x24c14 / +0x24c18 / +0x24c1c[3].
+    inline std::uint32_t ring(const descriptor& d){return d.stage==2?0x24a8c:0xc384;}
+    inline std::uint32_t ring_write(const descriptor& d){return d.stage==2?0x24c10:0xc408;}
+    inline std::uint32_t ring_read(const descriptor& d){return d.stage==2?0x24c14:0xc40c;}
+    inline std::uint32_t ring_free(const descriptor& d){return d.stage==2?0x24c18:0xc410;}
+    inline std::uint32_t ring_held(const descriptor& d){return d.stage==2?0x24c1c:0xc414;}
     enum class consumer : unsigned { power=1, weapon=2, semi_auto=4, mold=8, turrets=16 };
     inline unsigned consumers = 0;
     inline void register_consumer(consumer c) { consumers |= static_cast<unsigned>(c); }
