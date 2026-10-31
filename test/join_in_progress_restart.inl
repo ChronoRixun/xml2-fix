@@ -40,7 +40,7 @@ __declspec(naked) void draw_probe() { __asm { call dword ptr [draw_bridge_target
                                              ret } }
 // Follow-up 7: a fixture-owned timed-event manager image and the owner resolver's fake entities (slots 1 and 2 alive).
 alignas(16) unsigned char event_manager_image[join_in_progress_rules::event_body_bytes+join_in_progress_rules::event_body_at+16]{};
-alignas(16) unsigned char fake_entity_storage[4][0x400]{};
+alignas(16) unsigned char fake_entity_storage[4][0x900]{};
 unsigned char* fake_entities[4]={fake_entity_storage[0],fake_entity_storage[1],fake_entity_storage[2],fake_entity_storage[3]};
 void* __fastcall fake_entity_of(const unsigned* handle,void*) { const unsigned slot=*handle&0xff;return (*handle==0x1801u||*handle==0x3802u)?fake_entities[slot]:nullptr; }
 // Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
@@ -594,7 +594,39 @@ void run() {
         join_in_progress::moved_drop_count=0;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
         anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     }
-    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party\n";
+    // Int12: the initial 60-frame diagnostic window expires; later movement
+    // starts exactly one further 60-frame window, including the moving frame.
+    {
+        redirect(entity_of_handle,fake_entity_of); // the probe uses retail's entry, not the canonicalisation seam
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&moved_party));
+        auto* hero=fake_entities[2];
+        join_in_progress::probe_enabled=true;join_in_progress::probe_epoch_late=true;
+        join_in_progress::hero_move_rearmed=false;
+        for(auto& valid:join_in_progress::hero_last_valid)valid=false;
+        join_in_progress::hero_lines_arm("fixture initial",0);
+        auto lines=[]() { return std::count_if(observed_jip_logs.begin(),observed_jip_logs.end(),[](const auto& line) { return line.find("jip hero: frame=")==0; }); };
+        const auto initial=lines();
+        for(unsigned frame=1;frame<=60;++frame)join_in_progress::probe_hero_frame(frame);
+        assert(lines()==initial+60);
+        join_in_progress::probe_hero_frame(61);assert(lines()==initial+60);
+        put(hero,actor_position_at,0x42c80000u);
+        join_in_progress::probe_hero_frame(62);
+        assert(join_in_progress::hero_move_rearmed && join_in_progress::hero_lines==1 && lines()==initial+61);
+        assert(std::any_of(observed_jip_logs.begin(),observed_jip_logs.end(),[](const auto& line) { return line.find("jip move: party slot 0 (handle 00003802) first moved at frame 62") == 0; }));
+        for(unsigned frame=63;frame<=121;++frame)join_in_progress::probe_hero_frame(frame);
+        assert(lines()==initial+120);
+        put(hero,actor_position_at,0x43480000u);
+        join_in_progress::probe_hero_frame(122);assert(lines()==initial+120); // only once per restart
+        join_in_progress::hero_lines_arm("fixture device switch",123);
+        join_in_progress::probe_hero_frame(123);assert(lines()==initial+121); // explicit rearm still works
+        join_in_progress::probe_enabled=false;
+        join_in_progress::probe_hero_frame(124);assert(lines()==initial+121);
+        join_in_progress::probe_enabled=true;join_in_progress::probe_epoch_late=false;
+        join_in_progress::probe_hero_frame(125);assert(lines()==initial+121); // no late epoch
+        join_in_progress::probe_enabled=false;
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
+    }
+    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party; initial and first-movement hero probe windows are bounded and rearm correctly\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
 // (vt+0xc, 0x68de20) BEFORE join_in_progress; a 16-byte vtable guard refused the whole install. This mode installs a

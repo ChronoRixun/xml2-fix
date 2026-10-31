@@ -629,3 +629,14 @@ guarded. The mapped-image `e4-guards` fixture refuses uninstalled, wrong-layout,
 unreported-observer and individually corrupted prefixes. This restores JIP
 installation for that optional configuration; it does not establish late-restart
 determinism with 96 controllers, whose stock-ring canonicalisation remains off.
+
+
+Integration 12 corrects three diagnostic regressions in the AE15b/AE16 handoff.
+The per-hero frame window expires after 60 samples, allowing the first later
+movement to arm one further 60-frame window, including that moving frame.
+Explicit device-change rearming remains available; probes remain inactive when
+disabled or outside a late epoch. The offline tool keeps checksum-hero and raw
+hero-field regexes separate, and treats each PC's controller index as local
+context instead of a simulation difference. Synthetic parser tests and the
+mapped-image restart fixture cover these paths. Live movement agreement still
+requires the acceptance rounds; these diagnostic corrections do not establish it.

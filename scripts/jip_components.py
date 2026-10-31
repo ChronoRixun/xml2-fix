@@ -313,7 +313,7 @@ def spawn_mode(host, guest):
     return 1 if bad else 0
 
 
-HERO = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
+HERO_FIELDS = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
 
 
 def hero_mode(host, guest):
@@ -324,7 +324,7 @@ def hero_mode(host, guest):
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
             if 'jip move:' in line:
                 moves.append(line.split('jip move: ', 1)[1].strip())
-            m = HERO.search(line)
+            m = HERO_FIELDS.search(line)
             if not m:
                 continue
             key = (int(m['frame']), int(m['slot']))
@@ -345,7 +345,9 @@ def hero_mode(host, guest):
     for key in keys:
         a, b = h[key], g[key]
         diffs = [(off, a[3][off], b[3].get(off)) for off in sorted(a[3]) if a[3][off] != b[3].get(off)]
-        if a[0] != b[0] or a[1] != b[1] or a[2] != b[2] or diffs:
+        # Controller table indices are local to each PC; retain them as context
+        # in a real field-difference report, without making them a divergence.
+        if a[1] != b[1] or a[2] != b[2] or diffs:
             print(f'  first difference at frame {key[0]} slot {key[1]}: ctl {a[0]}/{b[0]} t {a[1]}/{b[1]} dt {a[2]}/{b[2]}')
             for off, x, y in diffs[:16]:
                 print(f'    +{off:#05x}: host {x} guest {y}')

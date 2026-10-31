@@ -268,6 +268,8 @@ void hero_lines_arm(const char* why, unsigned frame)
 void probe_hero_frame(unsigned frame)
 {
 	if (!probe_enabled || !probe_epoch_late) return;
+	// Let movement after a completed window arm its one fresh capture.
+	if (hero_lines >= hero_line_limit) hero_lines_armed = false;
 	__try
 	{
 		alignas(16) std::uint32_t party[16]{}; std::uint32_t count = 0;
