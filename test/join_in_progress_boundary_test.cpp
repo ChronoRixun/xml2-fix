@@ -1,6 +1,9 @@
 // Production bridge with synthetic native services; maps the owned PE, never launches it.
 #include "../src/join_in_progress.cpp"
 #include "actor_pools_plan.hpp" // p060fix/AI: the production W11 relocation plan, installed first in the `actorpools` mode
+#include "entity_world.hpp"
+#include "entity_grid.hpp"
+#include "entity_query.hpp"
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
@@ -41,7 +44,7 @@ namespace xml1_turrets { std::uint32_t fixture_hook = 0; unsigned fixture_epochs
 namespace actor_pools { std::vector<std::uint8_t> fixture_controller_reset; const std::vector<std::uint8_t>& installed_controller_reset() { return fixture_controller_reset; } }
 namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }
 namespace pad_prompts { unsigned device_switches() { return 0; } }
-namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
+namespace entity_capacity { entity_capacity_layout::descriptor fixture_descriptor; std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { return fixture_descriptor; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }

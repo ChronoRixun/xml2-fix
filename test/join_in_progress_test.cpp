@@ -547,6 +547,8 @@ int main(int argc, char** argv)
 				      "AK: the offsets, the CActor vtable, the world slot and FLT_MIN are the retail ones");
 				check(entity_flags_at == 4 && entity_flag_bytes == 16 && entity_registered_at == 0x6c && entity_registered_bit == 1 && world_flag_update_slot == 0x3c && world_flag_members_slot == 0x40 && world_flag_record_slot == 0x44 && entity_active_flag == 16,
 				      "AM: notification uses the registered bit and installed CWorld flag interfaces");
+				check(visibility_cache_clear_slot == 0x38 && guarded_span(0x464330, 0x40), "AM/ZF: complete callback-free grid cache clear is guarded");
+				check(guarded_span(0x686c8c, 4), "AM/ZF: grid cache-clear virtual slot is guarded");
 				check(guarded_span(0x45fe40, 0x1f) && guarded_span(0x4c6990, 0x1cc) && guarded_span(0x4015d0, 0x23) && guarded_span(0x68f848, 12),
 				      "AM: full flag notification, full cache/bitmap update, copy helper and virtual slots are guarded");
 			}

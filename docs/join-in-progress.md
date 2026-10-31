@@ -823,13 +823,14 @@ every peer, nothing keyed on a seat, a role, a PC or a zone.
 
 p060fix/AM closes the audit's R1 and R4 gaps:
 
-* After AL directly clears an active NPC bit, a registered entity (+0x6c bit 0)
+* After AL directly clears NPC active bits, every registered selected NPC (+0x6c bit 0)
   notifies the installed world's `vt+0x3c(token, flags+4)`, matching the flag
   notification at retail `0x45fe40`. Retail `0x4c6990..0x4c6b5c` changes only
   the transposed flag bitmaps and 16-byte cached flag record; its only call is
   the `rep movsd/movsb` copy at `0x4015d0`. The raised world's corresponding
   method has the same contract. No SetActive, grid operation or entity callback
-  is invoked. The AL line gains `N world-index entries corrected` (cached records
+  is invoked. Already-inactive NPCs are reconciled too, including stale cached
+  flag-15/17 predicates; their authored object bits are preserved. The AL line gains `N world-index entries corrected` (cached records
   that differed when notified). Unregistered NPCs have no entry to notify; party
   heroes are excluded before the clear. This repairs indexed flags, not the
   other activation side effects listed in audit R2.
@@ -869,3 +870,35 @@ adapter has its own `xml2_xml1_turrets_restart_test` for same-zone/repeated-time
 resets and a generation-normalized read-only digest. These are offline checks;
 a live round is still needed for cross-peer behavior. No R2 blanket activation,
 R5 roster reconciliation, or R6-R10 state repair is included.
+
+
+AM follow-up to ZF-3P-E2p: the frame-1 activation set is
+`query_class & ~CWorld.flag16 & CWorld.flag15 & grid.window0(shared_camera_box)`.
+Deactivation uses `query_class & ~grid.window1(expanded_box) & flag16 & flag15`;
+smartent storage/removal uses `query_class & ~window1 & flag17`. Flag 15 is the
+visible predicate paired with SetActive by setInvisible; flag 17 is smartent
+lifecycle state. `query_class` is CWorld vt+0x40(global[0x718448]+0x24). The epoch preserves those authored object bits and refreshes
+their complete indexed record even on an NPC whose active object bit was
+already zero.
+
+Both persistent grid query windows (cell extents plus entity bitmaps) are now
+invalidated through installed grid vt+0x38 at the epoch, after the NPC pass.
+Retail `0x464330` only writes invalid extents and zeros that cache's bitmap.
+It changes no entity, cell membership, physical registration or gameplay state.
+The next `0x4646d0` stores the shared camera's bounds first and rebuilds each
+invalid cache from the grid. Old bounds cannot affect the decision.
+
+CEntityVisibility's routines do not retain a previous results list: they acquire
+and release temporary query/order records. `0x4ab670` calls the query reset before
+use; `0x4a9ac0` sets order count to zero before filling it. The policy vtable
+`0x68202c` calls `0x4dbb30`, which returns constant zero, so this path enumerates
+dense indices without a direction sort. The script scratch list `0x756138` is
+not read by visibility; setInvisible's surviving inputs here are indexed flags.
+
+The restart fixture runs actual retail `0x466bf0` against production 1024-slot
+World/Grid/Query owners. The old AL control reproduces peer A no activation and
+peer B `{116,11a,11f}`; AM activates `{116,117,119,11a,11d,11f,120}` on both, in
+the same order, with equal spatial caches/indexes. It also tests already-inactive
+objects with stale indexed flags 15/17, different prior spatial windows, stale
+query/order records and script scratch lists, and party/hidden/smartent preservation.
+No blanket SetActive(false) or smartent/invisibility rewrite is added.

@@ -313,6 +313,7 @@ namespace join_in_progress
 		void canonical_party_ground(const char* where, bool wanted); // follow-up 14 (residue): the party heroes' ground re-probed at frame 0
 		void canonical_party_motion(const char* where, bool wanted); // AE16 (residue): their motion time stamps and velocity at frame 0
 		void canonical_npc_move_intent(const char* where, bool wanted); // p060fix/AK (residue): every non-party AI actor's move goal and speeds cleared at frame 0
+		void canonical_visibility_queries(const char* where, bool wanted);
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -492,6 +493,7 @@ namespace join_in_progress
 				canonical_party_ground("the first shared frame", restart_reset_enabled); // follow-up 14: after the RNG epoch (the nudge draws count alike), before the rebuild
 				canonical_party_motion("the first shared frame", restart_reset_enabled); // AE16: after the ground re-probe (FindGround does not touch these), before the rebuild
 				canonical_npc_move_intent("the first shared frame", restart_reset_enabled); // p060fix/AK: every non-party AI actor re-arms its first update at the same cadence on every peer
+				canonical_visibility_queries("the first shared frame", restart_reset_enabled); // AM/ZF: discard both pre-epoch spatial query windows
 				canonical_party_seat_events("the first shared frame", restart_reset_enabled); // p060fix/AJ2: an AI hero's periodic event goes with its pending bit, before the rebuild
 				if (restart_reset_enabled) xml1_turrets::cohort_epoch(at<float>(reinterpret_cast<const void*>(game_static), game_time_at));
 				probe_events("frame 0 before rebuild"); // probe only

@@ -47,6 +47,8 @@ void* __fastcall fake_entity_of(const unsigned* handle,void*) { const unsigned s
 unsigned fake_world_vtable[0x48/4]{};alignas(16) unsigned char fake_world_object[0xc000]{};unsigned fake_world_walks=0;
 void* __fastcall fake_world_entity_at(void*,void*,unsigned index) { ++fake_world_walks;return (index==1||index==2)?fake_entities[index]:nullptr; }
 void* __cdecl fake_world_get() { return fake_world_object; }
+unsigned fake_visibility_grid_vtable[0x44/4]{};unsigned char fake_visibility_grid[0x10900]{};
+void* __cdecl fake_visibility_grid_get() { return fake_visibility_grid; }
 // Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
 unsigned smart_vtable[8]{};unsigned char smart_object[0x20]{};unsigned smart_getter_calls=0;
 int __fastcall fake_smart_count(void*,void*) { return 3; }
@@ -158,6 +160,7 @@ __declspec(naked) void attach_probe(void* parent,void* child) {
     }
 }
 #include "join_in_progress_audit.inl"
+#include "join_in_progress_visibility.inl"
 void run() {
     using namespace join_in_progress_rules;
     // Follow-up 12: every frame-0 epoch below now walks the party list (game vt+0x11c) and resolves its heroes; the
@@ -174,6 +177,9 @@ void run() {
     fake_world_vtable[world_flag_members_slot/4]=0x4c6950;
     fake_world_vtable[world_flag_record_slot/4]=0x4c6970;
     join_in_progress::world_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_world_get));
+    put(fake_visibility_grid,0,unsigned(reinterpret_cast<std::uintptr_t>(fake_visibility_grid_vtable)));
+    fake_visibility_grid_vtable[0x38/4]=0x464330; // actual retail bookkeeping-only cache clear
+    join_in_progress::visibility_grid_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_visibility_grid_get));
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
     std::memset(camera,0,camera_bytes);
     // The construction bridge: the (stubbed) constructor runs with this = the singleton and its stack argument, then
@@ -775,6 +781,7 @@ void run() {
         anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     }
     run_audit_probe();
+    run_visibility_pattern();
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party; initial and first-movement hero probe windows are bounded and rearm correctly\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot

@@ -1046,6 +1046,21 @@ bool notify_npc_flags(void* world, void* actor, std::uint32_t index)
 	fn<void(__thiscall*)(void*, std::uint32_t, const void*)>(at<std::uint32_t>(vt, world_flag_update_slot))(world, at<std::uint32_t>(actor, 0x1c), static_cast<std::uint8_t*>(actor) + entity_flags_at);
 	return changed;
 }
+// The two persistent spatial query windows used by 0x466bf0. Retail 0x466b10 also clears these through vt+0x38,
+// before its separate SetActive(false) loop. Call only the bookkeeping clear, never that loop or a grid reset.
+std::uint32_t visibility_grid_getter_at = entity_capacity_layout::native_grid_getter;
+void canonical_visibility_queries(const char* where, bool wanted)
+{
+	if (!wanted) return;
+	__try
+	{
+		void* grid = fn<getter_t>(visibility_grid_getter_at)();
+		const auto clear = fn<void*(__thiscall*)(void*, int)>(at<std::uint32_t>(at<void*>(grid, 0), visibility_cache_clear_slot));
+		clear(grid, 0); clear(grid, 1);
+		logger::write("join in progress: canonical restart - the two visibility query caches are invalid and empty at %s on every peer; the next shared camera box rebuilds them from the grid (no entity callback)", where);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:visibility-cache-fault", "join in progress: the visibility query caches could not be invalidated (read fault)"); }
+}
 void canonical_npc_move_intent(const char* where, bool wanted)
 {
 	if (!wanted) return;
@@ -1089,8 +1104,10 @@ void canonical_npc_move_intent(const char* where, bool wanted)
 			{
 				++flags; if (fn_ >= 0 && fn_ < int(sizeof fdetail) - 8) fn_ += std::snprintf(fdetail + fn_, sizeof fdetail - fn_, "%s%x", fn_ ? "," : "", i);
 				at<std::uint8_t>(actor, actor_entity_flags6_at) = std::uint8_t(at<std::uint8_t>(actor, actor_entity_flags6_at) & ~actor_fast_update_bit);
-				indexed += notify_npc_flags(world, actor, i) ? 1u : 0u;
 			}
+			// ZF: also repair a stale indexed record when this object's bit was already clear. The full native record
+			// notification keeps the authored visible/smartent predicates (15/17) indexed without rewriting those bits.
+			indexed += notify_npc_flags(world, actor, i) ? 1u : 0u;
 			if (d.had_follow) ++follows;
 			for (std::uint32_t off = 0; off < 2 * actor_vector_bytes; off += 4) at<std::uint32_t>(actor, actor_move_goal_at + off) = move_goal_none_bits; // +0x1d0..+0x1e7: goal, start
 			at<std::uint32_t>(actor, actor_move_speed_a_at) = 0;

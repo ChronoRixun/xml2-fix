@@ -585,7 +585,7 @@ target_include_directories(xml2_gns_transport_test PRIVATE src)
 # [Online] JoinInProgress (src/join_in_progress_core.hpp): the host's bring-in state machine, rule 26, retail guards.
 add_executable(xml2_join_in_progress_test test/join_in_progress_test.cpp)
 target_include_directories(xml2_join_in_progress_test PRIVATE src)
-add_executable(xml2_join_in_progress_boundary_test test/join_in_progress_boundary_test.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+add_executable(xml2_join_in_progress_boundary_test test/join_in_progress_boundary_test.cpp src/patch_transaction.cpp src/entity_world.cpp src/entity_grid.cpp src/entity_query.cpp tools/union_host/union_space.asm)
 target_include_directories(xml2_join_in_progress_boundary_test PRIVATE src)
 target_compile_options(xml2_join_in_progress_boundary_test PRIVATE /UNDEBUG /Gy)
 target_link_options(xml2_join_in_progress_boundary_test PRIVATE /OPT:REF /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)

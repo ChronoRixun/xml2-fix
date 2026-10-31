@@ -393,7 +393,11 @@ namespace join_in_progress_rules
 	// AM / R1: mirror 0x45fe40 via the installed world; never dispatch SetActive or any entity/grid callback.
 	constexpr std::uint32_t entity_flags_at = 4, entity_flag_bytes = 16, entity_registered_at = 0x6c, entity_registered_bit = 1,
 		world_flag_update_slot = 0x3c, world_flag_members_slot = 0x40, world_flag_record_slot = 0x44, entity_active_flag = 16;
-	inline constexpr std::array<guard, 151> guards{{
+	constexpr std::uint32_t visibility_cache_clear_slot = 0x38;
+	inline constexpr std::array<guard, 153> guards{{
+		{0x464330,"8b4424046bc03c03c132c988883d08010088883f08010033c90558080100b2ff8850e48850e6890889480489480889480c89481089481489481889481cc20400", "AM/ZF: full grid query-cache clear: only invalid extents and zero bitmap, no calls"},
+		{0x686c8c,"30434600", "AM/ZF: grid vt+0x38 is cache clear, not reset/remove"},
+
 		{0x45fe40,"f6416c017418a1308471008d510452518b491c8bd4890a8b108bc8ff523cc3", "AM: registered entity flag notification; only world vt+0x3c"},
 		{0x68f848,"90694c0050694c0070694c00", "AM: CWorld flag update, bitmap getter, cache getter slots"},
 		{0x4c6990,"8b44240453558bd9568d8b908500005725ff000000bf02000000894c24148bff8d4ffe8bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548ae08bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8d4fff8bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174288b5424148bc8c1f9058d148a8bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8bcf83e11fbe01000000d3e68b4c24188bd7c1fa058b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548a208bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8d4f018bd183e11fc1fa05be01000000d3e68b4c24188b2c918d14828b8c936c75000023ee85ce0f95c185ed0f95c23ad174298b5424148bc8c1f9058d548a408bc883e11fbe01000000d3e685ed8b0a74040bceeb04f7d623ce890a8b74241483c70481c6800000008d4ffe83f970897424140f8c75feffff8b5424186a10c1e004528d84186c75000050e87eaaf3ff83c40c5f5e5d5bc20800", "AM: CWorld flag update: only bitmaps and 16-byte cache copy"},
