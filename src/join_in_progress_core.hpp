@@ -307,6 +307,24 @@ namespace join_in_progress_core
 	// Follow-up 5: the dormant-entity respawn (CSmartEntMgr update) is held from an armed late restart's zone load to
 	// its frame-0 epoch on every peer; a lobby START (never armed) and [Dev] LateJoinRestartReset=0 keep retail.
 	inline bool smart_hold_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// p060fix/AJ: the first dormant-entity sweep after the first shared frame examines every record on every peer. The
+	// game update decides `all` by `distance2(eye, game+0x1f0) > 10000` and stores the eye into game+0x1f0 after each
+	// update; the zone-loaded finish puts the far marker (1e30, 0, 0) there so the first update after a load sweeps
+	// everything, and the one world tick the hold spans lands before that finish on some peers and after it on others
+	// (live-060zb ZB-3Pp: the joiner swept 115 records at frame 0, the host 40 per frame over frames 2..11). At the
+	// frame-0 release every peer puts the marker back: `anchor` is the 12-byte vector; returns true when it already
+	// held the marker (a peer whose held tick came before the finish).
+	inline constexpr std::uint32_t respawn_far_marker_bits = 0x7149f2ca; // igVec3f(1e30f, 0, 0), the constant 0x4685b0 pushes
+	inline bool respawn_sweep_marker(std::uint32_t* anchor)
+	{
+		const bool had = anchor[0] == respawn_far_marker_bits && anchor[1] == 0 && anchor[2] == 0;
+		anchor[0] = respawn_far_marker_bits; anchor[1] = 0; anchor[2] = 0;
+		return had;
+	}
+	// A second newcomer admitted at the same zone load rides the campaign transfer the first one started (the native
+	// sender images every participant and the 0x26 broadcast restarts the cohort once every image is in); only a
+	// sender that is not this late restart's refuses the image.
+	inline bool image_rides_running_transfer(bool sender_running, bool late_restart) { return sender_running && late_restart; }
 	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
 	// count mod slots, free count = the slots not held in the bitmap words, one word per 32 slots), so every peer
 	// allocates the same next slots even when a warm host still holds one (probe round: slot 31 held, bits

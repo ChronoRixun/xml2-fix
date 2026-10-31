@@ -293,6 +293,15 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t smart_update_call = 0x46f2df, smart_manager_getter = 0x4b76f0, smart_manager_vtable = 0x68e440,
 		smart_cursor_at = 0x4, smart_count_slot = 0x14;
 	inline constexpr std::array<unsigned char, 5> smart_update_original{0xe8,0x0c,0x84,0x04,0x00};
+	// p060fix/AJ (live-060zb ZB-3P/ZB-3Pp): the site's `all` argument is `distance2(camera eye, game+0x1f0) > 10000`
+	// (0x46f2b7..0x46f2d8, threshold [0x6872d0]) and the site stores the eye into game+0x1f0 after the update; the
+	// zone-loaded finish sets game+0x1f0 to the far marker (1e30, 0, 0) through game vt+0x28 = 0x4685b0 (0x4869cd) so the
+	// first update after a zone load examines EVERY record (plan: first 0, budget = count). The one world tick the hold
+	// spans lands before the finish on some peers (the marker survives: all = 1 at frame 0, 115 records in one call) and
+	// after it on others (the eye overwrites the marker: all = 0, 40 records per frame over frames 2..11) - a per-PC
+	// timing, not a role: the frame-0 epoch therefore puts the marker back on every peer before the first real update.
+	constexpr std::uint32_t game_respawn_anchor_at = 0x1f0, game_respawn_reset_slot = 0x28, game_respawn_reset = 0x4685b0,
+		respawn_far_marker = 0x7149f2ca, respawn_sweep_threshold = 0x6872d0, respawn_marker_call = 0x4869c4;
 	// The probe names every entity the zone spawns: the spawn-by-names entry 0x4612e0 (cdecl: definition, instance,
 	// position, orientation, flag) is entered by JUMP with its first six bytes displaced (push ecx/ebx/ebp/esi; xor esi,esi).
 	constexpr std::uint32_t spawn_entry = 0x4612e0, spawn_resume = 0x4612e6;
@@ -359,7 +368,11 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
 	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
 		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
-	inline constexpr std::array<guard, 136> guards{{
+	inline constexpr std::array<guard, 140> guards{{
+		{0x4685b0,"83ec0c566a006a008bf168caf249718d4c2410ff15c8f96700508d8ef0010000ff152cfa6700", "game vt+0x28 (0x4685b0): the far marker igVec3f(1e30, 0, 0) assigned into game+0x1f0 - the next dormant-entity update examines every record"},
+		{0x46f2b7,"8dbef0010000578d4c2430c644241400ff15ccf96700d81dd0726800dfe0f6c441", "game update: all = distance2(camera eye, game+0x1f0) > [0x6872d0] decided before the respawn site (the eye is stored into game+0x1f0 after it)"},
+		{0x6872d0,"00401c46", "the respawn sweep threshold 10000.0f"},
+		{0x4869c4,"e81773feff8b108bc8ff5228", "zone-loaded finish: game vt+0x28 sets the far marker after the party is bound (the first update after a zone load sweeps everything)"},
 		{0x429710,"83ec18568b74242085f60f8484000000", "CActor OnAttached override (vt+0xac): prologue, the child argument, its null test"},
 		{0x419f88,"8b10568bc8ff92ac0000008b078986bc000000", "set ground entity: parent->vt+0xac(child) then the +0xbc store"},
 		{0x470bb0,"83ec2c5356578bf16a008d4c2410e8ad", "FindGround entry (thiscall, no arguments; the downward ray from +0x20)"},

@@ -360,6 +360,9 @@ void run() {
     join_in_progress::hold_smart_update();
     assert(!join_in_progress::smart_hold && smart_bridge()==smart_object && smart_getter_calls==1); // not a late restart: the real getter
     join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    // p060fix/AJ: the frame-0 epochs above put the far marker into the mapped game+0x1f0; a held tick that reads it
+    // reports "after the finish". This section models the other side: a camera eye stored there before the hold.
+    { auto* anchor=reinterpret_cast<unsigned*>(game_static+game_respawn_anchor_at);anchor[0]=0x44f6d70fu;anchor[1]=0x44f3b1ecu;anchor[2]=0x43aa3853u; }
     join_in_progress::hold_smart_update();
     assert(join_in_progress::smart_hold);
     void* held=smart_bridge();
@@ -370,15 +373,38 @@ void run() {
     reinterpret_cast<void(__thiscall*)(void*,unsigned)>(held_vtable[1])(held,1); // the site's call: nothing happens
     put(smart_object,smart_cursor_at,7u);
     join_in_progress::late_restart_epoch_for_camera=false; // the anchor check above armed a re-anchor; not under test here
+    // p060fix/AJ: the held tick was logged with what game+0x1f0 held (the mapped static: a camera eye here, not the
+    // finish's far marker); the frame-0 epoch then puts the far marker (1e30, 0, 0) back so the first real update's
+    // `all` is 1 on every peer whatever the held tick stored.
+    {
+        bool held_line=false;for(const auto& l:observed_jip_logs) held_line|=l.find("the held dormant-entity update ran at native frame")!=std::string::npos && l.find("this tick came before the finish or another update ran since")!=std::string::npos;
+        assert(held_line && join_in_progress::held_tick_had_marker==false);
+    }
+    auto* respawn_anchor=reinterpret_cast<unsigned*>(game_static+game_respawn_anchor_at);
+    respawn_anchor[0]=0x44f6d70fu;respawn_anchor[1]=0x44f3b1ecu;respawn_anchor[2]=0x43aa3853u; // a camera eye the site stored over the marker
+    const auto sweep_logs_at=observed_jip_logs.size();const auto sweep_runs_before=join_in_progress::respawn_sweep_runs;
     *frame=0;join_in_progress::frame_gate_reseed(); // the frame-0 epoch releases the hold
     assert(!join_in_progress::smart_hold && *reinterpret_cast<unsigned*>(smart_object+smart_cursor_at)==0 && smart_getter_calls==2);
+    assert(respawn_anchor[0]==join_in_progress_core::respawn_far_marker_bits && respawn_anchor[1]==0 && respawn_anchor[2]==0 && join_in_progress::respawn_sweep_runs==sweep_runs_before+1);
+    {
+        bool sweep_line=false;for(std::size_t i=sweep_logs_at;i<observed_jip_logs.size();++i) sweep_line|=observed_jip_logs[i].find("the first dormant-entity sweep after the first shared frame examines every record on every peer (game+0x1f0 := the far marker 7149f2ca,0,0; was 44f6d70f,44f3b1ec,43aa3853 = a camera eye; held tick at frame")!=std::string::npos;
+        bool complete_line=false;for(std::size_t i=sweep_logs_at;i<observed_jip_logs.size();++i) complete_line|=observed_jip_logs[i].find("respawn release and full first sweep")!=std::string::npos;
+        assert(sweep_line && complete_line);
+    }
+    // a second epoch finds the marker already there (a peer whose held tick came before the finish): still written, reported as such
+    join_in_progress::canonical_respawn_sweep("fixture: marker already there",true);
+    assert(respawn_anchor[0]==join_in_progress_core::respawn_far_marker_bits && observed_jip_logs.back().find("was 7149f2ca,00000000,00000000 = the marker already")!=std::string::npos);
+    join_in_progress::canonical_respawn_sweep("fixture: reset off",false);assert(join_in_progress::respawn_sweep_runs==sweep_runs_before+2); // [Dev] LateJoinRestartReset=0: nothing
     assert(smart_bridge()==smart_object && smart_getter_calls==3);
     assert(!join_in_progress::late_restart && !join_in_progress::restart.armed); // follow-up 9: the epoch ended the late restart too
     join_in_progress::hold_smart_update();assert(!join_in_progress::smart_hold); // disarmed by the reseed: no second hold this epoch
     join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(!join_in_progress::smart_hold); // armed alone (no late restart): still none
     join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(join_in_progress::smart_hold); // a new late epoch holds again
+    assert(join_in_progress::smart_holds==0 && join_in_progress::held_tick_frame==0 && !join_in_progress::held_tick_had_marker); // p060fix/AJ: the held-tick record starts again per hold
+    respawn_anchor[0]=0x44f6d70fu;respawn_anchor[1]=0x44f3b1ecu;respawn_anchor[2]=0x43aa3853u;
     join_in_progress::release_smart_hold("fixture: session end");
     assert(!join_in_progress::smart_hold && smart_bridge()==smart_object);
+    assert(respawn_anchor[0]==0x44f6d70fu && respawn_anchor[1]==0x44f3b1ecu); // a session's end releases the hold without touching game+0x1f0
     join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     // The spawn-entry probe bridge, entered through a CALL from C++ (the same frame as the JMP at 0x4612e0: [esp] = the
     // caller's return, the five cdecl arguments above it); the displaced prologue is undone by the resume stub, so the

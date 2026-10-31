@@ -314,9 +314,23 @@ def spawn_mode(host, guest):
             for e in extra:
                 print(f'  only on the {who}: caller {e[0]} def {e[1]} inst {e[2]} at {e[3]} (frame {e[4]}, draws {e[5]})')
                 bad += 1
+        # p060fix/AJ (ZB-3Pp): the same entities spawned at DIFFERENT frames (the dormant sweep's `all` flag: 115 at
+        # frame 0 on the joiner, 40 per frame over frames 2..11 on the host) - the per-frame counts name it.
+        ha, ga = spawn_frames(a), spawn_frames(b)
+        if ha != ga:
+            print(f'  spawn frames differ: host {ha} / guest {ga}')
+            bad += 1
     if not bad:
-        print('every spawn agrees (phase, order, caller, names, position)')
+        print('every spawn agrees (phase, order, caller, names, position, frame)')
     return 1 if bad else 0
+
+
+def spawn_frames(entries, limit=12):
+    """{frame: count} over the first `limit` distinct frames with spawns, in frame order."""
+    counts = {}
+    for e in entries:
+        counts[e[4]] = counts.get(e[4], 0) + 1
+    return {f: counts[f] for f in sorted(counts)[:limit]}
 
 
 HEROLINE = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')

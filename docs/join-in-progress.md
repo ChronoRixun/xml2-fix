@@ -706,3 +706,37 @@ p060fix/AI (after integration 11) closes the two gaps the int11 review named:
   and the unit test ties the offsets to the E4 ledger rows. Live admissions with
   Actors=96 remain unverified (the other restart steps never depended on the
   pool layout).
+
+p060fix/AJ (live-060zb ZB-3P / ZB-3Pp, the first three-peer late join): host and
+lobby guest agreed and the late joiner self-dropped at frame 30 with 8-12 more
+synchronized draws, every hero transform and the camera equal. The probe showed
+the same 115 dormant records respawned on every peer but at different frames:
+the joiner swept all of them in the frame-0 tick, the two existing participants
+40 records per frame over frames 2..11 (the AE14 two-peer rounds had swept all
+114 at frame 0 on both peers). The game update decides the manager update's
+`all` flag by `distance2(camera eye, game+0x1f0) > 10000` (0x46f2b7..0x46f2d8,
+threshold [0x6872d0]) and stores the eye into game+0x1f0 after the update; the
+zone-loaded finish puts the far marker igVec3f(1e30, 0, 0) there through game
+vt+0x28 = 0x4685b0 (0x4869cd, right after the party is bound) so the first
+update after a zone load examines every record. The one world tick the hold
+spans lands before that finish on some peers (the marker survives: `all` = 1 at
+frame 0) and after it on others (the stand-in update is a no-op but the site
+still stores the eye over the marker: `all` = 0, a 40-record budget per frame) -
+a per-PC timing, not a role, so two peers can agree by luck and a third part.
+Now the stand-in getter logs the held tick once per hold (`the held
+dormant-entity update ran at native frame F on this PC with game+0x1f0 = ...
+(the zone-loaded finish's far marker: this tick came after the finish | a camera
+eye: ...)`) and the frame-0 epoch, right after the respawn release and before
+the first real update, puts the marker back on every peer (`the first
+dormant-entity sweep after the first shared frame examines every record on every
+peer (game+0x1f0 := the far marker 7149f2ca,0,0; was ...)`); from frame 1 on the
+flag follows the canonical camera alike everywhere. Party-size independent: it
+canonicalises one per-process variable at the epoch every peer runs, like the
+cursor := 0 beside it. Also: a second newcomer admitted at the same zone load
+used to be refused at `start_image` ("a campaign sender is already running")
+and dropped; it now rides the transfer the first one started (the native sender
+images every participant, the 0x26 broadcast restarts the cohort once every
+image is in). `scripts/jip_components.py --mode spawn` reports `spawn frames
+differ: host {...} / guest {...}` when the same entities spawn at different
+frames. Guards: 0x4685b0 (the setter), 0x46f2b7 (the compare), 0x6872d0 (the
+threshold), 0x4869c4 (the finish's call).

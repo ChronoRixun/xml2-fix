@@ -216,6 +216,14 @@ namespace join_in_progress
 			void* m = manager();
 			if (at<std::uint32_t>(m, manager_sender))
 			{
+				// p060fix/AJ: two newcomers admitted at the same zone load step to streaming in the same advance; the
+				// native sender the first one started images every participant and the 0x26 broadcast restarts the
+				// cohort once every image is in, so the second rides it (it was refused and dropped before).
+				if (join_in_progress_core::image_rides_running_transfer(true, late_restart))
+				{
+					logger::write("join in progress: player %d rides the running cohort transfer (one live campaign image serves every newcomer admitted at this zone load)", seat.index);
+					return true;
+				}
 				logger::write("join in progress: a campaign sender is already running; cohort restart refused");
 				return false;
 			}
@@ -291,6 +299,7 @@ namespace join_in_progress
 		void __cdecl deferred_campaign_start(void*);
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
+		void canonical_respawn_sweep(const char* where, bool wanted); // p060fix/AJ (residue): game+0x1f0 back to the finish's far marker at frame 0
 		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); void hero_lines_arm(const char* why, unsigned frame); extern bool hero_move_rearmed; extern bool hero_last_valid[4]; // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
 		void canonical_event_queue(const char* where); void canonical_event_queue(const char* where, bool wanted); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue); follow-up 9: the frame-0 epoch forces the rebuild
 		extern unsigned event_rebuilds;
@@ -472,13 +481,14 @@ namespace join_in_progress
 					unsigned(frame), count, seed, native_seed);
 				reanchor_camera_at_frame0(); // follow-up 14: the derived camera spans back to the pristine image first, then vt+0x74 from the party anchor
 				release_smart_hold("the first shared frame");
+				canonical_respawn_sweep("the first shared frame", restart_reset_enabled); // p060fix/AJ: the first real update sweeps every record on every peer
 				canonical_party_moved_state("the first shared frame", restart_reset_enabled && moved_canonical_enabled); // follow-up 12: before the rebuild, which drops the party heroes' queued moved events
 				canonical_party_ground("the first shared frame", restart_reset_enabled); // follow-up 14: after the RNG epoch (the nudge draws count alike), before the rebuild
 				canonical_party_motion("the first shared frame", restart_reset_enabled); // AE16: after the ground re-probe (FindGround does not touch these), before the rebuild
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
-				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release, moved state, ground re-probe, motion fields, queue rebuild %u); the late restart ends here", event_rebuilds);
+				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
 				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
 				snapshot("frame 0 epoch");
