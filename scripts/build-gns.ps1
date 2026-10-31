@@ -11,25 +11,34 @@
   abseil DLL to ship next to it.
 
   The CI release job (.github/workflows/build.yml) runs this, caching <OutDir> under a key made of this script, packaging/gns/
-  and the MSVC toolset. Run it by hand the same way:  pwsh scripts/build-gns.ps1 -OutDir C:\gns -WorkDir C:\gns-work
-  then:  cmake -S . -B build -A Win32 -DXML2_FIX_GNS_ROOT=C:/gns
+  and the MSVC toolset. For a build by hand follow docs/BUILDING.md: it says where to put OutDir and WorkDir so that no local
+  path ends up in dinput.dll, which CMake options the Fix then needs, and how to check the result. -Offline rebuilds from
+  pinned local inputs staged under WorkDir (also docs/BUILDING.md); missing inputs fail, and it never fetches or bootstraps.
+
+  By default the build leaves a desktop usable: one job (-Jobs 1), Idle priority, serial MSBuild, and it stops if another
+  build (MSBuild, cl, link, ninja) is running. On a dedicated machine pass e.g. -Jobs 4 -Priority Normal. Under GitHub
+  Actions (GITHUB_ACTIONS=true) the other-build check is skipped: the runner belongs to the job.
 #>
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory)] [string] $OutDir,
 	[string] $WorkDir = (Join-Path ([IO.Path]::GetTempPath()) 'xml2-fix-gns-work'),
-	[int] $Jobs = [Math]::Max(2, [Environment]::ProcessorCount)
+	[ValidateRange(1, 256)] [int] $Jobs = 1,
+	[ValidateSet('Idle', 'BelowNormal', 'Normal')] [string] $Priority = 'Idle',
+	[switch] $Offline
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+(Get-Process -Id $PID).PriorityClass = $Priority                  # vcpkg, CMake and the compilers inherit it
+$env:MSBUILDDISABLENODEREUSE = '1'
 
 # ---- pins ---------------------------------------------------------------------------------------------------------------
 $GnsTag = 'v1.6.1'
 $GnsCommit = 'd534c19aa760df3fb75fd20db13ba1932b8a5463'
 $VjsonCommit = '2533ddd055e2cd61d44a5e6b8743acb9a33bfd5c'          # GNS's only submodule this build needs (src/external/vjson)
 $VcpkgCommit = '3cd21e48a75f67acfef289da52893ce79144aaa1'          # microsoft/vcpkg 2026-09-26: fixes every port version below
-$Triplet = 'x86-windows-static-release'                            # = x86-windows-static without the Debug half of every port
-$HostTriplet = 'x64-windows-release'                               # protoc, which the build runs, is built for the host
+$Triplet = 'x86-windows-static-trimmed'                            # distinct ABI: never reuse untrimmed target libraries
+$HostTriplet = if ($Offline) { 'x64-windows' } else { 'x64-windows-release' } # reuse the staged host protoc offline
 $ExpectedPorts = [ordered]@{ 'protobuf' = '6.33.4#2'; 'abseil' = '20260107.1#3'; 'utf8-range' = '6.33.4' }
 # ---------------------------------------------------------------------------------------------------------------------------
 
@@ -50,6 +59,11 @@ function Invoke-Checked { # $args, not parameters: "-A Win32" and "-disableMetri
 	if ($LASTEXITCODE -ne 0) { throw "$exe failed ($LASTEXITCODE)" }
 }
 
+function Assert-NoOtherBuild { # a shared-desktop guard; a hosted CI runner runs nothing but this job
+	if ($env:GITHUB_ACTIONS -eq 'true') { return }
+	if (Get-Process MSBuild,cl,link,ninja -ErrorAction SilentlyContinue) { throw 'another build is running; wait before retrying' }
+}
+
 # ---- toolchain: the newest Visual Studio with the x86/x64 C++ tools, for vcpkg and for CMake alike -----------------------
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (-not (Test-Path $vswhere)) { throw 'vswhere.exe not found: Visual Studio with the C++ tools is required' }
@@ -65,32 +79,48 @@ $env:VCPKG_MAX_CONCURRENCY = "$Jobs"
 
 # ---- vcpkg at the pinned commit -------------------------------------------------------------------------------------------
 $vcpkgDir = Join-Path $WorkDir 'vcpkg'
-if (-not (Test-Path (Join-Path $vcpkgDir '.git'))) {
-	New-Item -ItemType Directory -Force $vcpkgDir | Out-Null
-	Invoke-Checked git -C $vcpkgDir init -q
-	Invoke-Checked git -C $vcpkgDir remote add origin https://github.com/microsoft/vcpkg.git
+if ($Offline) {
+	foreach ($need in '.git', 'vcpkg.exe', 'downloads', 'installed') {
+		if (-not (Test-Path (Join-Path $vcpkgDir $need))) { throw "offline input missing: $vcpkgDir/$need" }
+	}
+} else {
+	if (-not (Test-Path (Join-Path $vcpkgDir '.git'))) {
+		New-Item -ItemType Directory -Force $vcpkgDir | Out-Null
+		Invoke-Checked git -C $vcpkgDir init -q
+		Invoke-Checked git -C $vcpkgDir remote add origin https://github.com/microsoft/vcpkg.git
+	}
+	Invoke-Checked git -C $vcpkgDir fetch -q --depth 1 origin $VcpkgCommit
+	Invoke-Checked git -C $vcpkgDir -c advice.detachedHead=false checkout -q -f FETCH_HEAD
+	if (-not (Test-Path (Join-Path $vcpkgDir 'vcpkg.exe'))) { Invoke-Checked (Join-Path $vcpkgDir 'bootstrap-vcpkg.bat') -disableMetrics }
 }
-Invoke-Checked git -C $vcpkgDir fetch -q --depth 1 origin $VcpkgCommit
-Invoke-Checked git -C $vcpkgDir -c advice.detachedHead=false checkout -q -f FETCH_HEAD
 if ((& git -C $vcpkgDir rev-parse HEAD) -ne $VcpkgCommit) { throw 'vcpkg is not at the pinned commit' }
-if (-not (Test-Path (Join-Path $vcpkgDir 'vcpkg.exe'))) { Invoke-Checked (Join-Path $vcpkgDir 'bootstrap-vcpkg.bat') -disableMetrics }
 $vcpkg = Join-Path $vcpkgDir 'vcpkg.exe'
 
 $tripletDir = Join-Path $WorkDir 'triplets'
 New-Item -ItemType Directory -Force $tripletDir | Out-Null
-Set-Content -Encoding ascii (Join-Path $tripletDir "$Triplet.cmake") @'
+$trimPrefix = $WorkDir.Replace('\', '/') + '/'
+Set-Content -Encoding ascii (Join-Path $tripletDir "$Triplet.cmake") @"
 set(VCPKG_TARGET_ARCHITECTURE x86)
 set(VCPKG_CRT_LINKAGE static)
 set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_BUILD_TYPE release)
-'@
+set(VCPKG_C_FLAGS "/d1trimfile:$trimPrefix")
+set(VCPKG_CXX_FLAGS "/d1trimfile:$trimPrefix")
+"@
 Set-Content -Encoding ascii (Join-Path $tripletDir "$HostTriplet.cmake") @'
 set(VCPKG_TARGET_ARCHITECTURE x64)
 set(VCPKG_CRT_LINKAGE dynamic)
 set(VCPKG_LIBRARY_LINKAGE dynamic)
 set(VCPKG_BUILD_TYPE release)
 '@
-Invoke-Checked $vcpkg install "protobuf:$Triplet" "--triplet=$Triplet" "--host-triplet=$HostTriplet" "--overlay-triplets=$tripletDir" --clean-after-build
+Assert-NoOtherBuild
+$installArgs = @('install', "protobuf:$Triplet", "--triplet=$Triplet", "--host-triplet=$HostTriplet", "--overlay-triplets=$tripletDir", '--binarysource=clear')
+if ($Offline) {
+	$installArgs += '--no-downloads'
+	$env:VCPKG_BINARY_SOURCES = 'clear'
+	$env:VCPKG_ASSET_SOURCES = 'clear;x-block-origin'
+}
+Invoke-Checked $vcpkg @installArgs
 
 # the ports must be the versions the package was proven with
 $installedJson = & $vcpkg list 2>&1 | Out-String
@@ -105,13 +135,27 @@ $vcpkgInstalled = Join-Path $vcpkgDir "installed/$Triplet"
 
 # ---- GameNetworkingSockets at the pinned commit, patched ------------------------------------------------------------------
 $gnsSrc = Join-Path $WorkDir 'gns-src'
-if (Test-Path $gnsSrc) { Remove-Item -Recurse -Force $gnsSrc }
-Invoke-Checked git -c core.autocrlf=false -c advice.detachedHead=false clone -q --depth 1 --branch $GnsTag https://github.com/ValveSoftware/GameNetworkingSockets.git $gnsSrc
+if ($Offline) {
+	if (-not (Test-Path (Join-Path $gnsSrc '.git'))) { throw "offline input missing: $gnsSrc" }
+} else {
+	if (Test-Path $gnsSrc) { throw "use a fresh WorkDir: $gnsSrc exists" }
+	Invoke-Checked git -c core.autocrlf=false -c advice.detachedHead=false clone -q --depth 1 --branch $GnsTag https://github.com/ValveSoftware/GameNetworkingSockets.git $gnsSrc
+	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false submodule update -q --init --depth 1 src/external/vjson
+}
 if ((& git -C $gnsSrc rev-parse 'HEAD^{commit}') -ne $GnsCommit) { throw "GameNetworkingSockets $GnsTag is not commit $GnsCommit" }
-Invoke-Checked git -C $gnsSrc -c core.autocrlf=false submodule update -q --init --depth 1 src/external/vjson
 if ((& git -C (Join-Path $gnsSrc 'src/external/vjson') rev-parse HEAD) -ne $VjsonCommit) { throw 'vjson is not the pinned commit' }
-Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply --check (Join-Path $PackagingDir 'gns-p2p-require-signed-cert.patch')
-Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply (Join-Path $PackagingDir 'gns-p2p-require-signed-cert.patch')
+$certPatch = Join-Path $PackagingDir 'gns-p2p-require-signed-cert.patch'
+$alreadyPatched = $false
+if ($Offline) {
+	& git -C $gnsSrc -c core.autocrlf=false apply --reverse --check $certPatch 2>$null
+	$alreadyPatched = $LASTEXITCODE -eq 0
+}
+if ($alreadyPatched) {
+	Write-Host 'signed-cert patch already applied (reverse-check passed)'
+} else {
+	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply --check $certPatch
+	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply $certPatch
+}
 
 # the project CA, compiled into the library (STEAMNETWORKINGSOCKETS_HARDCODED_ROOT_CA_KEY); the private key is never in a repo
 $caPin = (Get-Content (Join-Path $PackagingDir 'ca-pin.txt') -TotalCount 1).Trim()
@@ -121,16 +165,22 @@ Set-Content -Encoding ascii $caHeader "#define STEAMNETWORKINGSOCKETS_HARDCODED_
 
 $gnsBuild = Join-Path $gnsSrc 'build'
 $vcpkgToolchain = (Join-Path $vcpkgDir 'scripts/buildsystems/vcpkg.cmake').Replace('\', '/')
+Assert-NoOtherBuild
 Invoke-Checked cmake -S $gnsSrc -B $gnsBuild -G $generator -A Win32 `
 	"-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain" "-DVCPKG_TARGET_TRIPLET=$Triplet" "-DVCPKG_HOST_TRIPLET=$HostTriplet" `
 	"-DVCPKG_OVERLAY_TRIPLETS=$($tripletDir.Replace('\', '/'))" -DVCPKG_MANIFEST_MODE=OFF `
 	-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DUSE_CRYPTO=BCrypt -DUSE_CRYPTO25519=Reference -DENABLE_ICE=ON `
 	-DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF `
-	-DProtobuf_USE_STATIC_LIBS=ON "-DCMAKE_CXX_FLAGS=/FI$caHeader" "-DCMAKE_C_FLAGS=/FI$caHeader"
-Invoke-Checked cmake --build $gnsBuild --config Release --target GameNetworkingSockets_s --parallel $Jobs
+	-DProtobuf_USE_STATIC_LIBS=ON "-DCMAKE_CXX_FLAGS=/FI$caHeader /d1trimfile:$trimPrefix" "-DCMAKE_C_FLAGS=/FI$caHeader /d1trimfile:$trimPrefix"
+Assert-NoOtherBuild
+# -Jobs 1: fully serial. More jobs: parallel projects plus parallel cl.exe runs, one shared limit of $Jobs compilers.
+$msbuildArgs = if ($Jobs -eq 1) { '/m:1', '/nr:false', '/p:BuildInParallel=false', '/p:UseMultiToolTask=false', '/p:CL_MPCount=1' } else {
+	"/m:$Jobs", '/nr:false', '/p:UseMultiToolTask=true', '/p:EnforceProcessCountAcrossBuilds=true', "/p:CL_MPCount=$Jobs"
+}
+Invoke-Checked cmake --build $gnsBuild --config Release --target GameNetworkingSockets_s '--' @msbuildArgs
 
 # ---- package --------------------------------------------------------------------------------------------------------------
-if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
+if (Test-Path $OutDir) { throw "use a fresh OutDir: $OutDir exists" }
 New-Item -ItemType Directory -Force (Join-Path $OutDir 'lib') | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $OutDir 'include') | Out-Null
 Copy-Item -Recurse (Join-Path $gnsSrc 'include/steam') (Join-Path $OutDir 'include/steam')
@@ -171,6 +221,7 @@ $manifest = @(
 	"vcpkg $VcpkgCommit, triplet $Triplet (host $HostTriplet)"
 	($ExpectedPorts.Keys | ForEach-Object { "port $_ $($ExpectedPorts[$_])" })
 	"toolchain $generator, MSVC $toolsetVersion"
+	'path mapping: /d1trimfile:WorkDir/ in GNS and every target dependency'
 	"CA pin $caPin"
 	''
 	'SHA-256 of the libraries:'
