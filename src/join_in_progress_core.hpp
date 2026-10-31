@@ -177,6 +177,13 @@ namespace join_in_progress_core
 			if (!active || !started || !saw_loading || !ready || controls_resumed) return false;
 			controls_resumed = true; return true;
 		}
+		// Follow-up 9: an existing member resumes its native controls at the zone START of a canonical restart (before
+		// the first world tick, the state a newcomer is already in), not at the pump's later poll; once per epoch.
+		bool resume_controls_early()
+		{
+			if (!active || !started || controls_resumed) return false;
+			controls_resumed = true; return true;
+		}
 		bool observe(bool loading, bool holding)
 		{
 			if (!active || !started) return false;
@@ -332,15 +339,27 @@ namespace join_in_progress_core
 		std::uint8_t payload[16]{};                        // the record's +8..+23
 		bool token = false, live = false;                  // a positive entity token; resolved to an entity
 	};
+	// Follow-up 9: the event object is either a member of its owner (the actor update at +0x320 and its siblings:
+	// its OFFSET is the process-independent name) or a static kind object in the executable's .data (round 6: the
+	// "moved" notification 0x6d7c5c, the table at 0x6d55a4..; an absolute address, identical in every process because
+	// XMen2.exe is never relocated). `event - owner` for a static kind is a per-process number (the actor pool moves
+	// between boots), so the key is the offset inside the owner, else the absolute address; every offset (< 0x2000)
+	// sorts before every address (>= 0x400000).
+	constexpr std::uint32_t event_member_span = 0x2000;
+	inline std::uint32_t event_kind_key(const event_entry& e)
+	{
+		const std::uint32_t offset = e.event - e.owner;
+		return (e.owner && offset < event_member_span) ? offset : e.event;
+	}
 	// Canonical order: time, then the owner's DENSE index (never its generation: the warm host's generations are
-	// higher than a cold joiner's for the same slots), then the event's offset inside its owner, then the payload
-	// bytes, then the raw handle (non-token owners).
+	// higher than a cold joiner's for the same slots), then the event's kind key (offset inside its owner, or the
+	// static kind's address), then the payload bytes, then the raw handle (non-token owners).
 	inline bool canonical_event_less(const event_entry& a, const event_entry& b, std::uint32_t index_mask)
 	{
 		if (a.time != b.time) return a.time < b.time;
 		const std::uint32_t ia = a.token ? (a.handle & index_mask) : 0xffffffffu, ib = b.token ? (b.handle & index_mask) : 0xffffffffu;
 		if (ia != ib) return ia < ib;
-		const std::uint32_t oa = a.owner ? a.event - a.owner : a.event, ob = b.owner ? b.event - b.owner : b.event;
+		const std::uint32_t oa = event_kind_key(a), ob = event_kind_key(b);
 		if (oa != ob) return oa < ob;
 		const int c = std::memcmp(a.payload, b.payload, sizeof a.payload);
 		if (c) return c < 0;
@@ -351,6 +370,12 @@ namespace join_in_progress_core
 	inline bool event_entry_dropped(const event_entry& e) { return e.token && !e.live; }
 	inline bool positive_entity_token(std::uint32_t handle) { return handle != 0 && (handle >> 31) == 0; }
 	inline bool event_queue_rebuild_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// Follow-up 9 (round 6): `cohort synchronized` landed BEFORE frame 0 on the joiner (1.3 s / 245 ms earlier) and
+	// AFTER it on the host, and it cleared `late_restart`, so the joiner's frame-0 epoch skipped every step gated on
+	// it (the FPU line was host-only); and should_reseed() consumed `armed` before the queue rebuild asked for it, so
+	// the frame-0 rebuild never ran on either peer (rebuilds=2 at the frame-0 epoch). While a frame-0 epoch is still
+	// armed, `cohort synchronized` keeps the flag: the epoch itself ends the late restart on every peer.
+	inline bool cohort_sync_clears_late_restart(bool armed) { return !armed; }
 	// Follow-up 8: the manager's pump slot composes with the one module that hooks it (xml1_turrets): retail, or that
 	// module's installed hook (never 0, never anything else).
 	inline bool event_pump_slot_accepted(std::uint32_t slot, std::uint32_t native, std::uint32_t module_hook) { return slot == native || (module_hook != 0 && slot == module_hook); }

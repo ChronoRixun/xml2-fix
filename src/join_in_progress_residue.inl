@@ -94,9 +94,17 @@ void snapshot(const char* where)
 			pause ? probe_at<std::uint8_t>(pause + 0x64) : 0, pause ? probe_at<std::uint8_t>(pause + 0x6c) : 0, zone, probe_at<std::uint8_t>(zones_static + zones_loading_at),
 			probe_at<std::uint32_t>(0x78a9e4), probe_at<std::uint32_t>(0x78a9f8), probe_at<std::uint32_t>(0x78aa04), probe_at<std::uint32_t>(0x78a9e8),
 			smart_count, smart_cursor, unsigned(smart_hold), unsigned(x87_control_word()), unsigned(_mm_getcsr()));
-		for (int k = 0; k < 4; ++k)
+		// Follow-up 9: the party list through game vt+0x11c (what the anchor and the checksum walk); round 6's lines
+		// read a stale table (every hero `actor:none`), so the frame-0 hero positions were never logged.
+		alignas(16) std::uint32_t party[16]{}; std::uint32_t party_count = 0;
+		if (void* game = fn<getter_t>(game_getter)())
 		{
-			const std::uint32_t handle = probe_at<std::uint32_t>(game_static + game_party + 4 * k);
+			fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+			party_count = party[party_list_count_at / 4];
+		}
+		for (std::uint32_t k = 0; k < 4 && k < party_count; ++k)
+		{
+			const std::uint32_t handle = party[k];
 			if (!handle) continue;
 			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle));
 			if (!actor) { logger::write("jip snapshot: where=%s hero[%d]=handle:%08x actor:none", where, k, handle); continue; }
@@ -246,9 +254,30 @@ void __cdecl zone_load_entry_notice()
 	canonical_event_queue("the zone load");
 	if (late_restart && restart.armed) { snapshot("zone load epoch"); probe_events("zone load epoch"); }
 }
+// Follow-up 9 (round 6): the one role-asymmetric thing between the zone start and frame 0 was the HOST's native
+// controls, disabled by its old-world teardown and resumed only when the pump's poll saw the loading flags clear
+// (35.883, after the zone start 35.852 and the first world tick); a newcomer's controls were enabled at its native
+// add and stayed so. In that tick one hero settled on the joiner only (the camera target's y differed by 0.658 at
+// frame 0, every eye/target copy with it; E2: the Storm touch nudge; the joiner's one extra timed event is the
+// "moved" notification 0x6d7c5c of a hero that changed position). The existing member now resumes its controls at
+// the zone start, before anything of the finish runs, the state the newcomer is already in.
+void resume_existing_controls_at_zone_start()
+{
+	if (!restart_reset_enabled || !late_restart || !restart.armed || !existing_cohort_member || !epoch.resume_controls_early()) return;
+	__try
+	{
+		fn<init_t>(controller_resume)(fn<getter_t>(controllers_getter)());
+		logger::write("join in progress: canonical restart - the existing participant's native controls are resumed at the zone start, before the first world tick, as a newcomer's already are");
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:early-resume-fault", "join in progress: the zone-start controls resume faulted - the pump's later resume stands");
+	}
+}
 void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
+	resume_existing_controls_at_zone_start();
 	segment_reseed("the zone start (before the players are placed)");
 	hold_smart_update();
 	if (late_restart && restart.armed) probe_events("zone start before rebuild");
@@ -512,6 +541,11 @@ bool read_event_entries(std::uint8_t* body, std::vector<join_in_progress_core::e
 	}
 	return true;
 }
+// Follow-up 9: EVERY entry (round 6's 24-entry head could not show the joiner's extra event at 47 of 47), 16 per
+// line (`part=k/n`), each `time:index:handle:kind:payload` where kind is the event's offset inside its owner or the
+// static kind object's address (process-independent: round 6's 4th field was `event - owner`, a per-process number
+// for every static kind, so every pair DIFFERED), and the record's 16 payload bytes.
+constexpr unsigned probe_event_limit = 256, probe_events_per_line = 16;
 void probe_events_body(const char* where)
 {
 	{
@@ -520,15 +554,22 @@ void probe_events_body(const char* where)
 		auto* body = object + event_body_at;
 		std::vector<join_in_progress_core::event_entry> entries; unsigned dead = 0, stale = 0;
 		const bool ok = read_event_entries(body, entries, dead, stale);
-		char line[900]; int n = std::snprintf(line, sizeof line, "jip events: where=%s heap=%u records=%u ring=r:%u/w:%u/n:%u live=%u dead=%u stale=%u rebuilds=%u head=",
-			where, at<std::uint32_t>(body, event_heap_count_at), at<std::uint32_t>(body, event_record_count_at), at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at),
-			ok ? unsigned(entries.size()) - dead : 0, dead, stale, event_rebuilds);
-		for (std::size_t i = 0; ok && i < entries.size() && i < 24 && n > 0 && n < int(sizeof line) - 40; ++i)
+		const unsigned total = ok ? unsigned(entries.size()) : 0, shown = total < probe_event_limit ? total : probe_event_limit;
+		const unsigned parts = shown ? (shown + probe_events_per_line - 1) / probe_events_per_line : 1;
+		for (unsigned part = 0; part < parts; ++part)
 		{
-			const auto& e = entries[i]; std::uint32_t t; std::memcpy(&t, &e.time, 4);
-			n += std::snprintf(line + n, sizeof line - n, "%s%08x:%u:%08x:%x", i ? "," : "", t, e.index, e.handle, e.owner ? e.event - e.owner : 0xfffu);
+			char line[1500]; int n = std::snprintf(line, sizeof line, "jip events: where=%s heap=%u records=%u ring=r:%u/w:%u/n:%u live=%u dead=%u stale=%u rebuilds=%u part=%u/%u head=",
+				where, at<std::uint32_t>(body, event_heap_count_at), at<std::uint32_t>(body, event_record_count_at), at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at),
+				ok ? unsigned(entries.size()) - dead : 0, dead, stale, event_rebuilds, part + 1, parts);
+			const unsigned first = part * probe_events_per_line, last = (first + probe_events_per_line < shown) ? first + probe_events_per_line : shown;
+			for (unsigned i = first; i < last && n > 0 && n < int(sizeof line) - 80; ++i)
+			{
+				const auto& e = entries[i]; std::uint32_t t; std::memcpy(&t, &e.time, 4);
+				char payload[33]; for (unsigned k = 0; k < 16; ++k) std::snprintf(payload + 2 * k, 3, "%02x", e.payload[k]);
+				n += std::snprintf(line + n, sizeof line - n, "%s%08x:%u:%08x:%x:%s", i > first ? "," : "", t, e.index, e.handle, join_in_progress_core::event_kind_key(e), payload);
+			}
+			logger::write("%s", line);
 		}
-		logger::write("%s", line);
 	}
 }
 // The bodies hold std::vector (C2712: no __try beside objects that unwind); the wrappers guard them.
@@ -581,24 +622,25 @@ void canonical_event_queue_body(const char* where)
 			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at), mask, event_rebuilds);
 	}
 }
-void canonical_event_queue(const char* where)
+void canonical_event_queue(const char* where, bool wanted)
 {
-	if (!join_in_progress_core::event_queue_rebuild_wanted(restart_reset_enabled, late_restart, restart.armed)) return;
+	if (!wanted) return;
 	__try { canonical_event_queue_body(where); }
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
 		logger::write_once("jip:events-rebuild-fault", "join in progress: the timed-event queue rebuild faulted - the queue keeps its order");
 	}
 }
+void canonical_event_queue(const char* where) { canonical_event_queue(where, join_in_progress_core::event_queue_rebuild_wanted(restart_reset_enabled, late_restart, restart.armed)); }
 // The game thread's x87 control word and MXCSR: logged by the probe, and at the frame-0 epoch set to the values the
 // retail process runs with after its own init (the CRT's _PC_53 word 0x027f at 0x6729f6; MXCSR 0x1f80, Windows'
 // default, which nothing in XMen2.exe or the Alchemy DLLs loads - scripts/fpu_sites.py) should either have drifted.
 std::uint16_t x87_control_word() { std::uint16_t cw = 0; __asm { fnstcw cw } return cw; }
 void x87_control_word_set(std::uint16_t cw) { __asm { fldcw cw } }
 unsigned fpu_corrections = 0;
-void fpu_canonical(const char* where)
+void fpu_canonical(const char* where, bool wanted)
 {
-	if (!restart_reset_enabled || !late_restart) return;
+	if (!wanted) return;
 	const auto cw = x87_control_word(); const auto csr = _mm_getcsr();
 	if (cw == game_x87_control_word && csr == game_mxcsr)
 	{
@@ -608,6 +650,7 @@ void fpu_canonical(const char* where)
 	x87_control_word_set(game_x87_control_word); _mm_setcsr(game_mxcsr); ++fpu_corrections;
 	logger::write("join in progress: canonical restart - FPU control state at %s CORRECTED to the game's (x87 %04x -> %04x, mxcsr %08x -> %08x; correction %u)", where, cw, game_x87_control_word, csr, game_mxcsr, fpu_corrections);
 }
+void fpu_canonical(const char* where) { fpu_canonical(where, restart_reset_enabled && late_restart); }
 // The whole camera object as dwords (the frame-0 epoch, frames 1 and 2) so the next pair of logs names the first
 // field that parts (round 4: equal yaw/history/eye/target at frame 0, 22 ULPs apart in eye/target y at frame 1).
 void probe_camera_dump(unsigned frame)

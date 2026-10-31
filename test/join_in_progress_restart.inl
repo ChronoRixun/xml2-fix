@@ -281,8 +281,10 @@ void run() {
     *frame=0;join_in_progress::frame_gate_reseed(); // the frame-0 epoch releases the hold
     assert(!join_in_progress::smart_hold && *reinterpret_cast<unsigned*>(smart_object+smart_cursor_at)==0 && smart_getter_calls==2);
     assert(smart_bridge()==smart_object && smart_getter_calls==3);
+    assert(!join_in_progress::late_restart && !join_in_progress::restart.armed); // follow-up 9: the epoch ended the late restart too
     join_in_progress::hold_smart_update();assert(!join_in_progress::smart_hold); // disarmed by the reseed: no second hold this epoch
-    join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(join_in_progress::smart_hold);
+    join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(!join_in_progress::smart_hold); // armed alone (no late restart): still none
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(join_in_progress::smart_hold); // a new late epoch holds again
     join_in_progress::release_smart_hold("fixture: session end");
     assert(!join_in_progress::smart_hold && smart_bridge()==smart_object);
     join_in_progress::late_restart=false;join_in_progress::restart.disarm();
@@ -375,6 +377,29 @@ void run() {
             reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_heap_pop))(heap);
         }
         assert(seen==0x3f && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==0);
+        // Follow-up 9 (round 6): the frame-0 epoch itself rebuilds the queue LAST (it never did: `armed` was consumed by
+        // should_reseed before the rebuild asked for it) and ends the late restart on this peer; `cohort synchronized`
+        // keeps the flag while the epoch is still armed. Entered through the production frame_gate_reseed with the
+        // fixture-owned manager image: 3 entries (one dead owner) -> 2 kept, rebuilds 3 -> 4, seed reset, flags cleared.
+        {
+            reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_pool_init))(body);
+            std::memset(body+event_used_bitmap_at,0,0x24*4);std::memset(body+event_alloc_bitmap_at,0,0x24*4);
+            *reinterpret_cast<unsigned*>(body+event_record_count_at)=0;*reinterpret_cast<unsigned*>(body+event_heap_count_at)=0;
+            add(2.0f,0x3802,e2+0x320,0);add(2.0f,0x35ce,0x12345678,0);add(2.0f,0x1801,0x6d7c5c,0);
+            auto* frame9=reinterpret_cast<unsigned short*>(native_frame);auto* seed9=reinterpret_cast<unsigned*>(rng_seed);auto* count9=reinterpret_cast<unsigned*>(rng_count);
+            join_in_progress::late_restart=true;join_in_progress::restart.arm();*frame9=0;*seed9=0x33333333u;*count9=11;
+            assert(!join_in_progress_core::cohort_sync_clears_late_restart(join_in_progress::restart.armed)); // a cohort sync now would keep the flag
+            join_in_progress::frame_gate_reseed();
+            assert(join_in_progress::event_rebuilds==4 && join_in_progress::event_last_live==2 && join_in_progress::event_last_dead==1);
+            assert(*reinterpret_cast<unsigned*>(body+event_heap_count_at)==2 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==2);
+            assert(*seed9==native_seed && *count9==0 && !join_in_progress::restart.armed && !join_in_progress::late_restart); // the epoch ended the late restart
+            assert(join_in_progress_core::cohort_sync_clears_late_restart(join_in_progress::restart.armed)); // and a later cohort sync clears as before
+            unsigned char* pair0=body+event_heap_at;unsigned i0,i1;std::memcpy(&i0,pair0+4,4);std::memcpy(&i1,pair0+12,4);
+            unsigned h0,h1,k0,k1;std::memcpy(&h0,body+i0*event_record_bytes,4);std::memcpy(&k0,body+i0*event_record_bytes+4,4);std::memcpy(&h1,body+i1*event_record_bytes,4);std::memcpy(&k1,body+i1*event_record_bytes+4,4);
+            assert(h0==0x1801 && k0==0x6d7c5c && h1==0x3802 && k1==e2+0x320); // dense index 1 (the static kind) before index 2 (a member)
+            join_in_progress::frame_gate_reseed(); // not armed any more: nothing
+            assert(join_in_progress::event_rebuilds==4 && *seed9==native_seed);
+        }
         join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     }

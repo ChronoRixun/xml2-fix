@@ -83,7 +83,7 @@ def main(argv):
 
 SNAPSHOT = re.compile(r'jip snapshot: where=(?P<where>[^ ]+(?: [^ ]+)*?) (?P<fields>(?:[a-z\[\]0-9_]+[:=]\S+ ?)+)$')
 RNG = re.compile(r'jip rng: phase=(?P<phase>\d+) frame=(?P<frame>\d+) count=(?P<count>\d+) caller=(?P<caller>[0-9a-f]{8})(?: actor=(?P<actor>[0-9a-f]{8})/(?P<ctl>[0-9a-f]{8}) think=(?P<think>[0-9a-f]{8}) dist=(?P<dist>\d+))?')
-EVENTS = re.compile(r'jip events: where=(?P<where>.+?) heap=(?P<heap>\d+) records=(?P<records>\d+) ring=(?P<ring>\S+) live=(?P<live>\d+) dead=(?P<dead>\d+) stale=(?P<stale>\d+) rebuilds=(?P<rebuilds>\d+) head=(?P<head>\S*)')
+EVENTS = re.compile(r'jip events: where=(?P<where>.+?) heap=(?P<heap>\d+) records=(?P<records>\d+) ring=(?P<ring>\S+) live=(?P<live>\d+) dead=(?P<dead>\d+) stale=(?P<stale>\d+) rebuilds=(?P<rebuilds>\d+)(?: part=(?P<part>\d+)/(?P<parts>\d+))? head=(?P<head>\S*)')
 CAMDUMP = re.compile(r'jip camdump: frame=(?P<frame>\d+) off=(?P<off>[0-9a-f]{3})(?P<words>(?: [0-9a-f]{8})+)')
 
 
@@ -159,32 +159,52 @@ def rng_mode(host, guest):
 
 
 def events_mode(host, guest):
-    """Follow-up 7: the timed-event queue lines per milestone (heap/records/ring/live/dead/stale and the first 24 heap
-    pairs as time:index:handle:offset); the handle's generation is masked before comparing."""
+    """Follow-up 7/9: the timed-event queue lines per milestone (heap/records/ring/live/dead/stale and every heap pair as
+    time:index:handle:kind[:payload], several `part=k/n` lines per milestone since AE10); the handle's generation is
+    masked before comparing; the kind is the event's offset inside its owner or the static kind object's address (the
+    same in every process). Entries present on one peer only are listed by (time, slot, kind, payload)."""
     def parse(path):
-        out = {}
+        out, seen_parts = {}, {}
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
             m = EVENTS.search(line)
-            if m and m['where'] not in out:
-                head = []
-                for item in m['head'].split(',') if m['head'] else []:
-                    t, index, handle, off = item.split(':')
-                    head.append((t, int(index), int(handle, 16) & 0x3ff if int(handle, 16) else 0, off))
-                out[m['where']] = (int(m['heap']), int(m['records']), m['ring'], int(m['live']), int(m['dead']), int(m['stale']), int(m['rebuilds']), head)
+            if not m:
+                continue
+            where, part = m['where'], int(m['part'] or 1)
+            if where in out and part <= seen_parts.get(where, 0):
+                continue  # a later epoch's repeat of the same milestone: keep the first
+            if where in out and part != seen_parts[where] + 1:
+                continue
+            head = []
+            for item in m['head'].split(',') if m['head'] else []:
+                fields = item.split(':')
+                t, index, handle, kind = fields[0], int(fields[1]), int(fields[2], 16), fields[3]
+                payload = fields[4] if len(fields) > 4 else ''
+                head.append((t, handle & 0x3ff if handle else 0, kind, payload, index))
+            if where in out:
+                out[where][7].extend(head)
+            else:
+                out[where] = [int(m['heap']), int(m['records']), m['ring'], int(m['live']), int(m['dead']), int(m['stale']), int(m['rebuilds']), head]
+            seen_parts[where] = part
         return out
     h, g = parse(host), parse(guest)
     bad = 0
     for where in [w for w in h if w in g]:
         a, b = h[where], g[where]
-        same = a[0] == b[0] and a[3] == b[3] and a[7] == b[7]
+        ka, kb = [e[:4] for e in a[7]], [e[:4] for e in b[7]]
+        same = a[0] == b[0] and a[3] == b[3] and ka == kb
         verdict = 'AGREE  ' if same else 'DIFFERS'
         print(f"{verdict} {where}: host heap {a[0]} records {a[1]} ring {a[2]} live {a[3]} dead {a[4]} stale {a[5]} rebuilds {a[6]} | guest heap {b[0]} records {b[1]} ring {b[2]} live {b[3]} dead {b[4]} stale {b[5]} rebuilds {b[6]}")
         if not same:
             bad += 1
-            for i, (x, y) in enumerate(zip(a[7], b[7])):
+            for i, (x, y) in enumerate(zip(ka, kb)):
                 if x != y:
                     print(f'  first differing heap pair at {i}: host {x} guest {y}')
                     break
+            from collections import Counter
+            ca, cb = Counter(ka), Counter(kb)
+            for who, extra in (('host', ca - cb), ('guest', cb - ca)):
+                for key, n in sorted(extra.items()):
+                    print(f'  only on the {who} ({n}x): time {key[0]} slot {key[1]:#x} kind {key[2]} payload {key[3] or "-"}')
     for who, only in (('host', [w for w in h if w not in g]), ('guest', [w for w in g if w not in h])):
         for w in only:
             print(f'  only on the {who}: {w}')

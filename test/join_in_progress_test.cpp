@@ -519,6 +519,26 @@ int main(int argc, char** argv)
 		check(canonical_event_less(host_hero, payload_b, 0x3ff), "follow-up 7: equal otherwise: the payload bytes decide");
 		check(canonical_event_less(other, non_token, 0x3ff) && canonical_event_less(non_token, negative, 0x3ff), "follow-up 7: non-token owners sort after every token, by raw handle");
 		check(event_entry_dropped(dead) && !event_entry_dropped(host_hero) && !event_entry_dropped(non_token) && !event_entry_dropped(negative), "follow-up 7: only a dead entity token is dropped");
+		{
+			// Follow-up 9 (round 6): the static "moved" kind 0x6d7c5c scheduled on the host's actor (pool at one address) and
+			// on the joiner's (another) must have one key; a member event keys by its offset and sorts before any static kind.
+			event_entry hk{}, jk{}, mem{}, dk{};
+			hk.time = jk.time = mem.time = dk.time = 2.0f; hk.token = jk.token = mem.token = dk.token = true; hk.live = jk.live = mem.live = true;
+			hk.handle = 0x3801; hk.owner = 0x03290008; hk.event = 0x6d7c5c;
+			jk.handle = 0x1801; jk.owner = 0x032d0008; jk.event = 0x6d7c5c;
+			mem.handle = 0x1801; mem.owner = 0x032d0008; mem.event = 0x032d0008 + 0x320;
+			dk.handle = 0x35ce; dk.owner = 0; dk.event = 0x6d7c5c; // a dead owner: the raw event address
+			check(event_kind_key(hk) == 0x6d7c5c && event_kind_key(jk) == 0x6d7c5c && event_kind_key(dk) == 0x6d7c5c, "follow-up 9: a static kind's key is its address in every process whatever the owner's address");
+			check(event_kind_key(mem) == 0x320 && canonical_event_less(mem, jk, 0x3ff) && !canonical_event_less(jk, mem, 0x3ff), "follow-up 9: a member event (its offset) sorts before a static kind on the same owner");
+			check(!canonical_event_less(hk, jk, 0x3ff) && !canonical_event_less(jk, hk, 0x3ff), "follow-up 9: the same kind on the same slot is equal across processes");
+			check(cohort_sync_clears_late_restart(false) && !cohort_sync_clears_late_restart(true), "follow-up 9: cohort synchronized ends the late restart only when no frame-0 epoch is still armed");
+			cohort ep{};
+			check(!ep.resume_controls_early(), "follow-up 9: no early resume outside an epoch");
+			ep.begin(); check(!ep.resume_controls_early(), "follow-up 9: no early resume before the native start");
+			ep.start(); check(ep.resume_controls_early() && !ep.resume_controls_early() && !ep.resume_controls(true), "follow-up 9: the early resume happens once per started epoch and the pump's resume never repeats it");
+			cohort late{}; late.begin(); late.start(); late.observe(true, false);
+			check(late.resume_controls(true) && !late.resume_controls_early(), "follow-up 9: after the pump's resume the early one is spent too");
+		}
 		check(event_queue_rebuild_wanted(true, true, true) && !event_queue_rebuild_wanted(true, false, true) && !event_queue_rebuild_wanted(true, true, false) && !event_queue_rebuild_wanted(false, true, true), "follow-up 7: the rebuild runs only in an armed late restart with the reset on");
 		check(join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_at + 8 * join_in_progress_rules::event_records <= join_in_progress_rules::event_body_at + join_in_progress_rules::event_heap_count_at
 		      && join_in_progress_rules::event_record_bytes * join_in_progress_rules::event_records == join_in_progress_rules::event_used_bitmap_at, "follow-up 7: the manager layout is self-consistent (1125 records of 24 bytes, 1125 heap pairs before the count)");

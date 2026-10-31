@@ -442,3 +442,25 @@ probe never call the pump (retail pool init / alloc / store / push and reads
 only). `test/module_hook_sites.json` lists such slots for the guard scan's
 cross-module table; the native fixture mode `turrets` installs a stand-in of
 the hook first and drains a canonically rebuilt queue through it.
+
+Follow-up 9 (live round 6): the frame-0 epoch never rebuilt the queue on
+either peer (`should_reseed` consumed `armed` before the rebuild asked for
+it) and `cohort synchronized` cleared `late_restart` BEFORE the joiner's frame
+0 (245 ms earlier; after it on the host), so the joiner skipped the FPU step:
+the epoch differed by role. Now the epoch's steps follow `should_reseed`
+unconditionally in a fixed order on every peer - RNG epoch, camera re-anchor,
+respawn release, FPU control state, the queue rebuild LAST - and the epoch
+itself ends the late restart (`the frame-0 epoch is complete on this peer ...;
+the late restart ends here`); `cohort synchronized` keeps the flag while an
+epoch is still armed. The one role-asymmetric step before frame 0 was the
+existing member's native controls, disabled by its old-world teardown and
+resumed by the pump's poll after the zone start (and the first world tick):
+they are now resumed at the zone start, the state a newcomer is already in
+(`the existing participant's native controls are resumed at the zone start,
+before the first world tick`). The canonical order keys an event by its offset
+inside its owner or, for a static kind object (the "moved" notification
+0x6d7c5c and the table at 0x6d55a4), by its address, which every process
+shares; the probe's `jip events:` lines now carry every entry (`part=k/n`,
+16 per line, `time:index:handle:kind:payload`) and the snapshot's hero lines
+walk the party list (game vt+0x11c). `--mode events` lists the entries present
+on one peer only.

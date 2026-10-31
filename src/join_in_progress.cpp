@@ -249,7 +249,8 @@ namespace join_in_progress
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
 		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
-		void canonical_event_queue(const char* where); void fpu_canonical(const char* where); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue)
+		void canonical_event_queue(const char* where); void canonical_event_queue(const char* where, bool wanted); void fpu_canonical(const char* where); void fpu_canonical(const char* where, bool wanted); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue); follow-up 9: the frame-0 epoch forces both
+		extern unsigned event_rebuilds;
 		bool event_pump_slot_ok(); // follow-up 8 (residue): the pump slot is retail or the xml1 turrets hook
 		bool __cdecl campaign_start_notice()
 		{
@@ -414,6 +415,10 @@ namespace join_in_progress
 			{
 				const auto frame = *reinterpret_cast<const std::uint16_t*>(native_frame);
 				if (frame == 0) probe_milestone("frame 0", 4);
+				// should_reseed consumes `armed`: everything below belongs to this epoch by construction and is no longer
+				// gated on `armed` or `late_restart` (follow-up 9, round 6: the queue rebuild asked for `armed` after it was
+				// consumed and never ran; the joiner's `late_restart` had been cleared by `cohort synchronized` 245 ms before
+				// its frame 0, so its FPU step was skipped too - the epoch differed by role).
 				if (!restart.should_reseed(frame)) return;
 				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
@@ -421,9 +426,11 @@ namespace join_in_progress
 					unsigned(frame), count, seed, native_seed);
 				reanchor_camera_at_frame0();
 				release_smart_hold("the first shared frame");
+				fpu_canonical("the first shared frame", restart_reset_enabled);
 				probe_events("frame 0 before rebuild"); // probe only
-				canonical_event_queue("the first shared frame"); // follow-up 7: every actor update's queue in canonical order
-				fpu_canonical("the first shared frame");
+				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
+				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
+				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, camera re-anchor, respawn release, FPU control state, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
 				snapshot("frame 0 epoch");
 				probe_events("frame 0 epoch");
@@ -510,7 +517,10 @@ namespace join_in_progress
 			}
 			if (epoch.observe(loading, machine.holding()))
 			{
-				late_restart = false; // the reseed, if any, is already armed for this epoch's frame 0
+				// Follow-up 9: while the frame-0 epoch is still armed the late restart ends THERE, on every peer alike (round 6:
+				// the joiner reached this point 245 ms before its frame 0 and lost the epoch's steps gated on the flag).
+				if (join_in_progress_core::cohort_sync_clears_late_restart(restart.armed)) late_restart = false;
+				else logger::write("join in progress: cohort synchronized before the first shared frame; the canonical restart stays in effect until its frame-0 epoch");
 				logger::write("join in progress: cohort synchronized; checksum protection resumed");
 				// The native slow-player guard (0x559190: per participant index, count/phase pairs at 0x79fb80, a drop at
 				// 900 slow input frames in phase 2) never resets them before it drops someone. A host that played alone,
