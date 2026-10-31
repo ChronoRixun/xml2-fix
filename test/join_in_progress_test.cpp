@@ -309,6 +309,14 @@ int main(int argc, char** argv)
 		{
 			const auto* bad = join_in_progress_rules::first_mismatch(mapped.data());
 			check(bad == nullptr, bad ? bad->what : "every install guard matches the retail executable");
+			check(join_in_progress_rules::first_mismatch(mapped.data(), true) == nullptr, "AM: probe-only visibility/spawner guards match retail");
+			for (const auto& g : join_in_progress_rules::audit_probe_guards)
+			{
+				auto changed = mapped; changed[g.va - limits_rules::image_base] ^= 1;
+				const auto* refused = join_in_progress_rules::first_mismatch(changed.data(), true);
+				check(refused && refused->va == g.va, "AM: probe refuses a changed visibility/spawner site");
+				check(join_in_progress_rules::first_mismatch(changed.data()) == nullptr, "AM: probe-only guards do not change release acceptance");
+			}
 			// The cohort restart must refuse an executable whose native clock-step reset changed.
 			auto clock_changed = mapped;
 			clock_changed[0x55b230 - limits_rules::image_base] ^= 1;
@@ -537,6 +545,10 @@ int main(int argc, char** argv)
 				      "AK: the clear writes the goal +0x1d0, the start +0x1dc and zeroes +0x180 / +0x184");
 				check(actor_move_speed_a_at == 0x180 && actor_move_speed_b_at == 0x184 && actor_move_goal_at == 0x1d0 && actor_move_start_at == 0x1dc && actor_follow_handle_at == 0x3ec && actor_vtable == 0x682ccc && world_entity_by_index_slot == 0x10 && move_goal_none_bits == 0x00800000,
 				      "AK: the offsets, the CActor vtable, the world slot and FLT_MIN are the retail ones");
+				check(entity_flags_at == 4 && entity_flag_bytes == 16 && entity_registered_at == 0x6c && entity_registered_bit == 1 && world_flag_update_slot == 0x3c && world_flag_members_slot == 0x40 && world_flag_record_slot == 0x44 && entity_active_flag == 16,
+				      "AM: notification uses the registered bit and installed CWorld flag interfaces");
+				check(guarded_span(0x45fe40, 0x1f) && guarded_span(0x4c6990, 0x1cc) && guarded_span(0x4015d0, 0x23) && guarded_span(0x68f848, 12),
+				      "AM: full flag notification, full cache/bitmap update, copy helper and virtual slots are guarded");
 			}
 			check(image_rides_running_transfer(true, true) && !image_rides_running_transfer(true, false) && !image_rides_running_transfer(false, true) && !image_rides_running_transfer(false, false),
 			      "AJ: a second newcomer rides the running transfer only inside this late restart (a lobby START's sender still refuses)");

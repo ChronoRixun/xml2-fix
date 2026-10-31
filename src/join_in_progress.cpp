@@ -53,6 +53,8 @@ namespace join_in_progress
 		void snapshot(const char* where);
 		void reanchor_camera_at_frame0();
 		bool probe_zone_started = false, probe_epoch_late = false; // the probe: the late epoch reached its zone start / its samples belong to a late restart
+		extern bool probe_enabled;
+		void audit_zone_load(); void probe_audit_frame(unsigned frame, bool epoch_sample);
 		bool area_load = false; // latched at the synchronous zone-loader boundary, consumed by the pump afterwards
 		bool composed_receiver = false;
 		bool deferred_start_running = false;
@@ -159,6 +161,8 @@ namespace join_in_progress
 					if (g.va == campaign_receive && composed_receiver) continue;
 					if (!guard_matches(g, image + g.va - 0x400000)) return &g;
 				}
+				if (probe_enabled) for (const auto& g : audit_probe_guards)
+					if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
 				return nullptr;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
@@ -489,6 +493,7 @@ namespace join_in_progress
 				canonical_party_motion("the first shared frame", restart_reset_enabled); // AE16: after the ground re-probe (FindGround does not touch these), before the rebuild
 				canonical_npc_move_intent("the first shared frame", restart_reset_enabled); // p060fix/AK: every non-party AI actor re-arms its first update at the same cadence on every peer
 				canonical_party_seat_events("the first shared frame", restart_reset_enabled); // p060fix/AJ2: an AI hero's periodic event goes with its pending bit, before the rebuild
+				if (restart_reset_enabled) xml1_turrets::cohort_epoch(at<float>(reinterpret_cast<const void*>(game_static), game_time_at));
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
@@ -499,6 +504,7 @@ namespace join_in_progress
 				probe_events("frame 0 epoch");
 				probe_think(0); // probe only (returns at once otherwise)
 				probe_camera_dump(0);
+				probe_audit_frame(0, true);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -546,6 +552,7 @@ namespace join_in_progress
 			}
 		}
 #include "join_in_progress_residue.inl"
+#include "join_in_progress_audit.inl"
 
 		void __cdecl broadcast_notice(const void* message)
 		{
@@ -1793,6 +1800,14 @@ namespace join_in_progress
 			// with the probe only, the spawn-by-names entry (JMP, six bytes displaced).
 			writes.push_back({smart_update_call, bytes(smart_update_original), rel(0xe8, smart_update_call, reinterpret_cast<const void*>(&smart_update_getter_bridge), 5)});
 			if (probe_enabled) writes.push_back({spawn_entry, bytes(spawn_entry_original), rel(0xe9, spawn_entry, reinterpret_cast<const void*>(&spawn_entry_bridge), spawn_entry_original.size())});
+			if (probe_enabled)
+			{
+				writes.push_back({0x466dde, {0xff,0x52,0x5c,0x8b,0x06}, rel(0xe9, 0x466dde, reinterpret_cast<const void*>(&audit_activate_bridge), 5)});
+				writes.push_back({0x466ec3, {0xff,0x52,0x5c,0x8b,0x06}, rel(0xe9, 0x466ec3, reinterpret_cast<const void*>(&audit_deactivate_bridge), 5)});
+				writes.push_back({0x466f72, {0xe8,0x79,0x8f,0xff,0xff}, rel(0xe8, 0x466f72, reinterpret_cast<const void*>(&audit_remove_bridge), 5)});
+				writes.push_back({0x48a533, {0xff,0x90,0xd4,0,0,0}, rel(0xe8, 0x48a533, reinterpret_cast<const void*>(&audit_actonvisible_bridge), 6)});
+				writes.push_back({0x48b05b, {0xff,0x92,0x78,1,0,0}, rel(0xe9, 0x48b05b, reinterpret_cast<const void*>(&audit_shy_bridge), 6)});
+			}
 			// Follow-up 14: the CActor OnAttached override entry (JMP, eight bytes displaced) and the zone-loaded finish's
 			// getter call right after the party binding (CALL replacement; the site's return address stays).
 			writes.push_back({attach_override, bytes(attach_override_original), rel(0xe9, attach_override, reinterpret_cast<const void*>(&attach_override_bridge), attach_override_original.size())});

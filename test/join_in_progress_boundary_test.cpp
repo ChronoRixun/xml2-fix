@@ -37,7 +37,7 @@ namespace gameplay_agreement {
 bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool) { assert(false);return false; }
 }
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
-namespace xml1_turrets { std::uint32_t fixture_hook = 0; std::uint32_t installed_process_hook() { return fixture_hook; } }
+namespace xml1_turrets { std::uint32_t fixture_hook = 0; unsigned fixture_epochs = 0; std::uint32_t installed_process_hook() { return fixture_hook; } void cohort_epoch(float) { ++fixture_epochs; } digest probe_digest(unsigned) { return {}; } }
 namespace actor_pools { std::vector<std::uint8_t> fixture_controller_reset; const std::vector<std::uint8_t>& installed_controller_reset() { return fixture_controller_reset; } }
 namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }
 namespace pad_prompts { unsigned device_switches() { return 0; } }

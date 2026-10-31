@@ -805,7 +805,8 @@ read `S 0, F 7` on every peer - no kid had a move speed at the epoch, seven
 carried the OTHER every-frame input, the entity's active bit (+4 bit 16 = +6
 bit 0), and `--mode cadence` named the same six kids. The bit has one writer:
 CEntity vt+0x5c = 0x4601f0(bool) through the generic flag setter 0x41a190(16,
-v) (a true-to-false change also removes the entity through the grid / vt+8),
+v) (a true-to-false change can invoke gameplay through entity vt+8 after a
+read-only grid occupancy check),
 called from the grid/query activation code (0x466b10 deactivates a query's
 results, 0x466dde activates a list, setInvisible 0x4a8910 pairs it with bit 15)
 - camera/query driven before frame 0 with each PC's own camera (the zone-start
@@ -818,3 +819,53 @@ on <indices>)`), and the probe adds one `jip npc: frame=N <index>:<bit>/<speed
 a>/<speed b> ...` line per gated frame. The first update after frame 0 then
 re-arms every NPC at 0.1 s alike on 2..4 peers at any exit: per entity, on
 every peer, nothing keyed on a seat, a role, a PC or a zone.
+
+
+p060fix/AM closes the audit's R1 and R4 gaps:
+
+* After AL directly clears an active NPC bit, a registered entity (+0x6c bit 0)
+  notifies the installed world's `vt+0x3c(token, flags+4)`, matching the flag
+  notification at retail `0x45fe40`. Retail `0x4c6990..0x4c6b5c` changes only
+  the transposed flag bitmaps and 16-byte cached flag record; its only call is
+  the `rep movsd/movsb` copy at `0x4015d0`. The raised world's corresponding
+  method has the same contract. No SetActive, grid operation or entity callback
+  is invoked. The AL line gains `N world-index entries corrected` (cached records
+  that differed when notified). Unregistered NPCs have no entry to notify; party
+  heroes are excluded before the clear. This repairs indexed flags, not the
+  other activation side effects listed in audit R2.
+* At every canonical frame-0 cohort epoch, the XML1 turret adapter explicitly
+  resets its three deadlines from that frame's game time, target/burst/aim state,
+  binding retries, captured rest orientation, resource caches and flight list.
+  Existing rotation audio loops are stopped. A repeated load into the same zone
+  at the same time takes this reset too. Uninstalled turrets are a no-op, and
+  `[Dev] LateJoinRestartReset=0` retains the A/B behavior. The native queue rebuild
+  still runs last and composes with the existing turret dispatch hook.
+* With `[Dev] LateJoinProbe=1`, one `jip audit:` line is emitted after the epoch
+  passes, then at gated frames 1 and 30 (once each, even on repeated gate calls).
+  `entities=nonparty/registered` and `flags=hash` cover every non-party entity's
+  dense index, registration, four object/cache flag words and flag-16
+  bitmap membership through installed `vt+0x44` / `vt+0x40(16)` interfaces.
+  `diff=N[index:object_word0/cached_word0/bitmap,...]` names the first eight local
+  inconsistencies. Unregistered objects contribute object flags only.
+  `vis=activate/deactivate/remove/actonvisible/shy_inhibit/shy_permit` counts
+  actual dispatches/tests since zone load, with an ordered normalized hash and
+  `ids=N[index:event_mask,...]` for the first eight affected indices (mask bits
+  0..5 in that order). The activation counts are dispatches, including a repeated
+  SetActive with the same value; removal is recorded immediately before dispatch.
+  The guarded observation sites are `0x466dde`, `0x466ec3`, `0x466f72`,
+  `0x48a533` and `0x48b05b`. The shy observer records the actual projection result.
+  `turrets=placements/live/flights:hash` covers scheduler/deadline/target/binding/
+  aim/burst/rest state, normalized flight identities and definition-cache names;
+  process-local resource handles are represented by state/presence, not addresses.
+  The observer bridges preserve integer registers, flags, x87 and SSE state.
+  These five observation patches and guards are enabled only with the probe;
+  collection ends at frame 30 or a new zone load. Frames 1/30 require the epoch
+  sample first; the next late zone load starts a fresh trace.
+
+The mapped restart fixture executes the real retail world cache/bitmap updater,
+checks registered and unregistered NPCs and an untouched party hero, and drives
+all five probe bridges with the retail stack shapes. The production turret
+adapter has its own `xml2_xml1_turrets_restart_test` for same-zone/repeated-time
+resets and a generation-normalized read-only digest. These are offline checks;
+a live round is still needed for cross-peer behavior. No R2 blanket activation,
+R5 roster reconciliation, or R6-R10 state repair is included.
