@@ -2,6 +2,10 @@
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
 </p>
 
+> Local release draft: Legends Classic 0.6.0-beta.1 (content 30 / catalogue 8 / LC40) and XML2 Fix 1.11.0-beta.1.
+> Co-op menu, session, controller and flying-pickup fixes are integrated; final live acceptance is pending.
+> Guard defaults OFF; corrected XML1 Guard awaits a real-controller check. See CHANGELOG.md. No release is published.
+
 <p align="center">
   <a href="https://github.com/ChronoRixun/xml2-fix/releases/latest"><img src="https://img.shields.io/github/v/release/ChronoRixun/xml2-fix?label=download&color=ad6bff" alt="Latest release"></a>
   <a href="https://github.com/ChronoRixun/xml2-fix/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/ChronoRixun/xml2-fix/build.yml?branch=main&label=build" alt="Build status"></a>
@@ -369,6 +373,7 @@ When the game opens a file for reading, the fix looks in the mods first: a mod's
 
 ```
 # lowest priority first; later lines win
+
 +Better Costumes
 # "-" keeps a mod in its place but switched off
 -Harder Bosses
