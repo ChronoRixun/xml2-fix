@@ -683,14 +683,18 @@ void run() {
             assert(fake_world_walks==256);
             assert(*reinterpret_cast<unsigned*>(parent+actor_move_speed_a_at)==0 && *reinterpret_cast<unsigned*>(parent+actor_move_speed_b_at)==0);
             for(unsigned i=0;i<24;i+=4) assert(*reinterpret_cast<unsigned*>(parent+actor_move_goal_at+i)==move_goal_none_bits);
-            assert(parent[actor_entity_flags6_at]==0x01 && *reinterpret_cast<unsigned*>(parent+actor_follow_handle_at)==0x1917u); // counted, not written
+            assert(parent[actor_entity_flags6_at]==0x00 && *reinterpret_cast<unsigned*>(parent+actor_follow_handle_at)==0x1917u); // p060fix/AL: the active bit cleared; the follow handle counted, not written
             assert(*reinterpret_cast<unsigned*>(hero+actor_move_speed_a_at)==0x3f800000u && *reinterpret_cast<unsigned*>(hero+actor_move_goal_at)==0x41200000u);
-            bool npc_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) npc_line|=observed_jip_logs[i].find("the AI actors' move intent is canonical at the first shared frame on every peer: 1 AI actor(s) (CActor without a controller; 1 party hero(s) left to their own passes, 256 entity slot(s) walked), 1 had a move speed")!=std::string::npos && observed_jip_logs[i].find("1 a move goal (+0x1d0), 1 the fast-update flag (+6 bit 0, counted only), 1 a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: 1 (run ")!=std::string::npos; // the run counter counts the fixture's earlier epochs too
+            bool npc_line=false;for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) npc_line|=observed_jip_logs[i].find("the AI actors' move intent is canonical at the first shared frame on every peer: 1 AI actor(s) (CActor without a controller; 1 party hero(s) left to their own passes, 256 entity slot(s) walked), 1 had a move speed")!=std::string::npos && observed_jip_logs[i].find("1 a move goal (+0x1d0), 1 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on 1), 1 a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: 1 (run ")!=std::string::npos; // the run counter counts the fixture's earlier epochs too
             if(!npc_line) for(std::size_t i=epoch_at;i<observed_jip_logs.size();++i) if(observed_jip_logs[i].find("intent")!=std::string::npos) std::cerr<<"npc pass logged: "<<observed_jip_logs[i]<<"\n";
             assert(npc_line);
             // a second epoch with nothing carrying a speed logs `with a speed: none`
             join_in_progress::canonical_npc_move_intent("fixture: again",true);
-            assert(observed_jip_logs.back().find("0 had a move speed")!=std::string::npos && observed_jip_logs.back().find("with a speed: none (run ")!=std::string::npos);
+            assert(observed_jip_logs.back().find("0 had a move speed")!=std::string::npos && observed_jip_logs.back().find("0 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on none)")!=std::string::npos && observed_jip_logs.back().find("with a speed: none (run ")!=std::string::npos);
+            // the hero keeps its own active bit (only the NPC's is cleared); a second NPC flag set now is cleared by the next run
+            hero[actor_entity_flags6_at]=0x01;parent[actor_entity_flags6_at]=0x01;join_in_progress::canonical_npc_move_intent("fixture: flag again",true);
+            assert(parent[actor_entity_flags6_at]==0 && hero[actor_entity_flags6_at]==0x01 && observed_jip_logs.back().find("1 the active bit (+4 bit 16 = +6 bit 0, the other every-frame input: cleared on 1)")!=std::string::npos);
+            hero[actor_entity_flags6_at]=0;
             const auto runs_logged=observed_jip_logs.size();
             join_in_progress::canonical_npc_move_intent("fixture: off",false);
             assert(observed_jip_logs.size()==runs_logged); // not wanted: nothing walked, nothing logged
