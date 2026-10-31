@@ -512,7 +512,44 @@ __declspec(naked) void smart_update_held() { __asm { ret 4 } } // thiscall updat
 alignas(16) std::uint32_t smart_stand_in_vtable[8]{};
 struct smart_stand_in_object { const void* vtable; std::uint32_t cursor; std::uint32_t pad[2]; };
 smart_stand_in_object smart_stand_in{};
-void* __cdecl smart_stand_in_getter() { ++smart_holds; return &smart_stand_in; }
+// p060fix/AJ: the held tick is logged (once per hold, before the site stores the eye over game+0x1f0): whether the
+// zone-loaded finish's far marker was still there says on which side of the finish this PC's one world tick landed.
+std::uint32_t held_tick_anchor[3]{}; unsigned held_tick_frame = 0; bool held_tick_had_marker = false;
+void* __cdecl smart_stand_in_getter()
+{
+	if (++smart_holds == 1)
+	{
+		__try
+		{
+			std::memcpy(held_tick_anchor, reinterpret_cast<const void*>(game_static + game_respawn_anchor_at), sizeof held_tick_anchor);
+			held_tick_frame = *reinterpret_cast<const std::uint16_t*>(native_frame);
+			held_tick_had_marker = held_tick_anchor[0] == join_in_progress_core::respawn_far_marker_bits && held_tick_anchor[1] == 0 && held_tick_anchor[2] == 0;
+			logger::write("join in progress: canonical restart - the held dormant-entity update ran at native frame %u on this PC with game+0x1f0 = %08x,%08x,%08x (%s); the site now stores the camera eye %08x,%08x,%08x over it",
+				held_tick_frame, held_tick_anchor[0], held_tick_anchor[1], held_tick_anchor[2], held_tick_had_marker ? "the zone-loaded finish's far marker: this tick came after the finish" : "a camera eye: this tick came before the finish or another update ran since",
+				probe_at<std::uint32_t>(camera_object + 0x104), probe_at<std::uint32_t>(camera_object + 0x108), probe_at<std::uint32_t>(camera_object + 0x10c));
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:held-tick-fault", "join in progress: the held dormant-entity update could not be logged (read fault)"); }
+	}
+	return &smart_stand_in;
+}
+// p060fix/AJ: at the frame-0 release, before the first real update, every peer puts the finish's far marker back into
+// game+0x1f0 so that update's `all` is 1 everywhere (plan: every record examined from 0, cursor kept at 0) whatever
+// the held tick left there; from frame 1 on `all` follows the canonical camera alike on every peer.
+unsigned respawn_sweep_runs = 0;
+void canonical_respawn_sweep(const char* where, bool wanted)
+{
+	if (!wanted) return;
+	__try
+	{
+		auto* anchor = reinterpret_cast<std::uint32_t*>(game_static + game_respawn_anchor_at);
+		const std::uint32_t was[3] = {anchor[0], anchor[1], anchor[2]};
+		const bool had = join_in_progress_core::respawn_sweep_marker(anchor);
+		++respawn_sweep_runs;
+		logger::write("join in progress: canonical restart - the first dormant-entity sweep after %s examines every record on every peer (game+0x1f0 := the far marker %08x,0,0; was %08x,%08x,%08x = %s; held tick at frame %u %s the finish) (run %u)",
+			where, join_in_progress_core::respawn_far_marker_bits, was[0], was[1], was[2], had ? "the marker already" : "a camera eye", held_tick_frame, held_tick_had_marker ? "after" : "before", respawn_sweep_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:respawn-sweep-fault", "join in progress: the first dormant-entity sweep could not be made canonical (write fault) - retail timing"); }
+}
 std::uint32_t smart_getter_at = smart_manager_getter; // what the site reaches: the real getter, or the stand-in's while held
 void hold_smart_update()
 {
@@ -527,7 +564,7 @@ void hold_smart_update()
 			smart_stand_in.vtable = smart_stand_in_vtable;
 		}
 		smart_hold = true;
-		smart_holds = 0;
+		smart_holds = 0; held_tick_frame = 0; held_tick_had_marker = false; // p060fix/AJ: the held-tick record is per hold
 		smart_getter_at = reinterpret_cast<std::uint32_t>(&smart_stand_in_getter);
 		logger::write("join in progress: canonical restart - the dormant-entity respawn (CSmartEntMgr update) is held from the zone load until the first shared frame on every peer");
 	}

@@ -49,6 +49,20 @@ class ComponentsTest(unittest.TestCase):
         self.assertIn('+0x020: host 3f800000 guest 3f800001', output.getvalue())
 
 
+    def test_spawn_mode_names_the_same_entities_spawned_at_different_frames(self):
+        # p060fix/AJ (ZB-3Pp): identical spawn sets, the joiner's all at frame 0, the host's spread over frames 2..3
+        line = 'jip spawn: phase=4 frame={f} n={n} caller=58ae0e78 def=roundtable_x inst=roundtable_x at=2181,2113,0 draws=15\n'
+        host = ''.join(line.format(f=2 if i < 7 else 3, n=i) for i in range(40))
+        guest = ''.join(line.format(f=0, n=i) for i in range(40))
+        self.write_pair(host, guest)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(tool.spawn_mode(str(self.host), str(self.guest)), 1)
+        self.assertIn('spawn frames differ: host {2: 7, 3: 33} / guest {0: 40}', out.getvalue())
+        self.write_pair(host, host)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(tool.spawn_mode(str(self.host), str(self.guest)), 0)
+
     def test_per_process_dwords_and_local_controllers_together_still_agree(self):
         line = 'jip hero: frame=30 slot=0 handle=00003802 ctl={ctl} t=40000000 dt=3d088889 d20=3f800000 d21c={count},{ptr}\n'
         self.write_pair(line.format(ctl=0, count='00000001', ptr='02000000'), line.format(ctl=1, count='00000002', ptr='03000000'))

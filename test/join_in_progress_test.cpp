@@ -487,6 +487,40 @@ int main(int argc, char** argv)
 		check(guarded_span(smart_update_call, 5) && guarded_span(spawn_entry, spawn_entry_original.size()) && guarded_span(smart_manager_vtable, 32),
 		      "follow-up 5: the game update's getter call, the spawn entry prologue and the manager vtable are guarded retail bytes");
 		check(smart_update_call + 5 + 0x0004840c == smart_manager_getter, "follow-up 5: the replaced call's rel32 reaches the CSmartEntMgr getter");
+		// p060fix/AJ: the first sweep after frame 0 examines every record on every peer (game+0x1f0 := the far marker).
+		{
+			std::uint32_t anchor[3] = {0x44f6d70fu, 0x44f3b1ecu, 0x43aa3853u};
+			check(!respawn_sweep_marker(anchor) && anchor[0] == respawn_far_marker_bits && anchor[1] == 0 && anchor[2] == 0, "AJ: a camera eye in game+0x1f0 becomes the far marker (1e30, 0, 0) and is reported as an eye");
+			check(respawn_sweep_marker(anchor) && anchor[0] == respawn_far_marker_bits, "AJ: the marker already there is kept and reported as such");
+			std::uint32_t partial[3] = {respawn_far_marker_bits, 0, 0x3f800000u};
+			check(!respawn_sweep_marker(partial) && partial[2] == 0, "AJ: a marker with a stale z is not the marker");
+			float marker; std::memcpy(&marker, &respawn_far_marker_bits, 4);
+			check(marker > 1.0e29f && marker < 1.1e30f && respawn_far_marker_bits == respawn_far_marker, "AJ: the marker is the 1e30 the retail setter 0x4685b0 pushes (rules and core agree)");
+			const auto setter = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == game_respawn_reset; });
+			check(setter != guards.end() && setter->hex.find("caf24971") != std::string_view::npos && setter->hex.find("8d8ef0010000") != std::string_view::npos,
+			      "AJ: the guarded retail setter bytes carry the marker constant and the +0x1f0 destination");
+			check(guarded_span(0x46f2b7, 0x21) && guarded_span(respawn_sweep_threshold, 4) && guarded_span(respawn_marker_call, 12) && 0x46f2b7 + 0x21 == 0x46f2d8,
+			      "AJ: the all-flag compare, its 10000.0f threshold and the finish's setter call are guarded, ending where the site guard begins");
+			const auto threshold = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == respawn_sweep_threshold; });
+			check(threshold != guards.end() && threshold->hex == "00401c46", "AJ: the threshold constant is 10000.0f (0x461c4000)");
+			check(image_rides_running_transfer(true, true) && !image_rides_running_transfer(true, false) && !image_rides_running_transfer(false, true) && !image_rides_running_transfer(false, false),
+			      "AJ: a second newcomer rides the running transfer only inside this late restart (a lobby START's sender still refuses)");
+			// 2..4 peers, 1..3 newcomers: the host machine seats every newcomer admitted at one zone load in the same step
+			machine m; m.started = true;
+			int recs[3] = {1, 2, 3};
+			for (int k = 0; k < 3; ++k) check(m.defer_add(&recs[k], k + 1, false, 1000u), "AJ: a newcomer is seated pending");
+			observation o; o.zone_load_pending = true;
+			unsigned adds = 0; for (auto& s : m.seats) if (s.at != stage::free && m.step(s, o, 1000u) == action::run_add) ++adds;
+			check(adds == 3 && m.holding(), "AJ: three pending newcomers all run their native add at the one zone load");
+			o.zone_load_pending = false; o.add_waiting = false; o.host_loaded = true;
+			unsigned images = 0; for (auto& s : m.seats) if (s.at == stage::adding && m.step(s, o, 1100u) == action::send_image) ++images;
+			check(images == 3, "AJ: all three step to streaming in the same advance (the first starts the sender, the others ride it)");
+			o.image_done = true;
+			unsigned starts = 0; for (auto& s : m.seats) if (s.at == stage::streaming && m.step(s, o, 1200u) == action::send_start) ++starts;
+			o.loaded = true;
+			unsigned finishes = 0; for (auto& s : m.seats) if (s.at == stage::starting && m.step(s, o, 1300u) == action::finish) ++finishes;
+			check(starts == 3 && finishes == 3 && !m.holding(), "AJ: every newcomer finishes at the shared start; the host's cohort sync waits for all of them (holding() false only then)");
+		}
 		check(spawn_resume == spawn_entry + spawn_entry_original.size() && spawn_entry_original[4] == 0x33 && spawn_entry_original[5] == 0xf6,
 		      "follow-up 5: the displaced prologue ends on an instruction boundary (xor esi,esi) and resumes right after it");
 		// follow-up 6: the per-actor deciders the draw trace names (AI think branch: EDI; touch nudge: ESI), nothing else.
