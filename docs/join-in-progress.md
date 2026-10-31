@@ -527,3 +527,16 @@ cleared; their queued moved events go in the rebuild (run 1)`; the rebuild
 line counts `M party-hero moved event(s) dropped`. `[Dev]
 LateJoinMovedCanonical=0` is the A/B control. The probe's hero lines carry
 `lk:` (the last-known vectors) and `mv:` (+0x258, +0x23c, +0x240).
+
+Follow-up 13 (round 9: both E1 admissions agreed through frame 120 with the
+queue 43/43, then the joiner self-dropped at frame 840 / 720 with no input;
+E2 still parts at Storm's placement touch-nudge on the joiner alone, and the
+host's heroes reach the zone start with warm last-known vectors): with
+`[Dev] LateJoinProbe=1` the checksum diagnostics window's period budget is 30
+(frames 30..900; the default four periods otherwise) - component samples,
+draw-ring flushes and snapshots every 30 frames, an events dump every 60 -
+and the three touch-nudge draws log `jip touch:` (the touched entity, its
+moved-check fields and the return-address chain above the draw, 24 lines per
+epoch). The party heroes' moved-check state is also made cold at the
+zone-start notice, before the players are placed (same toggle); the frame-0
+pass stays.

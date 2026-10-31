@@ -1616,6 +1616,7 @@ namespace join_in_progress
 		{
 			static join_in_progress_core::draw_trace trace;
 			draws = &trace;
+			checksum_period_budget = 30; // follow-up 13: component samples, draw flushes and (every 60 frames) events dumps through frame 900
 			logger::write("join in progress: [Dev] LateJoinProbe=1 - milestone snapshots and the synchronized-draw caller trace (bounded ring of %u) are on; think-branch scales [0x6819a0]=%08x (with controller) [0x6801ac]=%08x +[0x682ffc]=%08x (without)",
 				join_in_progress_core::draw_ring_size, probe_at<std::uint32_t>(0x6819a0), probe_at<std::uint32_t>(0x6801ac), probe_at<std::uint32_t>(0x682ffc));
 		}

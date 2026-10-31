@@ -56,6 +56,7 @@ bool smart_hold = false;
 unsigned smart_holds = 0; // updates handed to the stand-in while held
 std::uint32_t smart_manager_getter_at = smart_manager_getter; // mutable for the owned native fixture only
 unsigned spawn_notes = 0, spawn_notes_dropped = 0; // the spawn probe's lines per late epoch (reset at the zone load)
+unsigned touch_lines = 0; constexpr unsigned touch_line_limit = 24; // follow-up 13: `jip touch:` lines per late epoch (reset at the zone load)
 bool probe_read(std::uintptr_t address, void* out, std::size_t size)
 {
 	__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
@@ -142,7 +143,28 @@ void __cdecl note_draw(const std::uint32_t* sp)
 		__except (EXCEPTION_EXECUTE_HANDLER) { a = b = c = d = 0xffffffffu; }
 		break;
 	case join_in_progress_core::draw_actor_register::esi:
-		__try { const auto entity = sp[-8]; a = *reinterpret_cast<const std::uint32_t*>(entity + 0x1c); b = (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x20))) << 16) | (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x24))) & 0xffffu); }
+		__try
+		{
+			const auto entity = sp[-8]; a = *reinterpret_cast<const std::uint32_t*>(entity + 0x1c); b = (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x20))) << 16) | (std::uint32_t(std::int32_t(*reinterpret_cast<const float*>(entity + 0x24))) & 0xffffu);
+			// Follow-up 13 (round 9 E2): the touch-nudge draws happen on the joiner alone during placement; one line each
+			// (bounded) with the touched entity's moved-check state and the return addresses above the draw (every
+			// code-looking dword in the next 120 stack slots: the toucher / settle chain, outermost last).
+			if (touch_lines < touch_line_limit)
+			{
+				++touch_lines;
+				char line[480]; int n = std::snprintf(line, sizeof line, "jip touch: phase=%u frame=%u count=%u caller=%08x entity=%08x xy=%08x lk=%08x,%08x,%08x mv=%02x/%08x/%08x chain=",
+					unsigned(draws->phase), unsigned(*reinterpret_cast<const std::uint16_t*>(native_frame)), *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, caller, a, b,
+					*reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at), *reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at + 4), *reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at + 8),
+					unsigned(*reinterpret_cast<const std::uint8_t*>(entity + actor_moved_flags_at)), *reinterpret_cast<const std::uint32_t*>(entity + actor_moved_extra_a), *reinterpret_cast<const std::uint32_t*>(entity + actor_moved_extra_b));
+				unsigned found = 0;
+				for (unsigned k = 1; k < 120 && found < 10 && n > 0 && n < int(sizeof line) - 12; ++k)
+				{
+					const auto v = sp[k];
+					if (v >= 0x401000u && v < 0x680000u) { n += std::snprintf(line + n, sizeof line - n, "%s%08x", found ? "," : "", v); ++found; }
+				}
+				logger::write("%s", line);
+			}
+		}
 		__except (EXCEPTION_EXECUTE_HANDLER) { a = b = 0xffffffffu; }
 		break;
 	default: break;
@@ -246,12 +268,13 @@ void probe_period(std::uint16_t frame)
 	char where[32];
 	std::snprintf(where, sizeof where, "frame %u", unsigned(frame));
 	probe_milestone(where, 4);
+	if (frame && frame % 60 == 0) probe_events(where); // follow-up 13: the queue every 60 frames through 900 (round 9 parted at 720/840)
 }
 // ---- the two zone-load bridges (CALL replacements of argument-less cdecl getters; the site's return address stays)
 void hold_smart_update(); // follow-up 5, below
 void __cdecl zone_load_entry_notice()
 {
-	if (late_restart && restart.armed) { probe_epoch_late = true; spawn_notes = 0; spawn_notes_dropped = 0; probe_milestone("zone load entry", 1); }
+	if (late_restart && restart.armed) { probe_epoch_late = true; spawn_notes = 0; spawn_notes_dropped = 0; touch_lines = 0; probe_milestone("zone load entry", 1); }
 	segment_reseed("the zone load (CMap::LoadMap or CMap::LoadZone)");
 	canonical_brain_ring();
 	hold_smart_update();
@@ -269,6 +292,11 @@ void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
 	segment_reseed("the zone start (before the players are placed)");
+	// Follow-up 13 (round 9): the host's party heroes reach the zone start with WARM last-known vectors (the previous
+	// session's positions/angles, mv:40) while the joiner's equal their spawn (mv:42); only the joiner's Storm is
+	// touch-nudged during placement at E2. Cold state on every peer BEFORE the players are placed (the frame-0 pass
+	// stays): last-known = current, pending bit clear, their queued moved events dropped by the zone-start rebuild.
+	canonical_party_moved_state("the zone start (before the players are placed)", restart_reset_enabled && moved_canonical_enabled && late_restart && restart.armed);
 	hold_smart_update();
 	if (late_restart && restart.armed) probe_events("zone start before rebuild");
 	canonical_event_queue("the zone start");
