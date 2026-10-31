@@ -898,8 +898,9 @@ build\bin\Release\xml2_test.exe          # add --live to watch your pad as the g
 ```
 
 That builds the fix without online rooms and drop-in (they need GameNetworkingSockets). The release build links it in:
-`pwsh scripts/build-gns.ps1 -OutDir C:\gns -WorkDir C:\gns-work` builds the pinned libraries (about 20 minutes, once), then add
-`-DXML2_FIX_GNS_ROOT=C:/gns` to the first command. [Details](docs/gns-transport.md#build).
+[docs/BUILDING.md](docs/BUILDING.md) shows how to build the pinned libraries with `scripts/build-gns.ps1` (once) and point
+the first command at them with `-DXML2_FIX_GNS_ROOT`, keeping the package under the checkout (or passing
+`-DXML2_FIX_TRIM_PREFIX`) so that no local build path ends up in `dinput.dll`.
 
 The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way the game does, then reads a connected controller through both of the game's DirectInput paths and checks the OpenSpy redirect; with no controller connected it still checks both paths on two virtual pads, driven through the test pipe. Release builds are produced by [GitHub Actions](.github/workflows/build.yml) from tagged source.
 

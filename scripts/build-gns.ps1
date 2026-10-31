@@ -11,22 +11,25 @@
   abseil DLL to ship next to it.
 
   The CI release job (.github/workflows/build.yml) runs this, caching <OutDir> under a key made of this script, packaging/gns/
-  and the MSVC toolset. Run it by hand the same way:  pwsh scripts/build-gns.ps1 -OutDir C:\gns -WorkDir C:\gns-work
-  then:  cmake -S . -B build -A Win32 -DXML2_FIX_GNS_ROOT=C:/gns
+  and the MSVC toolset. For a build by hand follow docs/BUILDING.md: it says where to put OutDir and WorkDir so that no local
+  path ends up in dinput.dll, which CMake options the Fix then needs, and how to check the result. -Offline rebuilds from
+  pinned local inputs staged under WorkDir (also docs/BUILDING.md); missing inputs fail, and it never fetches or bootstraps.
 
-  For a disconnected rebuild, stage the pinned local checkouts, downloads and host installation under WorkDir first
-  (docs/BUILDING.md), then pass -Offline. Missing inputs fail; offline mode never fetches or bootstraps.
+  By default the build leaves a desktop usable: one job (-Jobs 1), Idle priority, serial MSBuild, and it stops if another
+  build (MSBuild, cl, link, ninja) is running. On a dedicated machine pass e.g. -Jobs 4 -Priority Normal. Under GitHub
+  Actions (GITHUB_ACTIONS=true) the other-build check is skipped: the runner belongs to the job.
 #>
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory)] [string] $OutDir,
 	[string] $WorkDir = (Join-Path ([IO.Path]::GetTempPath()) 'xml2-fix-gns-work'),
-	[ValidateRange(1, 1)] [int] $Jobs = 1,
+	[ValidateRange(1, 256)] [int] $Jobs = 1,
+	[ValidateSet('Idle', 'BelowNormal', 'Normal')] [string] $Priority = 'Idle',
 	[switch] $Offline
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-(Get-Process -Id $PID).PriorityClass = 'Idle'
+(Get-Process -Id $PID).PriorityClass = $Priority                  # vcpkg, CMake and the compilers inherit it
 $env:MSBUILDDISABLENODEREUSE = '1'
 
 # ---- pins ---------------------------------------------------------------------------------------------------------------
@@ -54,6 +57,11 @@ function Invoke-Checked { # $args, not parameters: "-A Win32" and "-disableMetri
 	Write-Host "> $exe $($rest -join ' ')"
 	& $exe @rest
 	if ($LASTEXITCODE -ne 0) { throw "$exe failed ($LASTEXITCODE)" }
+}
+
+function Assert-NoOtherBuild { # a shared-desktop guard; a hosted CI runner runs nothing but this job
+	if ($env:GITHUB_ACTIONS -eq 'true') { return }
+	if (Get-Process MSBuild,cl,link,ninja -ErrorAction SilentlyContinue) { throw 'another build is running; wait before retrying' }
 }
 
 # ---- toolchain: the newest Visual Studio with the x86/x64 C++ tools, for vcpkg and for CMake alike -----------------------
@@ -105,7 +113,7 @@ set(VCPKG_CRT_LINKAGE dynamic)
 set(VCPKG_LIBRARY_LINKAGE dynamic)
 set(VCPKG_BUILD_TYPE release)
 '@
-if (Get-Process MSBuild,cl,link,ninja -ErrorAction SilentlyContinue) { throw 'another build is running; wait before retrying' }
+Assert-NoOtherBuild
 $installArgs = @('install', "protobuf:$Triplet", "--triplet=$Triplet", "--host-triplet=$HostTriplet", "--overlay-triplets=$tripletDir", '--binarysource=clear')
 if ($Offline) {
 	$installArgs += '--no-downloads'
@@ -157,15 +165,19 @@ Set-Content -Encoding ascii $caHeader "#define STEAMNETWORKINGSOCKETS_HARDCODED_
 
 $gnsBuild = Join-Path $gnsSrc 'build'
 $vcpkgToolchain = (Join-Path $vcpkgDir 'scripts/buildsystems/vcpkg.cmake').Replace('\', '/')
-if (Get-Process MSBuild,cl,link,ninja -ErrorAction SilentlyContinue) { throw 'another build is running; wait before retrying' }
+Assert-NoOtherBuild
 Invoke-Checked cmake -S $gnsSrc -B $gnsBuild -G $generator -A Win32 `
 	"-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain" "-DVCPKG_TARGET_TRIPLET=$Triplet" "-DVCPKG_HOST_TRIPLET=$HostTriplet" `
 	"-DVCPKG_OVERLAY_TRIPLETS=$($tripletDir.Replace('\', '/'))" -DVCPKG_MANIFEST_MODE=OFF `
 	-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DUSE_CRYPTO=BCrypt -DUSE_CRYPTO25519=Reference -DENABLE_ICE=ON `
 	-DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF `
 	-DProtobuf_USE_STATIC_LIBS=ON "-DCMAKE_CXX_FLAGS=/FI$caHeader /d1trimfile:$trimPrefix" "-DCMAKE_C_FLAGS=/FI$caHeader /d1trimfile:$trimPrefix"
-if (Get-Process MSBuild,cl,link,ninja -ErrorAction SilentlyContinue) { throw 'another build is running; wait before retrying' }
-Invoke-Checked cmake --build $gnsBuild --config Release --target GameNetworkingSockets_s '--' /m:1 /nr:false /p:BuildInParallel=false /p:UseMultiToolTask=false /p:CL_MPCount=1
+Assert-NoOtherBuild
+# -Jobs 1: fully serial. More jobs: parallel projects plus parallel cl.exe runs, one shared limit of $Jobs compilers.
+$msbuildArgs = if ($Jobs -eq 1) { '/m:1', '/nr:false', '/p:BuildInParallel=false', '/p:UseMultiToolTask=false', '/p:CL_MPCount=1' } else {
+	"/m:$Jobs", '/nr:false', '/p:UseMultiToolTask=true', '/p:EnforceProcessCountAcrossBuilds=true', "/p:CL_MPCount=$Jobs"
+}
+Invoke-Checked cmake --build $gnsBuild --config Release --target GameNetworkingSockets_s '--' @msbuildArgs
 
 # ---- package --------------------------------------------------------------------------------------------------------------
 if (Test-Path $OutDir) { throw "use a fresh OutDir: $OutDir exists" }

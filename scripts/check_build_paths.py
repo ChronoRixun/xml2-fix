@@ -1,8 +1,10 @@
 """Scan printable ASCII/UTF-16 PE strings for local drive paths.
 
-Retain every broad [A-Za-z]:[\\/] hit. Only the known public protobuf URL and
-bytes proven to belong to the PE base-relocation table are intentional hits.
-Relocation words can spell e.g. T:\\ by accident; they are loader data, not text.
+A drive is a letter, a colon and a slash or backslash with no letter or digit
+before it: C:\\x, /D:/x and file:///E:/x match; URL schemes (http://, wss://)
+and words such as mode:/ do not. Every hit fails except bytes proven to belong
+to the PE base-relocation table: relocation words can spell e.g. T:\\ by
+accident; they are loader data, not text.
 """
 from pathlib import Path
 import argparse
@@ -10,8 +12,7 @@ import json
 import re
 import struct
 
-DRIVE = re.compile(r'[A-Za-z]:[\\/]')
-PUBLIC_URLS = ('http://protobuf.dev/programming-guides/enum/#cpp',)
+DRIVE = re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:[\\/]')
 
 
 def relocation_range(data):
@@ -57,13 +58,11 @@ def scan(data):
     for encoding, pattern in (('ascii', rb'[\x20-\x7e]{7,}'), ('utf-16le', rb'(?:[\x20-\x7e]\x00){7,}')):
         for match in re.finditer(pattern, data):
             text = match.group().decode(encoding)
-            if not DRIVE.search(text):
+            # A UTF-16 run can begin with the last letter of an ASCII string and its NUL ("p\0" + "O\0:\0/\0"):
+            # that letter is not part of the wide string, so it must not hide a drive at the start of it.
+            if not (DRIVE.search(text) or (encoding == 'utf-16le' and DRIVE.match(text[1:]))):
                 continue
-            remainder = text
-            for url in PUBLIC_URLS:
-                remainder = remainder.replace(url, '')
-            kind = ('pe-base-relocations' if first <= match.start() and match.end() <= end
-                    else 'public-url' if not DRIVE.search(remainder) else 'local-path')
+            kind = 'pe-base-relocations' if first <= match.start() and match.end() <= end else 'local-path'
             hits.append(dict(offset=hex(match.start()), encoding=encoding, kind=kind, text=text))
     return hits
 

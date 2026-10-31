@@ -5,13 +5,29 @@ from check_build_paths import scan
 
 
 class BuildPathsTest(unittest.TestCase):
-    def test_paths_and_exact_public_url(self):
+    def test_paths_fail_and_urls_do_not_match(self):
+        # The UTF-16 path directly follows "gns.cpp\0", so its run starts "pO:/": the "p" must not hide the drive.
         data = (b'D:\\private\\gns.cpp\0' + 'O:/private/protobuf.h\0'.encode('utf-16le')
                 + b'http://protobuf.dev/programming-guides/enum/#cpp\0'
                 + b'http://example.test/D:/private/file.cpp\0')
         hits = scan(data)
-        self.assertEqual([h['kind'] for h in hits].count('local-path'), 3)
-        self.assertEqual([h['kind'] for h in hits].count('public-url'), 1)
+        self.assertEqual([h['kind'] for h in hits], ['local-path'] * 3)
+
+    def test_url_schemes_and_words_before_colon_slash_are_not_drives(self):
+        # The drive letter needs a left boundary: "http://" ends in "p:/", "wss://" in "s:/", "mode:/" in "e:/".
+        for text in ('See https://github.com/ChronoRixun/xml2-fix', 'relay wss://relay.example.org/v1',
+                     'http://protobuf.dev/programming-guides/enum/#cpp', 'mode:/fast enabled',
+                     'ftp://files.example.org/a', 'key:\\value pair'):
+            with self.subTest(text=text):
+                self.assertEqual(scan(text.encode('ascii') + b'\0'), [])
+                self.assertEqual(scan(text.encode('utf-16le') + b'\0\0'), [])
+
+    def test_drive_after_separator_or_quote_still_fails(self):
+        for text in ('"C:\\build\\src\\a.cpp"', 'file:///C:/build/src/a.cpp', 'at /D:/private/x.h',
+                     '(E:\\work\\b.cpp)', 'see https://example.org/ then Z:/tmp/c.cpp'):
+            with self.subTest(text=text):
+                self.assertEqual([h['kind'] for h in scan(text.encode('ascii') + b'\0')], ['local-path'])
+                self.assertEqual([h['kind'] for h in scan(text.encode('utf-16le') + b'\0\0')], ['local-path'])
 
     def test_relocation_validation_does_not_hide_real_path(self):
         data = bytearray(0x400)

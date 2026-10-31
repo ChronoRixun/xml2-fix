@@ -130,8 +130,9 @@ output boundary so remote text cannot inject lines.
 
 ## Build
 
-`cmake -S . -B native -A Win32 -DXML2_FIX_GNS_ROOT=<folder with include/steam and lib/>` (GameNetworkingSockets
-v1.6.1 static `/MT`, protobuf and abseil from vcpkg `x86-windows-static`, same toolset). Without `XML2_FIX_GNS_ROOT`
+[docs/BUILDING.md](BUILDING.md) has the recipe: `scripts/build-gns.ps1` builds the package (GameNetworkingSockets
+v1.6.1 static `/MT`, protobuf and abseil from vcpkg, path-trimmed, same toolset as the Fix), and
+`-DXML2_FIX_GNS_ROOT=<folder with include/steam and lib/>` links it into the DLL. Without `XML2_FIX_GNS_ROOT`
 the DLL has no GNS and `Transport=gns` logs that the stock transport stays in use. Native test:
 `xml2_gns_transport_test [XMen2.exe]`.
 

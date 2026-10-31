@@ -94,6 +94,23 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(D, 'MIN_SIZE', 0), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(D.main(), expected)
 
+    def test_dll_checker_names_a_path_only_failure(self):
+        # An online DLL whose only problem is an embedded build path must say so, not "not the online build".
+        online = b''.join(D.GNS_MARKERS)
+        for data, banner, wrong in [(online + b'\0D:\\private\\gns.cpp\0', 'embeds local build paths', 'not the online build'),
+                                    (b'D:\\private\\gns.cpp\0', 'not the online build', None)]:
+            out = io.StringIO()
+            with self.subTest(banner=banner), \
+                 patch.object(sys, 'argv', ['check_release_dll.py', 'synthetic.dll']), \
+                 patch.object(Path, 'read_bytes', return_value=data), \
+                 patch.object(D, 'pe_imports', return_value=(0x14c, ['bcrypt.dll'])), \
+                 patch.object(D, 'MIN_SIZE', 0), contextlib.redirect_stdout(out):
+                self.assertEqual(D.main(), 1)
+                self.assertIn(banner, out.getvalue())
+                if wrong:
+                    self.assertNotIn(wrong, out.getvalue())
+                self.assertIn('embedded local path', out.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

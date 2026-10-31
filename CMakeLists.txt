@@ -8,9 +8,12 @@ endif()
 # Strip the checkout prefix from source-location strings. Static dependencies
 # must also be rebuilt with path trimming (see docs/BUILDING.md).
 set(XML2_FIX_TRIM_PREFIX "${CMAKE_SOURCE_DIR}" CACHE PATH "Common root stripped from embedded source locations")
+# The flag adds the one trailing separator itself: accept C:\x, C:/x/ and C:/ alike (C:/x/ must not become C:/x//).
+file(TO_CMAKE_PATH "${XML2_FIX_TRIM_PREFIX}" xml2_fix_trim_prefix)
+string(REGEX REPLACE "/+$" "" xml2_fix_trim_prefix "${xml2_fix_trim_prefix}")
 # Native fixture executables use __FILE__ to read their source inputs. Keep
 # that introspection intact while trimming the libraries linked into the DLL.
-add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<NOT:$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>>>:/d1trimfile:${XML2_FIX_TRIM_PREFIX}/>")
+add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<NOT:$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>>>:/d1trimfile:${xml2_fix_trim_prefix}/>")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

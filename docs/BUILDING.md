@@ -18,23 +18,72 @@ filenames and line numbers. Every target dependency is rebuilt, including
 abseil and utf8-range. A distinct triplet prevents reuse of untrimmed target
 packages. The output package records all library hashes in `gns-package.txt`.
 
-Builds run at Idle priority, one job, with MSBuild `/m:1 /nr:false`.
-Wait for other builds before configuring or building. On a shared machine,
-coordinate the build slot with the integration operator as well.
+By default the script keeps a desktop usable: one job, Idle priority, serial
+MSBuild, and it stops if another build (MSBuild, cl, link, ninja) is running.
+On a dedicated build machine pass `-Jobs <cores> -Priority Normal`; the CI
+workflow does. Under GitHub Actions the other-build check is skipped.
 
-## Offline preparation
+## The GNS package
 
-No source acquisition is necessary if the pinned local inputs are available.
-Use a fresh work directory and output directory, with no spaces. In the
-following PowerShell example, the Fix checkout is `C:/release/xml2-fix`.
-Run these commands from that checkout.
-`$localVcpkg` is the existing pinned vcpkg tree
-and `$localGns` is the existing GNS checkout. Local clones copy committed files;
-the GNS cert patch is applied by the build script, so do not copy its dirty
-working-tree patch on top.
+Use a checkout path with no spaces, and fresh work and output directories.
+Keeping both under the checkout's `.build/` folder (ignored by git, the same
+layout CI uses) means the Fix's default trim prefix also covers the package
+headers. From the checkout:
 
 ```powershell
-(Get-Process -Id $PID).PriorityClass = 'Idle'
+pwsh -NoProfile -File scripts/build-gns.ps1 -OutDir "$PWD/.build/gns-pkg" -WorkDir "$PWD/.build/gns-work"
+```
+
+This fetches vcpkg and GNS at the pinned commits and downloads the port
+sources. The package only has to be built once per MSVC toolset.
+
+## Fix DLL and verification
+
+Use the generator of the Visual Studio that built the package (the script
+prints it): `Visual Studio 18 2026` or `Visual Studio 17 2022`. From the
+checkout:
+
+```powershell
+$generator = 'Visual Studio 18 2026'   # or 'Visual Studio 17 2022'
+cmake -S . -B build -G $generator -A Win32 "-DXML2_FIX_GNS_ROOT=$PWD/.build/gns-pkg"
+cmake --build build --config Release
+build/bin/Release/xml2_test.exe
+python -B scripts/test_check_build_paths.py
+python -I -B scripts/check_build_paths.py build/bin/Release/dinput.dll
+python -I -B scripts/check_release_dll.py build/bin/Release/dinput.dll --ca-pin packaging/gns/ca-pin.txt
+```
+
+`XML2_FIX_TRIM_PREFIX` (default: the checkout) is the prefix stripped from the
+Fix's own source locations and from the GNS headers it includes. If the
+package lives outside the checkout, pass a common parent of both, e.g.
+`-DXML2_FIX_TRIM_PREFIX=C:/release` for `C:/release/xml2-fix` and
+`C:/release/gns-pkg`. Slashes, backslashes and a trailing separator are all
+accepted.
+It trims C/C++ library targets. Native fixture executables retain `__FILE__`
+because some tests locate their source inputs through it; they are not shipped
+in the release DLL package.
+
+The scan examines printable ASCII and UTF-16LE runs for a drive path: a
+letter, a colon and a slash or backslash with no letter or digit before it
+(`(?<![A-Za-z0-9])[A-Za-z]:[\\/]`), so URL schemes such as `https://` do not
+match. It prints every match and rejects all local paths. Apparent drive
+patterns in a validated x86 PE base-relocation directory are reported as
+loader data; those bytes encode relocation words, not source-location
+strings. Malformed relocation data receives no exception. The release DLL
+checker runs this policy automatically, including when CI validates the
+packaged DLL, and names a path-only failure as such.
+
+## Offline rebuild
+
+`-Offline` rebuilds from pinned inputs that are already on the machine and
+never fetches, bootstraps or updates submodules. In the following
+PowerShell example, the Fix checkout is `C:/release/xml2-fix`; run the
+commands from that checkout. `$localVcpkg` is an existing vcpkg tree at the
+pinned commit and `$localGns` an existing GNS checkout at v1.6.1. Local
+clones copy committed files; the GNS cert patch is applied by the build
+script, so do not copy a patched working tree on top.
+
+```powershell
 $work = 'C:/release/deps-work'
 $pkg = 'C:/release/gns-pkg'
 $localVcpkg = 'C:/offline/vcpkg'
@@ -49,6 +98,9 @@ git -c core.autocrlf=false clone --no-hardlinks "$localGns/src/external/vjson" "
 pwsh -NoProfile -File scripts/build-gns.ps1 -OutDir $pkg -WorkDir $work -Offline
 ```
 
+Then configure the Fix with `-DXML2_FIX_GNS_ROOT=C:/release/gns-pkg` and
+`-DXML2_FIX_TRIM_PREFIX=C:/release`.
+
 The staged `installed/` supplies the existing x64-windows host `protoc` and
 host dependencies. Target libraries are rebuilt in the new triplet.
 `downloads/` must contain the matching source archives and build tools.
@@ -61,51 +113,8 @@ protocolbuffers-protobuf-v33.4.tar.gz
 540059a93721447cf4723bcca06e91c43a4399cb366c05bf84e9d8e2c439f3107ba17803f9d912549b54c471f2dcc4c9fc834145ec441dff31ca24f9a3543aa9
 ```
 
-Offline mode never fetches, bootstraps or updates submodules. It invokes
-vcpkg with `--no-downloads --binarysource=clear`, disables binary caches and
-blocks origin asset downloads. Missing archives/tools fail the build; provide
-the named inputs locally before retrying. Do not remove `-Offline` to bypass
-an offline failure. Omitting it is the explicitly online CI acquisition route.
-
-## Fix DLL and verification
-
-Use the same common workspace prefix for the final project's compiler mapping,
-covering both the checkout and package headers. From the Fix checkout:
-
-```powershell
-cmake -S . -B ../build -G 'Visual Studio 18 2026' -A Win32 `
-  -DXML2_FIX_GNS_ROOT=C:/release/gns-pkg `
-  -DXML2_FIX_TRIM_PREFIX=C:/release `
-  '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=/MAP /INCREMENTAL:NO'
-cmake --build ../build --config Release --target xml2_fix xml2_gns_transport_test xml2_lc_fonts_host xml2_online_menus_test xml2_online_input_wiring_test xml2_union_host -- /m:1 /nr:false /p:BuildInParallel=false /p:UseMultiToolTask=false /p:CL_MPCount=1
-python -B scripts/test_check_build_paths.py
-python -I -B scripts/check_build_paths.py ../build/bin/Release/dinput.dll
-python -I -B scripts/check_release_dll.py ../build/bin/Release/dinput.dll --ca-pin packaging/gns/ca-pin.txt
-```
-
-The CMake default strips the checkout prefix when no common prefix is supplied.
-It trims C/C++ library targets. Native fixture executables retain `__FILE__`
-because some tests locate their source inputs through it; they are not shipped
-in the release DLL package.
-The scan examines printable ASCII and UTF-16LE runs for `[A-Za-z]:[\\/]`.
-It prints every broad match and rejects all local paths. The exact public
-protobuf documentation URL is intentional. Apparent drive patterns in a
-validated x86 PE base-relocation directory are reported as loader data;
-those bytes encode relocation words, not source-location strings. Malformed
-relocation data receives no exception. The release DLL checker runs this
-policy automatically, including when CI validates the packaged DLL.
-
-Behavioral validation must also compare the previous DLL with the rebuilt
-DLL through the strong synthetic union host: complete game image, generated
-code, captured referenced backing allocations and 5120 capability bytes.
-Use the integration's enhanced capture host with `UNION_RW_REFS` and
-`UNION_EXTRA_RW_SIZE` support, and record its hash with the receipts. It
-captures unguarded RW buffers needed by the strong comparison; the repository
-host built above provides the startup fixture. Backing bytes must match before
-their relocated addresses can be normalized. Run the existing GNS
-transport cases, focused UI/font hosts, startup guards and cross-module guard
-scan. The path-trimming validation used the exact 060z baseline and included
-corruption controls for image/code/backing/wire differences. These native
-host tests do not execute a game entry point or establish live gameplay or
-relay acceptance. Preserve their commands, output and DLL hashes with the
-integration receipts.
+Offline mode invokes vcpkg with `--no-downloads --binarysource=clear`,
+disables binary caches and blocks origin asset downloads. Missing
+archives/tools fail the build; provide the named inputs locally before
+retrying. Do not remove `-Offline` to bypass an offline failure: without it
+the script fetches everything itself (the route CI uses).

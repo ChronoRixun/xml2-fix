@@ -69,7 +69,8 @@ jobs:
       - name: Build the GNS package
         if: steps.gns-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: scripts/build-gns.ps1 -OutDir $env:GNS_ROOT -WorkDir $env:GNS_WORK
+        # The script's defaults (one job, Idle priority) protect a desktop; the hosted runner is this job's alone.
+        run: scripts/build-gns.ps1 -OutDir $env:GNS_ROOT -WorkDir $env:GNS_WORK -Jobs ([Environment]::ProcessorCount) -Priority Normal
 
       - name: Save the GNS package
         if: steps.gns-cache.outputs.cache-hit != 'true'
@@ -99,7 +100,7 @@ jobs:
         run: cmake -S . -B build -G "${{ steps.msvc.outputs.generator }}" -A Win32 -DXML2_FIX_GNS_ROOT=${{ env.GNS_ROOT }}
 
       - name: Build
-        run: cmake --build build --config Release -- /m:1 /nr:false
+        run: cmake --build build --config Release -- /m /nr:false
 
       - name: Test
         run: build/bin/Release/xml2_test.exe
@@ -108,13 +109,14 @@ jobs:
         run: build/bin/Release/lcsave_test.exe
 
       # Fails the job unless this is the online DLL: GNS + protobuf + the CA pin linked in, version = project(... VERSION),
-      # nothing imported that the game's PC does not have. Checked again below on the DLL taken out of the finished zip.
+      # nothing imported that the game's PC does not have, no local build path embedded (scripts/check_build_paths.py).
+      # Checked again below on the DLL taken out of the finished zip.
       - name: Check the DLL is the online build
         shell: pwsh
         run: |
           $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(xml2_fix VERSION ([0-9.]+)').Matches[0].Groups[1].Value
           python -I scripts/check_release_dll.py build/bin/Release/dinput.dll --version $version --ca-pin packaging/gns/ca-pin.txt
-          if ($LASTEXITCODE) { throw 'dinput.dll is not the online build' }
+          if ($LASTEXITCODE) { throw 'dinput.dll failed the release check (the output above says why)' }
 
       - name: Package
         shell: pwsh
@@ -148,7 +150,7 @@ jobs:
           $check = Join-Path $env:RUNNER_TEMP 'release-check'
           Expand-Archive "dist/$name.zip" $check -Force
           python -I scripts/check_release_dll.py "$check/dinput.dll" --version $releaseVersion --ca-pin packaging/gns/ca-pin.txt --ship $check
-          if ($LASTEXITCODE) { throw 'the DLL in the release zip is not the online build' }
+          if ($LASTEXITCODE) { throw 'the DLL in the release zip failed the release check (the output above says why)' }
           if ((Get-FileHash "$check/dinput.dll" -Algorithm SHA1).Hash -ne $sha1) { throw 'the zip carries another dinput.dll than the loose one' }
           if (-not (Test-Path "$check/THIRD-PARTY-NOTICES.txt")) { throw 'the zip lacks THIRD-PARTY-NOTICES.txt' }
 
