@@ -809,7 +809,76 @@ void room_closed_offline(const std::string& only={}) {
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }
+// No GNS initialization, sockets, worker thread or certificate-provider calls. Drive the production dispatcher/inbox
+// and the real queue with invented protocol-2 replies, including the extra public-list request after a refusal.
+void join_refusal_offline() {
+    const std::string refused=R"({"op":"error","in_reply_to":"resolve","code":"room_not_joinable"})";
+    const std::string good=R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH","in_progress":true,"joinable":false,"players":1,"max_players":4}]})";
+    auto start=[&] {
+        room::client=b::client_state{};room::stop=false;room::worker_done=false;room::broker_started=false;
+        room::wanted=true;room::room_ready=false;room::broker_gone=false;room::inbox_overflow=false;
+        room::outbox.clear();room::inbox.clear();room::outbox_bytes=room::inbox_bytes=0;
+        room::configured_code="ABCDEFGH";room::room_clock=&fake::now;fake::clock=1000;
+        assert(room::client.begin(b::operation::resolve,1000,true) && room::client.issue());room::publish_ticket();
+        room::handle(online_room_core::parse(refused));
+        assert(room::client.pending() && room::client.explaining_refusal() && room::outbox.size()==1);
+        assert(online_room_core::parse(room::outbox.front().line).text("op")=="list_rooms");
+    };
+    start();const auto ticket=room::view().generation;
+    room::handle(online_room_core::parse(refused));assert(room::outbox.size()==1);
+    enqueue(good,{ticket.request+1,ticket.room});room::process_inbox();assert(room::client.pending());
+    enqueue(R"({"op":"resolve_ok","code":"ABCDEFGH"})",ticket);room::process_inbox();
+    assert(room::client.pending() && !room::room_ready); // late resolve success never admits a refused attempt
+    enqueue(good,ticket);room::process_inbox();
+    assert(room::client.pending() && room::view().error_detail.empty());
+    enqueue(good,ticket);room::process_inbox();assert(room::client.pending() && room::outbox.size()==1);
+    fake::clock+=6000;enqueue(good,ticket);room::process_inbox();
+    assert(room::client.pending() && room::view().error_detail.empty() && room::outbox.size()==2);
+    room::process_inbox();assert(room::outbox.size()==2);
+    enqueue(good,ticket);room::process_inbox();
+    assert(room::view().error=="room_not_joinable" && room::view().error_detail=="session_started" && !room::room_ready);
+    enqueue(R"({"op":"error","in_reply_to":"resolve","code":"timeout"})",ticket);room::process_inbox();
+    assert(room::view().error_detail=="session_started");
+    std::cout<<"PASS join refusal dispatcher: bounded first+confirmation lists, stale/duplicate ignored, no admission, specific detail\n";
+    unsigned cases=1;
+    for(const char* fields:{
+        R"({"code":"ABCDEFGH","in_progress":false,"joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":true,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false,"players":4,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false})",
+        R"({"code":"AAAAAAAB","in_progress":true,"joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":"true","joinable":false,"players":1,"max_players":4})",
+        ""}) {
+        start();enqueue("{\"op\":\"list_rooms_ok\",\"rooms\":["+std::string(fields)+"]}",room::view().generation);
+        room::process_inbox();assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty() && !room::client.pending());++cases;
+    }
+    std::cout<<"PASS join refusal dispatcher: 7 transient/full/private/unknown/malformed list cases keep retry\n";
+    start();enqueue(good,room::view().generation);room::process_inbox();fake::clock+=6000;room::process_inbox();
+    enqueue(R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH","in_progress":true,"joinable":true,"players":1,"max_players":4}]})",room::view().generation);
+    room::process_inbox();assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty());++cases;
+    for(const char* failure:{
+        R"({"op":"error","in_reply_to":"list_rooms","code":"rate_limited"})",
+        R"({"op":"_closed","kind":"broker_unreachable"})"}) {
+        start();enqueue(failure,room::view().generation);room::process_inbox();
+        assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty());++cases;
+    }
+    start();fake::clock+=10000;room::ui_tick();
+    assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty());++cases;
+    start();fake::clock+=8000;enqueue(good,room::view().generation);room::process_inbox();fake::clock+=2000;room::ui_tick();
+    assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty() && room::outbox.empty());++cases;
+    start();const auto canceled=room::view().generation;room::client.cancel();room::client.stopped();
+    enqueue(good,canceled);room::process_inbox();assert(room::view().error.empty() && room::view().error_detail.empty());++cases;
+    start();enqueue(good,room::view().generation);room::process_inbox();fake::clock+=6000;room::process_inbox();
+    const auto confirmation=room::view().generation;room::client.cancel();room::client.stopped();
+    enqueue(good,confirmation);room::process_inbox();assert(room::view().error.empty() && room::view().error_detail.empty());++cases;
+    start();room::worker_done=true;room::client=b::client_state{};
+    assert(room::client.begin(b::operation::resolve,1000,true) && room::client.issue());
+    room::handle(online_room_core::parse(refused));assert(room::view().error=="room_not_joinable" && room::view().error_detail.empty());++cases;
+    room::wanted=false;room::worker_done=true;room::stop=true;
+    std::cout<<"PASS join refusal dispatcher: lookup error/disconnect/timeout/cancel/queue failure preserve first cause; "<<cases<<" cases, no sockets\n";
+}
 int main(int argc,char** argv) {
+    if(argc==2 && std::string(argv[1])=="--join-refusal-offline") { join_refusal_offline();return 0; }
     if(argc>=2 && std::string(argv[1])=="--room-closed-offline") { std::cout<<std::unitbuf;room_closed_offline(argc>2 ? argv[2] : "");return 0; }
     if(argc!=1) { std::cerr<<"unknown broker fixture argument\n";return 2; }
     std::cout<<std::unitbuf;

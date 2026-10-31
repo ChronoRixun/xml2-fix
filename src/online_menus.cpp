@@ -941,7 +941,7 @@ int fallback_cause(int i) {
     case error_cause::pin_mismatch: return int(error_cause::refused);
     case error_cause::code_expired: return int(error_cause::code_not_found);
     case error_cause::room_closed: case error_cause::test_mode: case error_cause::unsupported:
-    case error_cause::busy: case error_cause::invalid_name: return int(error_cause::generic);
+    case error_cause::busy: case error_cause::invalid_name: case error_cause::session_started: return int(error_cause::generic);
     default: return -1;
     }
 }
@@ -1119,7 +1119,7 @@ void bind_broker(void* menu,screen s) {
     if(s==screen::browse && v.list_known && v.rows.empty())
         bind_text(menu,"lc_broker_empty",v.stale ? "No games in the last list" : "No public games right now. Host a game or go Back.");
     // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
-    const auto cause=classify_error(v.error);
+    const auto cause=classify_error(v.error,v.error_detail);
     hide_error_scenes(menu,failed ? int(cause) : -1);
     // Retry: hidden where it cannot help and in the client's refused phase (online_room::retry() only accepts retry_wait/error;
     // the screen's own Done/Open/Refresh starts the next attempt there). Visible but disabled during the shared limiter/backoff,
