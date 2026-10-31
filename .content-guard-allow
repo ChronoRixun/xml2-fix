@@ -163,3 +163,5 @@ DISASM src/online_native_flow.inl # Authored native-refusal, session-clear and c
 
 DISASM src/join_in_progress_residue.inl # Authored register-preserving zone/anchor/probe and world-gate ABI adapters replay only short guarded entries; no extracted game function or listing.
 DISASM test/join_in_progress_restart.inl # Authored synthetic stack/register/flag probes exercise production restart bridges against a locally mapped owned PE; no extracted retail function body.
+DISASM src/join_in_progress_audit.inl # Authored [Dev] LateJoinProbe observer bridges (fix AM): save/restore CPU and FX state, call our observer, then replay only the guarded displaced call and load (audit_probe_guards); no extracted listing or decompiled game body.
+DISASM test/join_in_progress_audit.inl # Authored synthetic caller/callee stubs exercise the AM observer bridges with retail CALL/JMP stack shapes; no game instruction listing or decompiled body.
