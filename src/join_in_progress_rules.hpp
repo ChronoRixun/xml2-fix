@@ -305,7 +305,22 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t world_gate_site = 0x46f0a9, world_gate_flag_at = 0x728, world_gate_flag_bit = 2;
 	inline constexpr std::array<unsigned char, 7> world_gate_original{0xf6,0x86,0x28,0x07,0x00,0x00,0x02};
 	constexpr std::uint32_t world_hold_watchdog_ms = 2000;
-	inline constexpr std::array<guard, 129> guards{{
+	// Follow-up 12 (round 8): the joiner alone holds a queued "moved" event (static kind 0x6d7c5c) for its OWN hero at
+	// frame 0, and the host alone registers them for the AI heroes at frames 1-3. The moved check is the entity's
+	// vt+0xf4 = 0x471740(time): when the position +0x20 is farther than [0x68012c] from the last-known +0x1e8, or the
+	// orientation +0x2c from +0x1f4 ([0x682a2c]), or 0x470b30 says so (+0x23c nonzero, or +0x240 != -1 and due), and
+	// flag bit 2 of +0x258 is clear, it sets the bit and schedules the kind at game time + arg (0x41a730; the kind's
+	// payload getter 0x419c40 returns size 0, so the record's 16 payload bytes are stale residue - never compared).
+	// The fire 0x4729b0 clears the bit, calls vt+0x148 (last-known refresh through 0x471400, a position notify for a
+	// non-AI hero), vt+0x120 and vt+0xf4(0) again. At the frame-0 epoch every peer makes the party heroes' state
+	// canonical: last-known = current, the pending bit clear, and the rebuild drops their queued moved events.
+	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
+	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
+		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
+	inline constexpr std::array<guard, 132> guards{{
+		{0x471740,"568bf18d4620508d8ee8010000ff15ccf96700d81d2c016800dfe0f6c4057a2c8d4e2c518d8ef4010000", "entity moved check: position +0x20 vs last-known +0x1e8, orientation +0x2c vs +0x1f4"},
+		{0x47178c,"8a8658020000a80275198b542408520c02685c7c6d008bce888658020000e8818ffaff", "entity moved check: +0x258 bit 2 pending flag, the static kind 0x6d7c5c scheduled"},
+		{0x4729b0,"568b74240880a658020000fd", "moved event fire: clears +0x258 bit 2 before re-registering the owner"},
 		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the seats getter call"},
 		{0x46f2d8,"7505c644241001e80c8404008b4c24108b10518bc8ff5204", "game update: the CSmartEntMgr getter call and its vt+4 update (all flag) every tick"},
 		{0x4612e0,"5153555633f6e8d5120000", "spawn by definition / instance names: entry prologue"},

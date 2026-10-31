@@ -55,6 +55,7 @@ __declspec(naked) void spawn_resume_stub() { __asm { pop esi
 unsigned anchor_vtable[0x130/4]{};unsigned* anchor_game=anchor_vtable;unsigned party_calls=0;
 void* __cdecl anchor_game_get() { return &anchor_game; }
 void __fastcall anchor_party(void*,void*,void* list) { ++party_calls;put(list,0,0x3803u);put(list,4,0x3801u);put(list,8,0x3804u);put(list,0xc,0x3802u);put(list,0x14,4u); }
+void __fastcall moved_party(void*,void*,void* list) { put(list,0,0x3802u);put(list,4,0u);put(list,8,0u);put(list,0xc,0u);put(list,0x14,1u); } // follow-up 12: one party hero (fake entity slot 2)
 const void* anchor_bridge_target=reinterpret_cast<const void*>(&join_in_progress::camera_anchor_table_bridge);
 unsigned anchor_ebx=0;
 // The site is `mov ebx, 0x70b814` replaced by a CALL: the bridge returns with EBX set; the thunk keeps the C++ caller's EBX.
@@ -159,6 +160,11 @@ void check_world_gate(unsigned char flag_byte,bool expect_skip) {
 }
 void run() {
     using namespace join_in_progress_rules;
+    // Follow-up 12: every frame-0 epoch below now walks the party list (game vt+0x11c) and resolves its heroes; the
+    // fake game (party 0x3803/0x3801/0x3804/0x3802) and the fake resolver (0x1801 and 0x3802 alive) stand in from the
+    // start, never the retail getter/resolver on the mapped image.
+    redirect(game_getter,anchor_game_get);anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
+    join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
     auto* camera=reinterpret_cast<unsigned char*>(camera_object);
     std::memset(camera,0,camera_bytes);
     // The construction bridge: the (stubbed) constructor runs with this = the singleton and its stack argument, then
@@ -305,6 +311,7 @@ void run() {
     // of the party list (game vt+0x11c, lockstep order) on every peer; the fake game's list is read through the bridge.
     redirect(game_getter,anchor_game_get);anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
     join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    party_calls=0; // follow-up 12: the frame-0 epochs above already read the fake party list
     anchor_probe();assert(anchor_ebx==hero_table && party_calls==0);
     join_in_progress::late_restart=true;join_in_progress::restart.arm();
     anchor_probe();
@@ -459,7 +466,7 @@ void run() {
             join_in_progress::frame_gate_reseed(); // not armed any more: nothing
             assert(join_in_progress::event_rebuilds==4 && *seed9==native_seed);
         }
-        join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
+        join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     }
     // Follow-up 11: the world hold. The bridge entered by CALL exactly as installed: hold off, every flag as retail's
@@ -530,6 +537,57 @@ void run() {
         join_in_progress::late_restart=false;join_in_progress::restart.disarm();join_in_progress::epoch.active=false;
         join_in_progress::world_hold_clock=&GetTickCount;
     }
+    // Follow-up 12: the party heroes' moved-check state canonical at the first shared frame, then the rebuild drops
+    // their queued "moved" events. Party = {0x3802} (fake entity slot 2); 0x1801 (slot 1) is a live non-party owner.
+    {
+        using namespace join_in_progress_rules;
+        std::memset(event_manager_image,0,sizeof event_manager_image);put(event_manager_image,0,event_manager_vtable);
+        unsigned char* body=event_manager_image+event_body_at;
+        reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_pool_init))(body);
+        join_in_progress::event_manager_at=unsigned(reinterpret_cast<std::uintptr_t>(event_manager_image));
+        join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&moved_party)); // game vt+0x11c -> {0x3802}
+        const auto add=[&](float time,unsigned handle,unsigned event) {
+            const auto index=reinterpret_cast<unsigned(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_record_alloc))(body);
+            unsigned char record[event_record_bytes]{};std::memcpy(record,&handle,4);std::memcpy(record+4,&event,4);
+            reinterpret_cast<void(__thiscall*)(void*,unsigned,const void*)>(static_cast<std::uintptr_t>(event_record_store))(body,index,record);
+            struct { float time;unsigned index; } pair{time,index};
+            reinterpret_cast<void(__thiscall*)(void*,const void*)>(static_cast<std::uintptr_t>(event_heap_push))(body+event_heap_at,&pair);
+        };
+        unsigned char* w=fake_entities[2];unsigned char* c=fake_entities[1];
+        const float pos[3]={2003.f,1741.f,1.01f},ori[3]={0.f,0.f,4.71f},old[3]={1.f,2.f,3.f};
+        std::memcpy(w+actor_position_at,pos,12);std::memcpy(w+actor_orientation_at,ori,12);std::memcpy(w+actor_last_position_at,old,12);std::memcpy(w+actor_last_orientation_at,old,12);w[actor_moved_flags_at]=0x0a;
+        std::memcpy(c+actor_position_at,pos,12);std::memcpy(c+actor_orientation_at,ori,12);std::memcpy(c+actor_last_position_at,old,12);std::memcpy(c+actor_last_orientation_at,old,12);c[actor_moved_flags_at]=0x0a;
+        const unsigned e1=unsigned(reinterpret_cast<std::uintptr_t>(c)),e2=unsigned(reinterpret_cast<std::uintptr_t>(w));
+        add(2.0f,0x3802,moved_event_kind);add(2.0f,0x3802,e2+0x320);add(2.0f,0x1801,moved_event_kind);add(2.0f,0x35ce,moved_event_kind);add(2.0f,0,0x6d55fc);add(2.0f,0x1801,e1+0x328);
+        // off ([Dev] LateJoinMovedCanonical=0 or the reset off): nothing touched, nothing marked for the rebuild
+        join_in_progress::canonical_party_moved_state("fixture: off",false);
+        assert(join_in_progress::moved_drop_count==0 && w[actor_moved_flags_at]==0x0a && std::memcmp(w+actor_last_position_at,old,12)==0);
+        // on: the party hero's last-known = current, its pending bit cleared (other bits kept), the non-party entity untouched
+        join_in_progress::canonical_party_moved_state("fixture: the first shared frame",true);
+        assert(join_in_progress::moved_drop_count==1 && join_in_progress::moved_drop_handles[0]==0x3802u);
+        assert(w[actor_moved_flags_at]==0x08 && std::memcmp(w+actor_last_position_at,pos,12)==0 && std::memcmp(w+actor_last_orientation_at,ori,12)==0);
+        assert(c[actor_moved_flags_at]==0x0a && std::memcmp(c+actor_last_position_at,old,12)==0);
+        // the rebuild: the party hero's moved event and the dead owner's go; the non-party moved, the member events and the non-token owner stay
+        join_in_progress::late_restart=true;join_in_progress::restart.arm();
+        const auto rebuilds_before=join_in_progress::event_rebuilds;
+        join_in_progress::canonical_event_queue("fixture: the first shared frame");
+        assert(join_in_progress::event_rebuilds==rebuilds_before+1 && join_in_progress::moved_dropped_last==1 && join_in_progress::moved_drop_count==0);
+        assert(*reinterpret_cast<unsigned*>(body+event_heap_count_at)==4 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==4);
+        unsigned moved_kept=0;
+        for(unsigned i=0;i<4;++i) {
+            unsigned index,handle,event;std::memcpy(&index,body+event_heap_at+i*8+4,4);std::memcpy(&handle,body+index*event_record_bytes,4);std::memcpy(&event,body+index*event_record_bytes+4,4);
+            assert(!(handle==0x3802u && event==moved_event_kind) && handle!=0x35ceu);
+            if(event==moved_event_kind) ++moved_kept;
+        }
+        assert(moved_kept==1); // 0x1801's (non-party, live); the non-token owner's entry is another static kind (0x6d55fc) and stays too
+        // a rebuild with no canonicalisation before it drops no moved event
+        join_in_progress::restart.arm();join_in_progress::canonical_event_queue("fixture: again");
+        assert(join_in_progress::moved_dropped_last==0 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==4);
+        anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
+        join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
+        join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    }
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the world-gate bridge entered by CALL returns retail's flags with the hold off and ZF=1 held, the hold opens at zone started of an armed late restart only and closes first at frame 0, at a session's end and by the watchdog\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
@@ -580,7 +638,7 @@ void run_turrets() {
     assert(*reinterpret_cast<unsigned*>(body+event_ring_count_at)==event_records && *reinterpret_cast<unsigned*>(body+event_used_bitmap_at)==0);
     pump(event_manager_image,nullptr,100.0f);assert(fixture_hook_pumps==2 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==0); // empty: nothing to pop
     *slot=event_manager_pump;xml1_turrets::fixture_hook=0;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
-    join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
+    join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of)); // follow-up 12: the fake resolver stays (later frame-0 epochs walk the party)
     std::cout<<"PASS turrets composition: the xml1 turrets dispatch hook at the timed-event manager's pump slot is accepted by the JoinInProgress install check (retail accepted, a foreign pointer and an unreported hook refused), the retail guards still match, and a canonically rebuilt queue drains through the hooked pump (dispatcher ran, retail fired/freed/popped every record)\n";
 }
 }

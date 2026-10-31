@@ -499,3 +499,31 @@ peer. `[Dev] LateJoinWorldHold=0` is the A/B control. Retail guard
 call); the native fixture enters the bridge by CALL with every register known
 and asserts retail's flags for every bit pattern with the hold off, ZF=1 held,
 and every open/close trigger including the watchdog with a stubbed clock.
+Live round 8 (AE11) showed the game clock, the world counters and the camera
+yaw history unchanged between `zone started` and frame 0 on both peers with
+the native pause byte set through the wait, so the world section does not run
+there and this hold is inert; it stays behind the toggle.
+
+Follow-up 12 (round 8): the joiner alone held a queued "moved" event (the
+static kind 0x6d7c5c) for its OWN hero at frame 0 and the host alone
+registered them for the AI heroes at frames 1-3, with every hero transform
+identical. The moved check is the entity's vt+0xf4 = 0x471740(time):
+position +0x20 vs last-known +0x1e8, orientation +0x2c vs +0x1f4, or 0x470b30
+(+0x23c / +0x240), and with bit 2 of +0x258 clear it sets the bit and
+schedules the kind at game time + arg (0x41a730); the kind's payload getter
+0x419c40 returns size 0, so the record's 16 payload bytes are stale residue
+(never compared). The fire 0x4729b0 clears the bit, refreshes the last-known
+vectors (vt+0x148 -> 0x471400; a non-AI hero also notifies its position
+through vt+0x158) and re-runs the check with 0. The caller that registers
+the joiner's hero during its wait is not traced (vt+0xf4 is a slot offset
+~80 call sites share across classes). At the frame-0 epoch, on every peer,
+before the queue rebuild, every party hero (game vt+0x11c) gets the state of
+an entity that has not moved since it was placed - +0x1e8 = +0x20, +0x1f4 =
++0x2c, bit 2 of +0x258 clear - and the rebuild drops the party heroes'
+queued moved events (by dense index; other owners' stay). Log: `the party
+heroes' moved-check state is canonical at the first shared frame on every
+peer: N hero(s), last-known = current (D differed), P pending flag(s)
+cleared; their queued moved events go in the rebuild (run 1)`; the rebuild
+line counts `M party-hero moved event(s) dropped`. `[Dev]
+LateJoinMovedCanonical=0` is the A/B control. The probe's hero lines carry
+`lk:` (the last-known vectors) and `mv:` (+0x258, +0x23c, +0x240).

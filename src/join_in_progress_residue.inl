@@ -109,9 +109,14 @@ void snapshot(const char* where)
 			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle));
 			if (!actor) { logger::write("jip snapshot: where=%s hero[%d]=handle:%08x actor:none", where, k, handle); continue; }
 			const auto a = reinterpret_cast<std::uintptr_t>(actor);
-			logger::write("jip snapshot: where=%s hero[%d]=handle:%08x own:%08x brain:%08x ctl:%d ai:%08x xyz:%08x,%08x,%08x ang:%08x,%08x,%08x hp:%08x",
+			// Follow-up 12: the moved-check memory (last-known position/orientation), its pending bit (+0x258) and the two
+			// extra deciders of 0x470b30 (+0x23c, +0x240), so the next round names the asymmetry's source.
+			logger::write("jip snapshot: where=%s hero[%d]=handle:%08x own:%08x brain:%08x ctl:%d ai:%08x xyz:%08x,%08x,%08x ang:%08x,%08x,%08x hp:%08x lk:%08x,%08x,%08x/%08x,%08x,%08x mv:%02x/%08x/%08x",
 				where, k, handle, probe_at<std::uint32_t>(a + 0x1c), probe_at<std::uint32_t>(a + 0x7dc), probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(a + hero_ai_flags),
-				probe_at<std::uint32_t>(a + 0x20), probe_at<std::uint32_t>(a + 0x24), probe_at<std::uint32_t>(a + 0x28), probe_at<std::uint32_t>(a + 0x2c), probe_at<std::uint32_t>(a + 0x30), probe_at<std::uint32_t>(a + 0x34), probe_at<std::uint32_t>(a + 0x27c));
+				probe_at<std::uint32_t>(a + 0x20), probe_at<std::uint32_t>(a + 0x24), probe_at<std::uint32_t>(a + 0x28), probe_at<std::uint32_t>(a + 0x2c), probe_at<std::uint32_t>(a + 0x30), probe_at<std::uint32_t>(a + 0x34), probe_at<std::uint32_t>(a + 0x27c),
+				probe_at<std::uint32_t>(a + actor_last_position_at), probe_at<std::uint32_t>(a + actor_last_position_at + 4), probe_at<std::uint32_t>(a + actor_last_position_at + 8),
+				probe_at<std::uint32_t>(a + actor_last_orientation_at), probe_at<std::uint32_t>(a + actor_last_orientation_at + 4), probe_at<std::uint32_t>(a + actor_last_orientation_at + 8),
+				unsigned(probe_at<std::uint8_t>(a + actor_moved_flags_at)), probe_at<std::uint32_t>(a + actor_moved_extra_a), probe_at<std::uint32_t>(a + actor_moved_extra_b));
 		}
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write("jip snapshot: where=%s (read fault)", where); }
@@ -564,6 +569,8 @@ void probe_events(const char* where)
 	__try { probe_events_body(where); }
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:events-line-fault", "jip events: a line faulted"); }
 }
+// Follow-up 12: the party handles whose queued "moved" events the NEXT rebuild drops (set by the frame-0 canonicalisation).
+std::array<std::uint32_t, 4> moved_drop_handles{}; unsigned moved_drop_count = 0; unsigned moved_dropped_last = 0;
 void canonical_event_queue_body(const char* where)
 {
 	{
@@ -584,6 +591,15 @@ void canonical_event_queue_body(const char* where)
 		}
 		const auto mask = event_index_mask();
 		entries.erase(std::remove_if(entries.begin(), entries.end(), join_in_progress_core::event_entry_dropped), entries.end());
+		// Follow-up 12: the party heroes' queued moved events go with their canonical moved-check state (frame 0 only).
+		moved_dropped_last = 0;
+		if (moved_drop_count)
+		{
+			entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& e) {
+				const bool d = join_in_progress_core::moved_event_dropped(e, moved_event_kind, moved_drop_handles.data(), moved_drop_count, mask);
+				moved_dropped_last += d ? 1u : 0u; return d; }), entries.end());
+			moved_drop_count = 0;
+		}
 		std::stable_sort(entries.begin(), entries.end(), [mask](const auto& a, const auto& b) { return join_in_progress_core::canonical_event_less(a, b, mask); });
 		// The pool back to its constructed state (retail pool init: the free ring 0..1124 ascending, read 0), both
 		// bitmaps and both counts cleared, then every kept entry re-added through the retail alloc / store / heap push.
@@ -602,8 +618,8 @@ void canonical_event_queue_body(const char* where)
 			fn<void(__thiscall*)(void*, const void*)>(event_heap_push)(body + event_heap_at, &pair);
 		}
 		++event_rebuilds; event_last_live = unsigned(entries.size()); event_last_dead = dead;
-		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
-			where, unsigned(entries.size()), dead, stale, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
+		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept, %u party-hero moved event(s) dropped), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
+			where, unsigned(entries.size()), dead, stale, moved_dropped_last, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
 			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at), mask, event_rebuilds);
 	}
 }
@@ -715,4 +731,48 @@ void world_hold_watchdog()
 void world_hold_milestone(bool loading)
 {
 	if (!loading && late_restart && epoch.started && epoch.saw_loading) open_world_hold();
+}
+// ---- follow-up 12: the party heroes' moved-check state canonical at the first shared frame ---------------------
+// (rules: moved_* / actor_*). Round 8: the joiner alone held a queued "moved" event for its own hero at frame 0 (the
+// rebuild kept it: 46/47) and the host alone registered them for the AI heroes at frames 1-3, with every hero's
+// transform identical on both peers. The source of the joiner's registration is not traced (the moved check is
+// vt+0xf4, a slot ~80 call sites share across classes). At the frame-0 epoch, on every peer and before the queue
+// rebuild, every party hero gets the state of an entity that has not moved since it was placed: last-known position
+// +0x1e8 = +0x20, last-known orientation +0x1f4 = +0x2c, pending bit 2 of +0x258 clear; the rebuild then drops the
+// party heroes' queued moved events. From frame 1 on, a hero that moves registers alike on every peer.
+bool moved_canonical_enabled = true; // [Dev] LateJoinMovedCanonical=0: the A/B control
+unsigned moved_canonical_runs = 0;
+void canonical_party_moved_state(const char* where, bool wanted)
+{
+	moved_drop_count = 0;
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		unsigned heroes = 0, pending = 0, differed = 0;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			if (!actor) continue;
+			moved_drop_handles[moved_drop_count++] = handle;
+			++heroes;
+			if (std::memcmp(actor + actor_last_position_at, actor + actor_position_at, actor_vector_bytes) != 0 || std::memcmp(actor + actor_last_orientation_at, actor + actor_orientation_at, actor_vector_bytes) != 0) ++differed;
+			std::memcpy(actor + actor_last_position_at, actor + actor_position_at, actor_vector_bytes);
+			std::memcpy(actor + actor_last_orientation_at, actor + actor_orientation_at, actor_vector_bytes);
+			if (at<std::uint8_t>(actor, actor_moved_flags_at) & actor_moved_pending_bit) { ++pending; at<std::uint8_t>(actor, actor_moved_flags_at) &= std::uint8_t(~actor_moved_pending_bit); }
+		}
+		++moved_canonical_runs;
+		logger::write("join in progress: canonical restart - the party heroes' moved-check state is canonical at %s on every peer: %u hero(s), last-known = current (%u differed), %u pending flag(s) cleared; their queued moved events go in the rebuild (run %u)",
+			where, heroes, differed, pending, moved_canonical_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		moved_drop_count = 0;
+		logger::write_once("jip:moved-canonical-fault", "join in progress: the party heroes' moved-check state could not be made canonical (read fault) - left as it is");
+	}
 }

@@ -562,6 +562,26 @@ int main(int argc, char** argv)
 		      "follow-up 11: one retail guard covers every byte of the world-section gate site");
 		check(join_in_progress_rules::world_gate_original.size() == 7 && join_in_progress_rules::world_gate_original[0] == 0xf6 && join_in_progress_rules::world_gate_original[1] == 0x86 && join_in_progress_rules::world_gate_original[6] == join_in_progress_rules::world_gate_flag_bit,
 		      "follow-up 11: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
+		{
+			// Follow-up 12 (round 8): a party hero's queued "moved" event (static kind 0x6d7c5c) is dropped by dense index
+			// whatever its generation; another owner's moved event, a member event of a party hero and a non-token owner stay.
+			event_entry mv_joiner{}, mv_host{}, mv_other{}, member{}, non_token{};
+			mv_joiner.time = mv_host.time = mv_other.time = member.time = non_token.time = 2.0f;
+			mv_joiner.token = mv_host.token = mv_other.token = member.token = true; mv_joiner.live = mv_host.live = mv_other.live = member.live = true;
+			mv_joiner.handle = 0x1802; mv_joiner.owner = 0x032d0010; mv_joiner.event = 0x6d7c5c;
+			mv_host.handle = 0x3802; mv_host.owner = 0x03290010; mv_host.event = 0x6d7c5c;
+			mv_other.handle = 0x1805; mv_other.owner = 0x032d0040; mv_other.event = 0x6d7c5c;
+			member.handle = 0x1802; member.owner = 0x032d0010; member.event = 0x032d0010 + 0x320;
+			non_token.handle = 0; non_token.owner = 0; non_token.event = 0x6d7c5c;
+			const std::uint32_t party[4] = {0x3801, 0x3802, 0x3803, 0x3804};
+			check(moved_event_dropped(mv_joiner, 0x6d7c5c, party, 4, 0x3ff) && moved_event_dropped(mv_host, 0x6d7c5c, party, 4, 0x3ff), "follow-up 12: a party hero's moved event is dropped on both peers whatever its generation");
+			check(!moved_event_dropped(mv_other, 0x6d7c5c, party, 4, 0x3ff) && !moved_event_dropped(member, 0x6d7c5c, party, 4, 0x3ff) && !moved_event_dropped(non_token, 0x6d7c5c, party, 4, 0x3ff), "follow-up 12: another owner's moved event, a party hero's member event and a non-token owner are kept");
+			check(!moved_event_dropped(mv_joiner, 0x6d7c5c, party, 0, 0x3ff), "follow-up 12: no party (the canonicalisation did not run): nothing dropped");
+			for (const auto va : {0x471740u, 0x47178cu, 0x4729b0u})
+				check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 12: the moved check, its schedule and the fire are guarded");
+			check(join_in_progress_rules::actor_last_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_last_orientation_at
+			      && join_in_progress_rules::actor_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_orientation_at, "follow-up 12: the last-known vectors are adjacent 12-byte copies of position/orientation");
+		}
 	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;

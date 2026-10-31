@@ -379,6 +379,15 @@ namespace join_in_progress_core
 	// first shared frame needs a world tick on that build - logged, the restart proceeds as before).
 	inline bool world_hold_wanted(bool enabled, bool late_restart, bool armed, bool window_open) { return enabled && late_restart && armed && window_open; }
 	inline bool world_hold_watchdog_expired(bool open, std::uint32_t opened_ms, std::uint32_t now_ms, std::uint32_t limit_ms) { return open && now_ms - opened_ms >= limit_ms; }
+	// Follow-up 12 (round 8): at the frame-0 epoch the rebuild also drops a queued "moved" event (the static kind
+	// 0x6d7c5c) whose owner is one of the party heroes (by dense index), after their moved-check state was made
+	// canonical (last-known = current, pending bit clear) on every peer; other owners' moved events are kept.
+	inline bool moved_event_dropped(const event_entry& e, std::uint32_t moved_kind, const std::uint32_t* party, unsigned party_count, std::uint32_t index_mask)
+	{
+		if (!e.token || event_kind_key(e) != moved_kind) return false;
+		for (unsigned i = 0; i < party_count; ++i) if (party[i] && (party[i] & index_mask) == (e.handle & index_mask)) return true;
+		return false;
+	}
 	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
 	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
 	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.

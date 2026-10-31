@@ -253,6 +253,7 @@ namespace join_in_progress
 		extern unsigned event_rebuilds;
 		bool event_pump_slot_ok(); // follow-up 8 (residue): the pump slot is retail or the xml1 turrets hook
 		void open_world_hold(); void release_world_hold(const char* why); void world_hold_watchdog(); void world_hold_milestone(bool loading); // follow-up 11 (residue): the world hold
+		void canonical_party_moved_state(const char* where, bool wanted); extern bool moved_canonical_enabled; // follow-up 12 (residue): the party heroes' moved-check state
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -429,6 +430,7 @@ namespace join_in_progress
 				reanchor_camera_at_frame0();
 				release_smart_hold("the first shared frame");
 				fpu_canonical("the first shared frame", restart_reset_enabled);
+				canonical_party_moved_state("the first shared frame", restart_reset_enabled && moved_canonical_enabled); // follow-up 12: before the rebuild, which drops the party heroes' queued moved events
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
@@ -1620,6 +1622,8 @@ namespace join_in_progress
 		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
 		world_hold_enabled = ini::flag(L"Dev", L"LateJoinWorldHold", true);
 		if (!world_hold_enabled) logger::write("join in progress: [Dev] LateJoinWorldHold=0 - the world update keeps ticking during a late restart's barrier wait (AE11 behaviour; A/B control only)");
+		moved_canonical_enabled = ini::flag(L"Dev", L"LateJoinMovedCanonical", true);
+		if (!moved_canonical_enabled) logger::write("join in progress: [Dev] LateJoinMovedCanonical=0 - the party heroes' moved-check state and queued moved events stay as each PC left them at frame 0 (AE12 behaviour; A/B control only)");
 #ifndef NDEBUG
 		mesh_defer_ms = DWORD(ini::number(L"Dev", L"MeshDeferMs", 0));
 		mesh_reply_legacy = ini::number(L"Dev", L"MeshReplyLegacy", 0) == 1;
