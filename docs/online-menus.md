@@ -1223,7 +1223,8 @@ meaning. `online_menus_rules::cause_table` is the one table: key, the next actio
 | `code_not_found` | `no_such_room`, `code_not_found` | edit code | no |
 | `code_expired` | `room_closed`, `code_expired` | edit code | no |
 | `room_full` | `room_full` | browse | no |
-| `room_closed` | `room_not_joinable` | retry | yes (bounded by the shared limiter) |
+| `room_closed` | `room_not_joinable` without conclusive fresh listing context | retry | yes (bounded by the shared limiter) |
+| `session_started` | `room_not_joinable` plus the client's fresh started/unjoinable/nonfull listing inference | ask host to return to lobby | no |
 | `version_mismatch` | `version_mismatch` | back | no |
 | `rate_limited` | `rate_limited` | retry | yes, after the service's wait |
 | `timeout` | `timeout` | retry | yes |
@@ -1973,3 +1974,28 @@ frozen gameplay record. The startup default remains0. The complete JIP module
 must already be installed; JoinInProgress=0 remains disabled until relaunch.
 Guests show campaign/difficulty without claiming this PC's future host policy
 is the remote host's setting. The host's lobby summary reflects its own choice.
+
+
+## Code refusal after the session started (fix AN)
+
+A resolve refused with `room_not_joinable` triggers an existing protocol-2 `list_rooms` request on the same connection,
+within the original resolve's 10-second deadline. No new metadata or broker operation is sent. Only a complete, valid,
+fresh list with the exact code, `in_progress=true`, `joinable=false`, and known occupancy `1 <= players < max_players`
+is a candidate. Because broker occupancy can update before the host's paced advert, the client waits 6 seconds (the 5-second presence interval plus observation margin), then confirms with one more `list_rooms` request. Only a second matching candidate
+selects `lc_broker_err_session_started`: "This session has started. Ask the host to return to the lobby." Retry is hidden.
+The current host advert uses this combination for started with drop-in disabled; full rooms also advertise false.
+The second observation avoids mistaking a just-freed seat with a still-full advert for that policy. Native posting
+advertises false before the started latch. Level loading alone does not change that advert.
+
+Unknown/private/absent/truncated/malformed/full rows, a changed joinable state, or failure of the explanatory lookup keep
+`lc_broker_err_room_closed`: "Not taking players right now. Try again soon." Retry retains its limiter/backoff. The lookup
+never admits or connects to the host; duplicate refusals do not send another lookup. Cancel, timeout and generation checks
+reject late results. Failure of the lookup preserves the original refusal instead of replacing it with a lookup error.
+
+`session_started` is presentation context only. The diagnostic remains `join: room_not_joinable` and launcher status
+remains `room_closed` (contract v1.5). No gameplay rule, framing, capability marker or release identity changes. Older
+assets without the dedicated scene use the existing generic scene with Retry hidden. LC must be rebuilt with the companion
+scene for the specific copy. Private rooms cannot be distinguished through the public list; they retain the retry copy.
+This remains an inference from this client's advertisement, not a broker-supplied refusal reason. Protocol 2 has no
+policy bit or host-advert timestamp: a host stalled beyond its normal presence interval can still leave stale metadata.
+The confirmation stays within the original deadline; if there is insufficient time, the retry copy wins.

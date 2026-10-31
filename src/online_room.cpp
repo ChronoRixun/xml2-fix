@@ -1113,6 +1113,17 @@ namespace online_room
 			else if (op == "error")
 			{
                 const auto code = msg.text("code"), about = msg.text("in_reply_to");
+                if (about == "resolve" && code == "room_not_joinable" && client.accepts(client.view().generation, browser::operation::resolve)) {
+                    if (client.explaining_refusal()) return; // duplicate resolve refusal; never send a second lookup
+                    // Protocol 2 has no structured refusal reason. Ask for its existing public listing on this
+                    // connection; a matching candidate gets one bounded confirmation. No cache or host connection.
+                    if (client.explain_refusal(client.view().generation, configured_code) && post(core::request("list_rooms"))) {
+                        logger::write("online: broker error room_not_joinable in reply to resolve: %s; checking the room listing",
+                                      online_security::sanitize_log_text(msg.text("msg")).c_str());
+                        online_status::error(st::from_broker(code), online_security::sanitize_log_text(msg.text("msg")));
+                        return;
+                    }
+                }
                 if ((client.pending() || client.view().state == browser::phase::room) && (about == "resolve" || about == "host" || about == "list_rooms" || about == "auth" || about == "cert" || (about == "turn" && !ice_ready) || code == "auth_failed"))
                     client.fail(client.view().generation, code.empty() ? "broker_rejected" : code, room_clock());
 				if (about == "resolve" && code == "no_such_room")
@@ -1161,12 +1172,20 @@ namespace online_room
                 const auto op = msg.text("op");
                 const bool request_reply = op == "auth_ok" || op == "list_rooms_ok" || op == "host_ok" || op == "resolve_ok" || op == "error";
                 if (request_reply && event.ticket != client.view().generation) continue;
-                if (op == "list_rooms_ok") { client.listed(event.ticket, msg, room_clock()); continue; }
+                if (op == "list_rooms_ok") {
+                    if (client.explaining_refusal()) client.refusal_listed(event.ticket, msg, room_clock());
+                    else client.listed(event.ticket, msg, room_clock());
+                    continue;
+                }
                 if (op == "host_ok" && !client.accepts(event.ticket, browser::operation::host)) continue;
-                if (op == "resolve_ok" && !client.accepts(event.ticket, browser::operation::resolve)) continue;
+                if (op == "resolve_ok" && (!client.accepts(event.ticket, browser::operation::resolve) || client.explaining_refusal())) continue;
                 if (msg.valid) handle(msg);
                 if (client.view().state == browser::phase::room && !client.view().authenticated) break;
             }
+			// Drain the entire old reply batch while still settling. An already queued duplicate of the first
+			// listing must not become confirmation just because its wait expired before this frame's pump.
+            if (client.confirm_refusal(room_clock()) && !post(core::request("list_rooms")))
+                client.fail(client.view().generation, "send_queue_full", room_clock());
 		}
 
 		// Datagrams and messages arriving on room connections: datagrams for the game socket's reader, everything else

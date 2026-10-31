@@ -72,3 +72,8 @@ listed (the two server-browsing callbacks' games-table allocations, 0x605d55 and
 5-byte calls, one transaction), so the list shows the room's game only. Seen live before this: the list showed the
 room's host twice (room + master list) and the joiner picked the master copy, which joins by the real address around
 the room (plain UDP, no NAT traversal or relay). Connect by IP with any non-address text (e.g. `0`) still joins the room.
+
+
+Fix AN keeps `room_not_joinable` mapped to `room_closed` for both transient and started/drop-in-off refusals. A fresh public
+listing may select the more specific in-game scene; that presentation detail adds no status field or error id. See
+[the client decision rule](online-menus.md#code-refusal-after-the-session-started-fix-an).

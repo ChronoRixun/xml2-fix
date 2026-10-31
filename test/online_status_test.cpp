@@ -3,6 +3,7 @@
 #include "online_status.hpp"
 #include "online_status_core.hpp"
 #include "online_room_core.hpp"
+#include "online_menus_rules.hpp"
 
 #include <Windows.h>
 
@@ -113,6 +114,12 @@ int main()
 	check(core::from_broker("no_such_room") == core::error::code_not_found, "broker no_such_room -> code_not_found");
 	check(core::from_broker("room_full") == core::error::room_full, "broker room_full -> room_full");
 	check(core::from_broker("room_not_joinable") == core::error::room_closed, "broker room_not_joinable -> room_closed (contract v1.5), not room_full");
+    for(const char* detail:{"session_started",""}) {
+        const auto cause=online_menus_rules::classify_error("room_not_joinable",detail);
+        check(cause==(*detail ? online_menus_rules::error_cause::session_started : online_menus_rules::error_cause::room_closed) &&
+              core::from_broker("room_not_joinable")==core::error::room_closed,
+              "started/transient presentation keeps launcher contract room_closed");
+    }
 	check(core::from_broker("room_closed") == core::error::code_expired, "broker room_closed -> code_expired");
 	check(core::from_broker("unsupported_version") == core::error::broker_rejected && core::from_broker("auth_failed") == core::error::broker_rejected, "broker version/auth refusal -> broker_rejected");
 	check(core::from_broker("rate_limited") == core::error::internal, "other broker errors -> internal");

@@ -173,6 +173,55 @@ int main()
 	once.detail({id.request+7,id.room},"WRONG");check(once.view().error_detail=="LC36","client: a stale ticket cannot set the detail");
 	once.cancel();once.stopped();check(once.view().error_detail.empty() && once.view().error.empty(),"client: cancel clears the failure and its detail");
 	b::client_state fresh;fresh.begin(b::operation::list,1,true);fresh.issue();fresh.detail(fresh.view().generation,"LC1");check(fresh.view().error_detail.empty(),"client: detail needs a recorded failure");
-	std::printf("%d PASS / %d FAIL\n", passed, failed);
+    // Fix AN: a fresh, complete public row is the only evidence for the specific started-session refusal.
+    auto list=[](const std::string& fields) { return online_room_core::parse("{\"op\":\"list_rooms_ok\",\"rooms\":["+fields+"]}"); };
+    const std::string row="\"code\":\"ABCDEFGH\",\"in_progress\":true,\"joinable\":false";
+    check(b::started_room_refusal("ABCDEFGH",list("{"+row+",\"players\":1,\"max_players\":4}")),"refusal: started, unjoinable, known free seat -> specific");
+    for(int max:{2,3,4}) {
+        check(b::started_room_refusal("ABCDEFGH",list("{"+row+",\"players\":"+std::to_string(max-1)+",\"max_players\":"+std::to_string(max)+"}")),"refusal: free seat at each native capacity");
+        check(!b::started_room_refusal("ABCDEFGH",list("{"+row+",\"players\":"+std::to_string(max)+",\"max_players\":"+std::to_string(max)+"}")),"refusal: full at each native capacity remains inconclusive");
+    }
+    for(const char* fields:{
+        R"({"code":"ABCDEFGH","in_progress":false,"joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":true,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false,"players":1})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false,"players":0,"max_players":4})",
+        R"({"code":"ABCDEFGH","joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"players":1,"max_players":4})",
+        R"({"code":"AAAAAAAB","in_progress":true,"joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":"true","joinable":false,"players":1,"max_players":4})",
+        R"({"code":"ABCDEFGH","in_progress":true,"joinable":false,"players":5,"max_players":4})",
+        ""}) check(!b::started_room_refusal("ABCDEFGH",list(fields)),"refusal: transient/unknown/private/other-code/malformed row -> retry");
+    const auto good=list("{"+row+",\"players\":1,\"max_players\":4}");
+    check(!b::started_room_refusal("ABCDEFGH",list("{"+row+",\"players\":1,\"max_players\":4},{\"code\":\"bad\"}")),"refusal: partial list never used");
+    b::client_state refusal;refusal.begin(b::operation::resolve,1000,true);refusal.issue();auto rt=refusal.view().generation;
+    check(refusal.explain_refusal(rt,"ABCDEFGH") && !refusal.explain_refusal(rt,"ABCDEFGH"),"refusal: at most one explanation per resolve");
+    check(!refusal.joined(rt,b::operation::resolve,"ABCDEFGH"),"refusal: late resolve success cannot admit the refused room");
+    refusal.refusal_listed({rt.request+1,rt.room},good,1100);
+    check(refusal.pending() && refusal.explaining_refusal(),"refusal: stale list cannot finish the attempt");
+    refusal.refusal_listed(rt,good,1100);
+    check(refusal.pending() && refusal.view().error_detail.empty() && !refusal.confirm_refusal(7099),"refusal: one matching snapshot waits through host presence interval");
+    refusal.refusal_listed(rt,good,1200); // duplicate first reply cannot confirm policy
+    check(refusal.pending() && refusal.confirm_refusal(7100) && !refusal.confirm_refusal(7101),"refusal: one bounded confirmation after 6 seconds");
+    refusal.refusal_listed(rt,good,7100);
+    check(refusal.view().error=="room_not_joinable" && refusal.view().error_detail=="session_started" && !refusal.explaining_refusal(),"refusal: original id plus trusted presentation detail");
+    refusal.fail(rt,"timeout",1200);check(refusal.view().error_detail=="session_started","refusal: duplicate failure keeps first explanation");
+    refusal.cancel();refusal.stopped();refusal.refusal_listed(rt,good,1300);
+    check(refusal.view().error.empty() && refusal.view().error_detail.empty(),"refusal: cancel clears context and rejects late list");
+    for(const char* error:{"timeout","broker_unreachable","rate_limited","send_queue_full","malformed_reply"}) {
+        b::client_state no_detail;no_detail.begin(b::operation::resolve,1000,true);no_detail.issue();auto t=no_detail.view().generation;
+        no_detail.explain_refusal(t,"ABCDEFGH");no_detail.fail(t,error,1100);
+        check(no_detail.view().error=="room_not_joinable" && no_detail.view().error_detail.empty(),"refusal: explanation failure preserves original id, no guess");
+        check(no_detail.begin(b::operation::resolve,80000,true) && !no_detail.explaining_refusal() && no_detail.view().error_detail.empty(),"refusal: next attempt has no stale context");
+    }
+    b::client_state seat_freed;seat_freed.begin(b::operation::resolve,1000,true);seat_freed.issue();const auto ft=seat_freed.view().generation;
+    seat_freed.explain_refusal(ft,"ABCDEFGH");seat_freed.refusal_listed(ft,good,1100);seat_freed.confirm_refusal(7100);
+    seat_freed.refusal_listed(ft,list(R"({"code":"ABCDEFGH","in_progress":true,"joinable":true,"players":1,"max_players":4})"),7100);
+    check(seat_freed.view().error=="room_not_joinable" && seat_freed.view().error_detail.empty(),"refusal: full-to-free drop-in ON advert settles to retry, never started");
+    b::client_state too_late;too_late.begin(b::operation::resolve,1000,true);too_late.issue();const auto lt=too_late.view().generation;
+    too_late.explain_refusal(lt,"ABCDEFGH");too_late.refusal_listed(lt,good,9000);
+    check(!too_late.confirm_refusal(15000),"refusal: confirmation cannot extend the original deadline");
+    std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;
 }

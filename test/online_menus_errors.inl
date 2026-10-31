@@ -44,6 +44,10 @@ void error_table_pure() {
         // Every row has exactly one scene key and one next action; a cause that is retryable names Retry/Try again.
         assert(std::string(error_cause_key[int(cause)]).size() && row_of(cause).cause==cause);
     }
+    assert(classify_error("room_not_joinable","session_started")==error_cause::session_started);
+    assert(cause_next(error_cause::session_started)==next_action::lobby && !cause_retryable(error_cause::session_started));
+    assert(classify_error("timeout","session_started")==error_cause::timeout);
+    assert(classify_error("room_not_joinable","session_started ")==error_cause::room_closed);
     assert(std::size(cause_table)==std::size(error_cause_key));
     for(unsigned i=0;i<std::size(cause_table);++i) assert(int(cause_table[i].cause)==int(i));
     // The retry set is exactly the transient causes; nothing else may offer it.
@@ -215,6 +219,24 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
             }
         }
     }
+    // Fix AN: fresh trusted context, transient fallback, older assets, diagnostic/status identity unchanged.
+    for(const char* name:{"lc_code","lc_browse"}) for(bool old_assets:{false,true}) {
+        screen(name);tick(child.data(),nullptr);settle();
+        if(old_assets) absent_items.insert("lc_broker_err_session_started");
+        assert(menu_begin(bm::operation::resolve));
+        menu_auth=true;menu_error="room_not_joinable";menu_error_detail="session_started";menu_complete=true;
+        tick(child.data(),nullptr);tick(child.data(),nullptr);
+        assert(shown(old_assets ? "lc_broker_err_generic" : "lc_broker_err_session_started"));
+        assert(gone("lc_broker_err_room_closed") && gone("retry") && !enabled_items["retry"]);
+        assert(texts["broker_error"]=="join: room_not_joinable" && menu_view().error=="room_not_joinable");
+        unsigned visible=0;for(const auto* key:error_cause_key) visible+=shown(std::string("lc_broker_err_")+key);
+        assert(visible==1);
+        absent_items.clear();menu_error_detail.clear();settle();
+        assert(menu_begin(bm::operation::resolve));menu_auth=true;menu_error="room_not_joinable";menu_complete=true;
+        tick(child.data(),nullptr);tick(child.data(),nullptr);
+        assert(shown("lc_broker_err_room_closed") && !shown("lc_broker_err_session_started") && shown("retry"));
+    }
+    settle();
     // The shared limiter counts down on the diagnostic field; Retry waits for it; Refresh cannot bypass it.
     screen("lc_browse");settle();menu_rows_json="-";
     assert(menu_begin(bm::operation::list));menu_auth=true;menu_complete=true;tick(child.data(),nullptr);tick(child.data(),nullptr); // a good list clears the backoff

@@ -326,13 +326,13 @@ inline std::string relative_age(std::uint64_t now,std::uint64_t then) {
 // Error cause selectors (round 15 completes INGAME-DESIGN section 3.3). The DLL shows exactly one lc_broker_err_<key>
 // per failure; the id stays a redacted diagnostic. The first eight keep their broker/2 meaning.
 enum class error_cause { code_not_found, room_full, version_mismatch, rate_limited, timeout, offline, refused, generic,
-    pin_mismatch, code_expired, room_closed, test_mode, unsupported, busy, invalid_name, too_many_public_rooms, too_many_joins, count };
+    pin_mismatch, code_expired, room_closed, test_mode, unsupported, busy, invalid_name, too_many_public_rooms, too_many_joins, session_started, count };
 inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","version_mismatch","rate_limited","timeout","offline","refused","generic",
-    "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name","too_many_public_rooms","too_many_joins"};
+    "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name","too_many_public_rooms","too_many_joins","session_started"};
 static_assert(std::size(error_cause_key)==std::size_t(error_cause::count));
 // What the failure's copy tells the player to do next. LC's copy names it; retry is the only one that is a control.
-enum class next_action { retry, edit_code, browse, other_ways, back, wait, close_room, leave_game };
-inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait","close_room","leave_game"};
+enum class next_action { retry, edit_code, browse, other_ways, back, wait, close_room, leave_game, lobby };
+inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait","close_room","leave_game","lobby"};
 struct cause_row { error_cause cause; next_action next; bool retry; };
 // One row per cause, in enum order.
 inline constexpr cause_row cause_table[] = {
@@ -352,15 +352,16 @@ inline constexpr cause_row cause_table[] = {
     {error_cause::busy,            next_action::wait,       false},  // a refusal of the moment: no Retry control (the screen's own action repeats it)
     {error_cause::invalid_name,    next_action::back,       false},
     {error_cause::too_many_public_rooms,next_action::close_room,false},
-    {error_cause::too_many_joins,  next_action::leave_game, false}};
+    {error_cause::too_many_joins,  next_action::leave_game, false},
+    {error_cause::session_started,next_action::lobby,      false}};
 static_assert(std::size(cause_table)==std::size_t(error_cause::count));
 inline constexpr const cause_row& row_of(error_cause c) { return cause_table[std::size_t(c)]; }
-inline error_cause classify_error(std::string_view id) {
+inline error_cause classify_error(std::string_view id,std::string_view detail={}) {
     auto is=[&](std::initializer_list<std::string_view> list) { for(auto v:list) if(id==v) return true; return false; };
     if(is({"no_such_room","code_not_found"})) return error_cause::code_not_found;
     if(is({"room_closed","code_expired"})) return error_cause::code_expired;
     if(id=="room_full") return error_cause::room_full;
-    if(id=="room_not_joinable") return error_cause::room_closed;
+    if(id=="room_not_joinable") return detail=="session_started" ? error_cause::session_started : error_cause::room_closed;
     if(id=="version_mismatch") return error_cause::version_mismatch;
     if(id=="rate_limited") return error_cause::rate_limited;
     if(id=="timeout") return error_cause::timeout;
