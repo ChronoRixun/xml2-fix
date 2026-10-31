@@ -462,6 +462,18 @@ bool native_request(const char* name) {
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+bool native_host_fresh_campaign() {
+    __try {
+        auto* session=at<getter>(0x612be0)();
+        if(session!=at<void*>(0xa53058) || *static_cast<unsigned*>(session)!=0x6a481c) return false;
+        // Retail save selection sets this at 0x6082e6. SetGameType clears
+        // it at 0x49f926 only while a save image exists; our cleanup may
+        // already have released that image via 0x606f50. A fresh setup starts
+        // as New; a later native save selection will set it again.
+        static_cast<unsigned char*>(session)[0x3e1]=0;
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 bool native_host_begin() {
     if(native_flow.phase==native_phase::setup && native_flow.departure==screen::none) broker_cancel();
     if(native_flow.phase!=native_phase::idle || broker_view().state==broker::phase::room) return false;
@@ -471,6 +483,7 @@ bool native_host_begin() {
     __except(EXCEPTION_EXECUTE_HANDLER) { }
     if(!controller_valid(controller)) { message("lc_notice_admission");return false; }
     if(!native_engine_rearm("host setup")) { message("lc_notice_admission");return false; }
+    if(!native_host_fresh_campaign()) { message("lc_notice_admission");return false; }
     error_visible=false;feedback.clear();
     // Native game names are 31 bytes, narrower than broker room-name metadata.
     // An overlong preset gets an explicit native choice, never silent truncation.

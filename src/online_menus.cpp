@@ -2514,10 +2514,13 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
             }
         }
     }
-    if(chosen && which(menu)==screen::host && current_peek()==menu && chosen==item_try(menu,"drop_in") &&
-        message==WM_LBUTTONUP && native_flow.phase==native_phase::idle && (!pending.action || pending.action==int(intent::drop_in))) {
-        lobby_focus(menu,"drop_in");
-        pending.post(int(intent::drop_in),reinterpret_cast<std::uintptr_t>(menu),screen::host);
+    if(chosen && which(menu)==screen::host && current_published()==menu && chosen==item_try(menu,"drop_in") &&
+        native_flow.phase==native_phase::idle) {
+        owned_click=message==WM_LBUTTONDOWN || message==WM_LBUTTONUP;
+        if(message==WM_LBUTTONUP) {
+            lobby_focus(menu,"drop_in");
+            pending.post(int(intent::drop_in),reinterpret_cast<std::uintptr_t>(menu),screen::host);
+        }
     }
     // Only one owner activates these authored controls. The native walk still
     // updates hover/focus, but cannot enqueue another usecmd for this click.
@@ -3217,13 +3220,6 @@ void keyboard(unsigned char* state) {
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
-    if(!menu) {
-        // A Kick can leave the current Party inactive for a transition frame.
-        // Retain its Back edge until its tick resumes, scoped to the same owner;
-        // a cached/replaced menu never receives it and no lazy getter runs.
-        auto* transitioning=current_published();
-        if(which(transitioning)==screen::party && party_owner==reinterpret_cast<std::uintptr_t>(transitioning)) menu=transitioning;
-    }
     if(!menu) { pause_hover_menu=nullptr;return; }
     // The native PDA can refresh its focus after mouse dispatch. Synchronize at
     // the Enter sample too, while that same Party bar still owns the pointer.

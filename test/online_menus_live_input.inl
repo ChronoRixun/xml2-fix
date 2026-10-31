@@ -645,8 +645,12 @@ void ab_native_controls(bool visibility_case) {
     if(burst) { tick(hub.data(),nullptr);assert(party_native_backs==1);std::cout<<"PASS Confirm then Esc in one input burst: one Kick then one Back\n";return; }
     if(mode=="r25-party-delayed") {
         std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());
-        ticks+=300;hub[4]=0;keys[1]=128;online_menus::keyboard(keys.data());hub[4]=1;tick(hub.data(),nullptr);
-        assert(party_native_backs==1);std::cout<<"PASS Esc 300 ms after Kick closes Party once\n";return;
+        ticks+=300;hub[4]=0;keys[1]=128;online_menus::keyboard(keys.data());
+        assert(keys[1]==128); // the native overlay still owns Esc
+        hub[4]=1;tick(hub.data(),nullptr);tick(hub.data(),nullptr);
+        assert(party_native_backs==0); // no inactive Back replay on reactivation
+        keys[1]=0;online_menus::keyboard(keys.data());keys[1]=128;online_menus::keyboard(keys.data());tick(hub.data(),nullptr);
+        assert(party_native_backs==1);std::cout<<"PASS inactive Party leaves Esc to overlay; active fresh Esc closes Party once\n";return;
     }
     assert(visibility.count("lc_party_confirm_leave_host") && visibility["lc_party_confirm_leave_host"]);
     // A delayed native replay of the shared Confirm must not swallow the
@@ -700,8 +704,22 @@ void ac_drop_controls() {
     accept_focused(hub.data());tick(hub.data(),nullptr);assert(!menu_drop_policy && menu_drop_changes==2);
     ask_unit(mouse,hub.data(),140,240,0x202);tick(hub.data(),nullptr);assert(menu_drop_policy && menu_drop_changes==3);
     ask_unit(mouse,hub.data(),140,240,0x202);tick(hub.data(),nullptr);assert(!menu_drop_policy && menu_drop_changes==4);
+    for(bool inactive:{false,true}) {
+        if(inactive) hub[4]=0;
+        ask_unit(mouse,hub.data(),140,240,WM_LBUTTONDOWN);
+        assert(!(mask&0x10));hub[4]=1;tick(hub.data(),nullptr);
+        assert(!menu_drop_policy && menu_drop_changes==4+unsigned(inactive)*2);
+        if(inactive) hub[4]=0;
+        ask_unit(mouse,hub.data(),140,240,WM_LBUTTONUP);
+        assert(!(mask&0x10)); // owned DOWN+UP must never give native Accept a second activation
+        hub[4]=1;tick(hub.data(),nullptr);tick(hub.data(),nullptr);
+        assert(menu_drop_policy && menu_drop_changes==5+unsigned(inactive)*2);
+        ask_unit(mouse,hub.data(),140,240,WM_LBUTTONDOWN);
+        ask_unit(mouse,hub.data(),140,240,WM_LBUTTONUP);tick(hub.data(),nullptr);tick(hub.data(),nullptr);
+        assert(!menu_drop_policy && menu_drop_changes==6+unsigned(inactive)*2);
+    }
     menu_drop_locked=true;tick(hub.data(),nullptr);accept_focused(hub.data());tick(hub.data(),nullptr);
-    assert(!menu_drop_policy && menu_drop_changes==4);
+    assert(!menu_drop_policy && menu_drop_changes==8);
     online_menus_rules::mailbox box;
     for(auto screen:{online_menus_rules::screen::hub,online_menus_rules::screen::code,online_menus_rules::screen::browse,
                      online_menus_rules::screen::lobby_host,online_menus_rules::screen::party}) assert(!box.post(75,1,screen));

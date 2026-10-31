@@ -93,10 +93,12 @@ char __fastcall refusal_send(void*,void*,void*,const unsigned char* message,int)
     ++refusals;return 1;
 }
 void __fastcall disconnect(void*,void*,int) { ++disconnects; }
+unsigned refusal_flushes=0;
+void __fastcall refusal_flush(void*,void*,void*) { ++refusal_flushes;assert(refusal_flushes==refusals && disconnects+1==refusals); }
 void admission_run() {
     using namespace join_in_progress_rules;
     redirect(session_getter,session);redirect(manager_getter,manager);
-    redirect(0x615910,capacity);redirect(0x612a40,allocate);redirect(send_to,refusal_send);redirect(0x6106f0,disconnect);
+    redirect(0x615910,capacity);redirect(0x612a40,allocate);redirect(send_to,refusal_send);redirect(0x6106f0,disconnect);redirect(flush_peer,refusal_flush);
     unsigned char event[0x1c]{},peer[0x40]{},body[8]{};
     put(event,4,body);put(event,0x10,peer);put(peer,4,peer);
     const auto handler=reinterpret_cast<int(__cdecl*)(void*)>(0x609970);

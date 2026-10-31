@@ -628,6 +628,7 @@ namespace online_room
 			std::uint32_t address = 0;
 			HSteamNetConnection connection = k_HSteamNetConnection_Invalid;
 			bool outgoing = false, connected = false, transport_bound = false;
+            bool departure_queued = false;
 			int attempts = 0;
 			DWORD started = 0, connected_at = 0, retry_at = 0, reported = 0, keepalive_at = 0;
 			std::deque<datagram> waiting;
@@ -705,7 +706,7 @@ namespace online_room
             return SteamNetworkingUtils()->SetConnectionConfigValueInt32(c,k_ESteamNetworkingConfig_TimeoutConnected,ms);
         }
         EResult real_send_departure(HSteamNetConnection c,const void* bytes,std::uint32_t size) {
-            return sockets()->SendMessageToConnection(c,bytes,size,k_nSteamNetworkingSend_Reliable,nullptr);
+            return sockets()->SendMessageToConnection(c,bytes,size,k_nSteamNetworkingSend_ReliableNoNagle,nullptr);
         }
 #ifdef XML2_ONLINE_ROOM_TEST_SEAMS
         auto connected_timeout=&real_connected_timeout;
@@ -803,6 +804,7 @@ namespace online_room
 			}
 			t.connection = k_HSteamNetConnection_Invalid;
 			t.connected = t.transport_bound = false;
+            t.departure_queued = false;
 			t.party_rtt = -1;
 			t.party_route = online_party_core::route::unknown;
 			for (auto* m : t.game) m->Release();
@@ -1846,7 +1848,29 @@ namespace online_room
             published_request = client.view().generation.request;
             published_room = client.view().generation.room;
         }
+        void drain_waiting_departures() {
+            // CloseListenSocket destroys accepted children, including ones in
+            // GNS linger. Let the backend ACK queued host-left notices BEFORE
+            // destroying that listener. One shared bound, not one per member;
+            // no native/game callbacks or admission work runs during the wait.
+            constexpr DWORD bound_ms=1000;
+            const auto started=GetTickCount();
+            unsigned pending=0,unavailable=0,tracked=0;
+            do {
+                pending=unavailable=tracked=0;
+                for(const auto& t:tunnels) if(t->departure_queued && t->connection!=k_HSteamNetConnection_Invalid) {
+                    ++tracked;SteamNetConnectionRealTimeStatus_t status{};
+                    if(connection_status(t->connection,&status,0,nullptr)!=k_EResultOK) ++unavailable;
+                    else if(status.m_cbPendingReliable || status.m_cbSentUnackedReliable) ++pending;
+                }
+                if(!pending || GetTickCount()-started>=bound_ms) break;
+                Sleep(10);
+            } while(true);
+            if(tracked) logger::write("online: host departure waiting-tunnel drain: %u tracked, %u pending, %u unavailable after %lu ms (bound %lu ms)",
+                tracked,pending,unavailable,unsigned long(GetTickCount()-started),unsigned long(bound_ms));
+        }
         void clear_room(bool linger = false) {
+            if(linger) drain_waiting_departures();
             for (auto& t : tunnels) drop(*t, "intentional room departure", linger);
             tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
             signal_rates.clear(); members.clear(); own_address = 0;
@@ -1973,13 +1997,15 @@ namespace online_room
         wanted = false;
         if (worker_done) client.stopped();
     }
-    void leave() {
-        // An explicit leave (or the deferred one itself) completes whatever was waiting for the next tick.
-        const bool after_flush = deferred_leave.armed();
+    void finish_leave(bool after_flush) {
         deferred_leave.disarm();
         client.cancel(true); publish_ticket(); invalidate_worker(); clear_room(after_flush);
         wanted = false;
         if (worker_done) client.stopped();
+    }
+    void leave() {
+        // Explicit leave also honors an already queued native departure.
+        finish_leave(deferred_leave.armed());
     }
     // A native session end: the retail quit notices (0x10cc / 0x1106) were queued on the room tunnel moments ago. Leave
     // after the transport tick that flushes them, and let the closing connection deliver what is still reliable.
@@ -1996,7 +2022,7 @@ namespace online_room
             const auto bytes=gns_transport_core::frame(notice);
             unsigned queued=0,refused=0;
             for (const auto& t:tunnels) if(t->connected && !t->transport_bound) {
-                if(send_departure(t->connection,bytes.data(),std::uint32_t(bytes.size()))==k_EResultOK) ++queued;
+                if(send_departure(t->connection,bytes.data(),std::uint32_t(bytes.size()))==k_EResultOK) { t->departure_queued=true;++queued; }
                 else ++refused;
             }
             if(queued || refused) logger::write("online: host departure notice to waiting room tunnels: %u queued, %u refused",queued,refused);
@@ -2077,7 +2103,8 @@ namespace online_room
 	void tick()
 	{
         if (deferred_leave.step()) {
-            try { leave(); } catch (...) { logger::write("online: deferred room leave failed - the room stays until the next explicit leave"); }
+            // step() consumed its arm; keep the reason for lingering explicit.
+            try { finish_leave(true); } catch (...) { logger::write("online: deferred room leave failed - the room stays until the next explicit leave"); }
             return;
         }
         if (!wanted) return;

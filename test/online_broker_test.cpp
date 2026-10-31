@@ -559,15 +559,25 @@ struct packet : SteamNetworkingMessage_t {
 };
 std::deque<SteamNetworkingMessage_t*> queued;
 unsigned heartbeats=0,closed=0;
+bool closed_linger=false,departure_stalled=false;
+unsigned departure_queries=0,departure_delivered=0,departure_discarded=0;
+std::uint32_t departure_pending=0;
 int route_flags=0,timeout_ms=0;
 std::vector<std::vector<std::uint8_t>> departures;
 bool timeout(HSteamNetConnection c,int ms) { assert(c==123);timeout_ms=ms;return true; }
-EResult departure(HSteamNetConnection c,const void* data,std::uint32_t size) { assert(c==123);const auto* b=static_cast<const std::uint8_t*>(data);departures.emplace_back(b,b+size);return k_EResultOK; }
+EResult departure(HSteamNetConnection c,const void* data,std::uint32_t size) { assert(c==123);const auto* b=static_cast<const std::uint8_t*>(data);departures.emplace_back(b,b+size);departure_pending+=size;return k_EResultOK; }
 bool info(HSteamNetConnection c,SteamNetConnectionInfo_t* out) { *out={};out->m_nFlags=c==124 ? k_nSteamNetworkConnectionInfoFlags_Relayed : route_flags;return true; }
-EResult status(HSteamNetConnection,SteamNetConnectionRealTimeStatus_t* out,int,SteamNetConnectionRealTimeLaneStatus_t*) { *out={};return k_EResultOK; }
+EResult status(HSteamNetConnection,SteamNetConnectionRealTimeStatus_t* out,int,SteamNetConnectionRealTimeLaneStatus_t*) {
+    *out={};
+    if(departure_pending && ++departure_queries>=2 && !departure_stalled) { departure_pending=0;++departure_delivered; }
+    out->m_cbPendingReliable=int(departure_pending);return k_EResultOK;
+}
 
-bool close(HSteamNetConnection c,const char*,bool) {
-    assert(c==123);++closed;
+bool close(HSteamNetConnection c,const char*,bool linger) {
+    assert(c==123);++closed;closed_linger=linger;
+    // clear_room destroys the listener too: even lingered accepted children
+    // lose unacknowledged output when their parent listener is destroyed.
+    departure_discarded+=departure_pending!=0;departure_pending=0;
     while(!queued.empty()) { queued.front()->Release();queued.pop_front(); }
     return true;
 }
@@ -584,6 +594,7 @@ room::tunnel& setup() {
     assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
     assert(room::client.joined(room::view().generation,b::operation::resolve,"ABCDEFGH"));
     room::guest_admitted();room::host_loss.connected();room::receive_messages=receive;room::send_keepalive=heartbeat;room::close_connection=static_cast<bool(*)(HSteamNetConnection,const char*,bool)>(close);heartbeats=closed=0;timeout_ms=0;departures.clear();room::connected_timeout=timeout;room::send_departure=departure;
+    departure_pending=departure_queries=departure_delivered=departure_discarded=0;closed_linger=departure_stalled=false;
     auto host=std::make_unique<room::tunnel>();host->id=room::host_id;host->connection=123;host->connected=true;host->removal_floor=40;
     room::tunnels.push_back(std::move(host));room::report_sequence=45;
     fake::party={};fake::party.session=true;fake::party.count=1;fake::party.participants[0].local=true;fake::party.participants[0].index=1;
@@ -632,6 +643,19 @@ void run(const std::string& name) {
         online_room_core::host_loss_tracker loss;loss.admitted();
         assert(loss.departure_notice(true,false,true,msg.opcode,msg.body,msg.length));
         room::deferred_leave.disarm();room::wanted=room::hosting=false;
+    } else if(name=="waiting-quit-deferred-close" || name=="waiting-quit-explicit-close" || name=="waiting-quit-close-timeout") {
+        room::wanted=room::hosting=true;room::key_loaded=false;
+        departure_stalled=name=="waiting-quit-close-timeout";
+        room::leave_after_flush();room::leave_after_flush();assert(departures.size()==1 && closed==0);
+        const auto started=GetTickCount();
+        if(name=="waiting-quit-explicit-close") room::leave();
+        else { room::tick();assert(closed==0);room::tick(); }
+        assert(closed==1 && closed_linger && room::tunnels.empty() && !room::wanted);
+        if(departure_stalled) assert(GetTickCount()-started>=1000 && departure_discarded==1);
+        else assert(departure_delivered==1 && departure_discarded==0);
+        room::tick();assert(closed==1);
+    } else if(name=="waiting-quit-immediate-close") {
+        room::wanted=true;room::leave();assert(closed==1 && !closed_linger && !departure_queries);
     } else if(name=="waiting-timeout") {
         room::wanted=true;host.connected=false;
         SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;event.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
@@ -781,7 +805,7 @@ void run(const std::string& name) {
 }
 void room_closed_offline(const std::string& only={}) {
     bool ran=false;
-    for(const char* name:{"waiting-quit-receive","waiting-quit-guards","waiting-quit-send","waiting-timeout","relay-host-refusal","relay-host-refusal-connected","relay-keep-host-room","relay-keep-bound","party-unbound-authority","relay-direct","relay-accepted","relay-migration","native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+    for(const char* name:{"waiting-quit-receive","waiting-quit-guards","waiting-quit-send","waiting-quit-deferred-close","waiting-quit-explicit-close","waiting-quit-close-timeout","waiting-quit-immediate-close","waiting-timeout","relay-host-refusal","relay-host-refusal-connected","relay-keep-host-room","relay-keep-bound","party-unbound-authority","relay-direct","relay-accepted","relay-migration","native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }

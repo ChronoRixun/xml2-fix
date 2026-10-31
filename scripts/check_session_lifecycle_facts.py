@@ -68,6 +68,10 @@ check(b(0x615740, 14) == bytes.fromhex('8bd15733c0b9110000008bfaf3ab'), '0x61574
 check(b(0x612933, 1) == b'\xe8' and call_target(0x612933) == 0x615740 and b(0x61292d - 0xc, 6) == bytes.fromhex('8d8ea4030000'),
       'the session shutdown clears session +0x3a4 (0x612921 lea / 0x612933 call 0x615740)')
 check(b(0x61571c, 4) in (bytes.fromhex('c6403e31'), bytes.fromhex('8b15b049')), 'only the game-info constructor writes the version (0x61571c, retail or game_version)')
+check(b(0x6082e6, 7) == bytes.fromhex('c680e103000001'), 'save selection sets session +0x3e1 at 0x6082e6')
+check(b(0x49f926, 7) == bytes.fromhex('c680e103000000'), 'SetGameType clears session +0x3e1 at 0x49f926')
+check(call_target(0x49f90c) == 0x606f90 and b(0x49f911, 4) == bytes.fromhex('84c07418'),
+      'SetGameType skips the saved flag clear when no selected image exists')
 check(b(0x60da7f, 3) == bytes.fromhex('ff520c'), 'the discovery send calls transport vt+0xc (0x60da7f)')
 thunk = u32(0x6a4788 + 12)
 iat = u32(thunk + 2) if b(thunk, 2) == b'\xff\x25' else 0

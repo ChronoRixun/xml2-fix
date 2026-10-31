@@ -159,3 +159,14 @@ Party captures authored mouse actions before the native item walk, so informatio
 The lobby and Party campaign descriptions use the host's native game-info settings. The saved-campaign flag is game-info `+0x3d` (session `+0x3e1`), set on the native load path at `0x6082e6`; a guest's local selected-save pointer is not a host setting. Party's `lc_campaign_summary` is a builder-authored DATA node.
 
 Host setup visibility chips also own their mouse activation before the native walk: clicking Private or Public selects that chip immediately, and clicking the selected chip does nothing. Keyboard/pad activation retains its toggle behavior.
+
+DROP-IN likewise owns mouse DOWN and UP for the published Host menu, suppressing
+native click activation so one release toggles once. Party captures Esc only
+while active; a native overlay keeps its Esc and no Party Back is replayed when
+Party reactivates.
+
+Fresh owned Host setup clears session `+0x3e1` before a new save selection can set
+it. Retail `SetGameType` clears it at `0x49f926` only if a selected image exists;
+image release at `0x606f50` does not clear it. Full session shutdown also clears
+the game-info block at `0x612933` via `0x615740`. Fresh setup therefore remains
+correct after cleanup paths that release the image without full shutdown.

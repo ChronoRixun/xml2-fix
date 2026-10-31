@@ -111,7 +111,7 @@ namespace join_in_progress_rules
 
 	// Game functions and fields the bring-in uses (retail; verified by the guards below).
 	constexpr std::uint32_t session_getter = 0x612be0, first_node = 0x611160, record_index = 0x614210, manager_getter = 0x6097b0,
-		message_init = 0x615810, send_to = 0x610f30, peer_connection = 0x55d7e0, game_getter = 0x46dce0, pause_getter = 0x60c7e0,
+		message_init = 0x615810, send_to = 0x610f30, flush_peer = 0x610fe0, peer_connection = 0x55d7e0, game_getter = 0x46dce0, pause_getter = 0x60c7e0,
 		zone_type = 0x60b9d0, scheduler_getter = 0x60b210, task_add = 0x60af70, task_remove = 0x60afe0, image_sender = 0x607fb0,
 		set_image_done = 0x614420, game_alloc = 0x5606e0, game_free = 0x560700, zones_getter = 0x484990, zones_vtable = 0x68878c;
 	constexpr std::uint32_t mode_slot = 0x268, zones_loading_slot = 0x24;
@@ -317,7 +317,7 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
 	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
 		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
-	inline constexpr std::array<guard, 132> guards{{
+	inline constexpr std::array<guard, 133> guards{{
 		{0x471740,"568bf18d4620508d8ee8010000ff15ccf96700d81d2c016800dfe0f6c4057a2c8d4e2c518d8ef4010000", "entity moved check: position +0x20 vs last-known +0x1e8, orientation +0x2c vs +0x1f4"},
 		{0x47178c,"8a8658020000a80275198b542408520c02685c7c6d008bce888658020000e8818ffaff", "entity moved check: +0x258 bit 2 pending flag, the static kind 0x6d7c5c scheduled"},
 		{0x4729b0,"568b74240880a658020000fd", "moved event fire: clears +0x258 bit 2 before re-registering the owner"},
@@ -342,6 +342,7 @@ namespace join_in_progress_rules
 		{0x445958,"84c0bb010000007408849eda04000074098b86f4020000894674", "zone-start camera init keeps the current yaw +0x74 unless snapped"},
 		{0x440c70,"8b4424085355568bf18b08898e880000008b", "camera reset entry (target, eye); copies yaw history +0x2f0 -> +0x2f4"},
 		{0x606b8f,"6a01e8fa37f5ff8bc8e8231cf5ff", "frame gate passed: the input manager runs this frame's inputs"},
+        {0x610fe0,"8b891c04000085c97405e951e9ffffc20400","session flush-one-peer wrapper; refusal output before peer retirement"},
 		{0x6106f0,"8a442404884119c20400", "native refusal marks the pending peer disconnected"},
 		{0x609970,"83ec1c5357", "late-admission policy before participant allocation"},
 		{0x614b05,"d940208b4828", "checksum raw actor transform observer"},
