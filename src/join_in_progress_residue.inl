@@ -1022,6 +1022,62 @@ void canonical_party_motion(const char* where, bool wanted)
 		logger::write_once("jip:motion-canonical-fault", "join in progress: the party heroes' motion fields could not be made canonical (read fault) - left as they are");
 	}
 }
+// p060fix/AK: every non-party AI actor's move intent canonical at the frame-0 epoch (after the party passes, before
+// the queue rebuild) on every peer: goal +0x1d0 and start +0x1dc := FLT_MIN, speeds +0x180 / +0x184 := 0 (what retail
+// 0x421b90 writes), so the first actor update after frame 0 re-arms every NPC every 0.1 s alike (rules:
+// actor_move_* / actor_update_rearm_tail). The entities are walked by dense index through the installed world's
+// vt+0x10; the party list (game vt+0x11c) names the heroes left to their own passes. The +6 flag, a follow handle and
+// the goal vector are counted (not written) and the dense indices of the NPCs that carried a speed are logged, so the
+// next probed round names them on every peer.
+std::uint32_t world_getter_at = entity_capacity_layout::native_world_getter; // mutable for the owned native fixture only
+unsigned npc_intent_runs = 0;
+void canonical_npc_move_intent(const char* where, bool wanted)
+{
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		std::uint32_t bits = 8;
+		__try { bits = entity_capacity::installed().tokens.index_bits; } __except (EXCEPTION_EXECUTE_HANDLER) { bits = 8; }
+		if (bits < 1 || bits > 16) bits = 8;
+		const std::uint32_t capacity = 1u << bits;
+		void* world = fn<getter_t>(world_getter_at)();
+		const auto entity_at = fn<void*(__thiscall*)(void*, std::uint32_t)>(at<std::uint32_t>(at<void*>(world, 0), world_entity_by_index_slot));
+		unsigned actors = 0, heroes = 0, speeds = 0, goals = 0, flags = 0, follows = 0;
+		char detail[200]{}; int n = 0;
+		for (std::uint32_t i = 0; i < capacity; ++i)
+		{
+			auto* actor = static_cast<std::uint8_t*>(entity_at(world, i));
+			if (!actor) continue;
+			const auto vtable = at<std::uint32_t>(actor, 0);
+			if (vtable != actor_vtable) continue;
+			bool party_hero = false;
+			for (std::uint32_t k = 0; k < 4 && k < count; ++k) party_hero |= party[k] != 0 && party[k] == at<std::uint32_t>(actor, 0x1c);
+			if (party_hero) { ++heroes; continue; }
+			const auto d = join_in_progress_core::npc_move_intent_rule(vtable, actor_vtable, at<std::int32_t>(actor, actor_controller), false, at<std::uint8_t>(actor, actor_entity_flags6_at), std::uint8_t(actor_fast_update_bit),
+				at<float>(actor, actor_move_speed_a_at), at<float>(actor, actor_move_speed_b_at), at<std::uint32_t>(actor, actor_follow_handle_at));
+			if (!d.considered) continue;
+			++actors;
+			if (d.had_speed) { ++speeds; if (n >= 0 && n < int(sizeof detail) - 8) n += std::snprintf(detail + n, sizeof detail - n, "%s%x", n ? "," : "", i); }
+			if (at<std::uint32_t>(actor, actor_move_goal_at) != move_goal_none_bits) ++goals;
+			if (d.had_fast_flag) ++flags;
+			if (d.had_follow) ++follows;
+			for (std::uint32_t off = 0; off < 2 * actor_vector_bytes; off += 4) at<std::uint32_t>(actor, actor_move_goal_at + off) = move_goal_none_bits; // +0x1d0..+0x1e7: goal, start
+			at<std::uint32_t>(actor, actor_move_speed_a_at) = 0;
+			at<std::uint32_t>(actor, actor_move_speed_b_at) = 0;
+		}
+		++npc_intent_runs;
+		logger::write("join in progress: canonical restart - the AI actors' move intent is canonical at %s on every peer: %u AI actor(s) (CActor without a controller; %u party hero(s) left to their own passes, %u entity slot(s) walked), %u had a move speed (+0x180/+0x184 > 0: updated every frame instead of every 0.1 s), %u a move goal (+0x1d0), %u the fast-update flag (+6 bit 0, counted only), %u a follow handle (+0x3ec, counted only); goal, start and speeds now 0x421b90's values on all; with a speed: %s (run %u)",
+			where, actors, heroes, capacity, speeds, goals, flags, follows, n ? detail : "none", npc_intent_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:npc-intent-fault", "join in progress: the AI actors' move intent could not be made canonical (read fault) - left as each PC has it");
+	}
+}
 // In place of `call 0x495350` at 0x4868ad (the zone-loaded finish, right after 0x422520 bound the party; an
 // argument-less cdecl getter whose result the site reads): the cold moved pass on the party that now exists, then the
 // real getter (the site's return address stays).

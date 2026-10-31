@@ -331,6 +331,19 @@ namespace join_in_progress_core
 		const bool ai = (flags & ai_bit) != 0, pending = (flags & pending_bit) != 0;
 		return {ai && pending, ai, !ai && !pending};
 	}
+	// p060fix/AK (live-060zd ZD-3P-E2p, three peers at E2): every peer reached frame 0 with identical draws, brains,
+	// heroes and timed-event queue, yet at frame 1 six of the fourteen AI actors of mansion2_2 re-armed their update
+	// every frame (a positive move speed) on the newcomer and six OTHERS on the host and the lobby guest, so the same
+	// brains thought on different frames (actor 0x115: frame 14 vs 17) and the draws parted (82 vs 78 at frame 30).
+	// The epoch clears the move intent of every actor that is a CActor (its vtable), has no controller (+0x3d4 = -1)
+	// and is not a party hero; what it found is counted for the log. Party-size and exit independent: every live NPC
+	// on every peer, nothing keyed on a seat, a role or a PC.
+	struct npc_intent_decision { bool considered = false, had_speed = false, had_fast_flag = false, had_follow = false; };
+	inline npc_intent_decision npc_move_intent_rule(std::uint32_t vtable, std::uint32_t actor_vtable, std::int32_t controller, bool party_hero, std::uint8_t flags6, std::uint8_t fast_bit, float speed_a, float speed_b, std::uint32_t follow)
+	{
+		if (vtable != actor_vtable || party_hero || controller != -1) return {};
+		return {true, speed_a > 0.0f || speed_b > 0.0f, (flags6 & fast_bit) != 0, follow != 0};
+	}
 	// A second newcomer admitted at the same zone load rides the campaign transfer the first one started (the native
 	// sender images every participant and the 0x26 broadcast restarts the cohort once every image is in); only a
 	// sender that is not this late restart's refuses the image.

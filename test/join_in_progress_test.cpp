@@ -518,6 +518,26 @@ int main(int argc, char** argv)
 				const std::uint32_t party[1] = {0x3404};
 				check(moved_event_dropped(e, hero_event_kind, party, 1, 0x3ff) && !moved_event_dropped(e, moved_event_kind, party, 1, 0x3ff), "AJ2: the rebuild's per-kind drop matches the periodic kind by the owner's dense index only");
 			}
+			// AK (ZD-3P-E2p): the NPC move-intent rule - a CActor without a controller that is not a party hero; a positive speed is the re-arm's "every frame"
+			{
+				const auto goal = npc_move_intent_rule(actor_vtable, actor_vtable, -1, false, 0, std::uint8_t(actor_fast_update_bit), 1.0f, 0.0f, 0);
+				check(goal.considered && goal.had_speed && !goal.had_fast_flag && !goal.had_follow, "AK: a controller-less CActor with a positive move speed is an AI actor carrying a goal");
+				check(!npc_move_intent_rule(actor_vtable, actor_vtable, 0, false, 0, std::uint8_t(actor_fast_update_bit), 1.0f, 0.0f, 0).considered, "AK: an actor bound to a controller is never touched (the party passes own the heroes)");
+				check(!npc_move_intent_rule(actor_vtable, actor_vtable, -1, true, 0, std::uint8_t(actor_fast_update_bit), 1.0f, 0.0f, 0).considered, "AK: a party hero is never touched even without a controller (the empty seat's AI hero)");
+				check(!npc_move_intent_rule(0x12345678, actor_vtable, -1, false, 1, std::uint8_t(actor_fast_update_bit), 1.0f, 1.0f, 1).considered, "AK: an entity with another vtable is never touched");
+				const auto idle = npc_move_intent_rule(actor_vtable, actor_vtable, -1, false, 0x01, std::uint8_t(actor_fast_update_bit), 0.0f, -1.0f, 0x1917);
+				check(idle.considered && !idle.had_speed && idle.had_fast_flag && idle.had_follow, "AK: zero or negative speeds are no goal (the tail's fcomp-with-0 test); the +6 flag and a follow handle are counted only");
+				check(guarded_span(actor_update_rearm_tail, actor_update_rearm_tail_bytes) && guarded_span(actor_move_goal_clear + 0x20, 0x45) && actor_update_rearm_tail + actor_update_rearm_tail_bytes == 0x43500c,
+				      "AK: the re-arm tail (0x434fc3..0x43500c) and the clear's body (0x421bb0..0x421bf5) are guarded retail bytes");
+				const auto tail = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == actor_update_rearm_tail; });
+				check(tail != guards.end() && tail->hex.rfind("f6450601", 0) == 0 && tail->hex.find("d98580010000") != std::string_view::npos && tail->hex.find("d98584010000") != std::string_view::npos && tail->hex.find("cdcccc3d") != std::string_view::npos,
+				      "AK: the tail tests +6 bit 0, then +0x180 and +0x184 against 0.0, and re-arms 0.1 s (0x3dcccccd)");
+				const auto clear = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == actor_move_goal_clear + 0x20; });
+				check(clear != guards.end() && clear->hex.find("8d8ed0010000") != std::string_view::npos && clear->hex.find("8d8edc010000") != std::string_view::npos && clear->hex.find("898680010000898684010000") != std::string_view::npos,
+				      "AK: the clear writes the goal +0x1d0, the start +0x1dc and zeroes +0x180 / +0x184");
+				check(actor_move_speed_a_at == 0x180 && actor_move_speed_b_at == 0x184 && actor_move_goal_at == 0x1d0 && actor_move_start_at == 0x1dc && actor_follow_handle_at == 0x3ec && actor_vtable == 0x682ccc && world_entity_by_index_slot == 0x10 && move_goal_none_bits == 0x00800000,
+				      "AK: the offsets, the CActor vtable, the world slot and FLT_MIN are the retail ones");
+			}
 			check(image_rides_running_transfer(true, true) && !image_rides_running_transfer(true, false) && !image_rides_running_transfer(false, true) && !image_rides_running_transfer(false, false),
 			      "AJ: a second newcomer rides the running transfer only inside this late restart (a lobby START's sender still refuses)");
 			// 2..4 peers, 1..3 newcomers: the host machine seats every newcomer admitted at one zone load in the same step

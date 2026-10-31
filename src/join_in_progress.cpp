@@ -308,6 +308,7 @@ namespace join_in_progress
 				void canonical_party_moved_state(const char* where, bool wanted); extern bool moved_canonical_enabled; // follow-up 12 (residue): the party heroes' moved-check state
 		void canonical_party_ground(const char* where, bool wanted); // follow-up 14 (residue): the party heroes' ground re-probed at frame 0
 		void canonical_party_motion(const char* where, bool wanted); // AE16 (residue): their motion time stamps and velocity at frame 0
+		void canonical_npc_move_intent(const char* where, bool wanted); // p060fix/AK (residue): every non-party AI actor's move goal and speeds cleared at frame 0
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -486,11 +487,12 @@ namespace join_in_progress
 				canonical_party_moved_state("the first shared frame", restart_reset_enabled && moved_canonical_enabled); // follow-up 12: before the rebuild, which drops the party heroes' queued moved events
 				canonical_party_ground("the first shared frame", restart_reset_enabled); // follow-up 14: after the RNG epoch (the nudge draws count alike), before the rebuild
 				canonical_party_motion("the first shared frame", restart_reset_enabled); // AE16: after the ground re-probe (FindGround does not touch these), before the rebuild
+				canonical_npc_move_intent("the first shared frame", restart_reset_enabled); // p060fix/AK: every non-party AI actor re-arms its first update at the same cadence on every peer
 				canonical_party_seat_events("the first shared frame", restart_reset_enabled); // p060fix/AJ2: an AI hero's periodic event goes with its pending bit, before the rebuild
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
-				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, periodic events by AI bit, queue rebuild %u); the late restart ends here", event_rebuilds);
+				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, AI move intent, periodic events by AI bit, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
 				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
 				snapshot("frame 0 epoch");

@@ -377,10 +377,25 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
 	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
 		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
-	inline constexpr std::array<guard, 143> guards{{
+	// p060fix/AK (live-060zd ZD-3P-E2p): the actor update 0x434540 re-arms its own timed event at its tail
+	// 0x434fc3..0x43500c - every frame (0.001 s) while the entity's +6 bit 0 is set or a move speed (+0x180 / +0x184,
+	// `fld; fcomp 0.0; test ah,0x41; je`) is positive, else every 0.1 s (0x3dcccccd through vt+0xf8). The move goal
+	// (+0x1d0 goal, +0x1dc start, both FLT_MIN when none) and the two speeds are set together (0x422840) and cleared
+	// together by 0x421b90 (`clear_goal`: FLT_MIN into +0x1d0 and +0x1dc, 0 into +0x180 / +0x184); the AI move driver
+	// 0x424b70 reads them (0x424c8e / 0x424ca1) after the "has a goal" test 0x423ba0 and the follow handle +0x3ec.
+	// The frame-0 epoch clears every non-party AI actor's goal and speeds alike (the CActor vtable 0x682ccc, controller
+	// +0x3d4 = -1), so the first update after frame 0 re-arms every NPC at the same cadence on every peer; the party
+	// heroes keep their own passes. The world's entities are walked by dense index through CWorld vt+0x10
+	// (entity_by_dense 0x4c68d0; the installed world's getter 0x4c7f20).
+	constexpr std::uint32_t actor_move_speed_a_at = 0x180, actor_move_speed_b_at = 0x184, actor_move_goal_at = 0x1d0, actor_move_start_at = 0x1dc,
+		actor_follow_handle_at = 0x3ec, actor_entity_flags6_at = 0x6, actor_fast_update_bit = 0x01, actor_vtable = 0x682ccc, actor_move_goal_clear = 0x421b90,
+		actor_update_rearm_tail = 0x434fc3, actor_update_rearm_tail_bytes = 0x49, world_entity_by_index_slot = 0x10, move_goal_none_bits = 0x00800000; // FLT_MIN
+	inline constexpr std::array<guard, 145> guards{{
 		{0x42a460,"8a81d8030000a82075170c208881d8030000", "actor vt+0x1ec: +0x3d8 bit 0x20 = the static kind 0x6d5e30 is pending; set once, then scheduled"},
 		{0x42ef3d,"8a96d803000080e2df8ac2a8018896d80300007511", "kind 0x6d5e30 fire: clears +0x3d8 bit 0x20, branches on the AI bit (player: re-arm through vt+0x1ec; AI: +0x774 := 0)"},
 		{0x41da63,"f686d803000001751951", "AI switch-on 0x41da60: tests the AI bit and ORs it (bit 0x20 untouched: a released player hero keeps its pending event)"},
+		{0x434fc3,"f64506015f5e5b7540d98580010000d81d30006800dfe0f6c441742dd98584010000d81d30006800dfe0f6c441741a8b450068cdcccc3d8bcdff90f80000005d81c48c000000c20400", "actor update re-arm tail: +6 bit 0 or a positive move speed (+0x180 / +0x184) keeps the actor on every frame, else vt+0xf8(0.1 s)"},
+		{0x421bb0,"8d8ed0010000ff152cfa67006800008000680000800068000080008d4c2410ff15c8f96700508d8edc010000ff152cfa670033c0898680010000898684010000" "5e83c40cc3", "clear_goal 0x421b90 body: FLT_MIN into the goal +0x1d0 and the start +0x1dc, 0 into the speeds +0x180 / +0x184 (the values the epoch writes to every NPC)"},
 		{0x4685b0,"83ec0c566a006a008bf168caf249718d4c2410ff15c8f96700508d8ef0010000ff152cfa6700", "game vt+0x28 (0x4685b0): the far marker igVec3f(1e30, 0, 0) assigned into game+0x1f0 - the next dormant-entity update examines every record"},
 		{0x46f2b7,"8dbef0010000578d4c2430c644241400ff15ccf96700d81dd0726800dfe0f6c441", "game update: all = distance2(camera eye, game+0x1f0) > [0x6872d0] decided before the respawn site (the eye is stored into game+0x1f0 after it)"},
 		{0x6872d0,"00401c46", "the respawn sweep threshold 10000.0f"},
