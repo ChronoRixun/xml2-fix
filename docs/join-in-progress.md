@@ -588,6 +588,20 @@ E2 trace O:/Projects/agent-work/e2-settle-re/RESULT.md):
   restarts the draw ring in phase 5 and dumps the snapshot, queue, camera
   and camera lines again on the switching PC (`jip switch:`), so the next
   drop is bracketed on both peers and names its term and first draw.
+- The movement probe (round 10 A/C: the drop follows the first period of
+  movement of either hero in a late-joined session - the pad-only joiner
+  moving dropped at frame 420, the host moving with the joiner idle at 540 -
+  on hero_sum only: the moving hero's last-bit x/y and a following AI hero's
+  heading by 1-6 ULPs; the device switch itself is harmless, a lobby START
+  survives it). With the probe on, one `jip hero:` line per party hero per
+  gated frame carries the raw dwords of +0x20..+0x38, +0x120..+0x168,
+  +0x1e8..+0x270 and +0x2b0..+0x320 (the ranges the physics steps 0x496f20 /
+  0x4762c0 / 0x472cf0, FindGround and the move-target setter 0x473640 read)
+  with the game's t/dt, for 60 frames after the frame-0 epoch, again from
+  the first frame a party hero's position changes after that window
+  (`jip move:`), and after a device switch; `scripts/jip_components.py
+  --mode hero` pairs the lines by (frame, slot) and names the first
+  differing dword offset.
 - Toggles: `[Dev] LateJoinRestartReset` (the whole canonical restart, A/B
   returning the 060y pattern), `[Dev] LateJoinProbe` (bug reports only) and
   `[Dev] LateJoinMovedCanonical` (until E2 is settled).

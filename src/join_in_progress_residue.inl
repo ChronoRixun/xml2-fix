@@ -242,12 +242,81 @@ void probe_think(unsigned frame)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:think-line-fault", "jip think: a line faulted"); }
 }
+// AE15b (round 10 A/C: a drop within the first period of MOVEMENT of either hero in a late-joined session, term hero_sum
+// only - the moving hero's last-bit x/y and a following AI hero's heading by 1-6 ULPs; lk:/mv: equal): one `jip hero:` line
+// per party hero per gated frame for 60 frames after the frame-0 epoch, again for 60 frames from the first frame a party
+// hero's position changes after that window (`jip move:`), and after a device switch. Each line is the raw dwords of the
+// actor ranges the physics steps read (my listings of 0x496f20 / 0x4762c0 / 0x472cf0 touch +0x20, +0x164, +0x238..+0x244,
+// +0x259, +0x265, +0x2b4, +0x2f8, +0x30c/d, +0x31a; FindGround +0x200/+0x204/+0x266; 0x473640 +0x120/+0x138; 0x476220 +0x150):
+// d20 = +0x20..+0x38 (position, orientation), d120 = +0x120..+0x168 (move target, step time, speed fields), d1e8 =
+// +0x1e8..+0x270 (last-known vectors, ground entity/height/normal, the settle fields, flags, surface), d2b0 = +0x2b0..+0x320
+// (the physics step's state); plus the game's t/dt. `jip_components.py --mode hero` pairs them by (frame, slot) and names
+// the first differing dword offset.
+struct hero_span { std::uint32_t at, bytes; };
+constexpr hero_span hero_dump_spans[4] = {{0x20, 0x18}, {0x120, 0x48}, {0x1e8, 0x88}, {0x2b0, 0x70}};
+unsigned hero_lines = 0; constexpr unsigned hero_line_limit = 60; bool hero_lines_armed = false, hero_move_rearmed = false;
+std::uint32_t hero_last_pos[4][3]{}; bool hero_last_valid[4]{};
+void hero_lines_arm(const char* why, unsigned frame)
+{
+	if (!probe_enabled) return;
+	hero_lines_armed = true; hero_lines = 0;
+	logger::write("jip hero: per-hero field lines armed for %u frames at %s (frame %u)", hero_line_limit, why, frame);
+}
+void probe_hero_frame(unsigned frame)
+{
+	if (!probe_enabled || !probe_epoch_late) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{}; std::uint32_t count = 0;
+		if (void* game = fn<getter_t>(game_getter)())
+		{
+			fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+			count = party[party_list_count_at / 4];
+		}
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
+			if (!actor) { hero_last_valid[k] = false; continue; }
+			std::uint32_t pos[3]; probe_read(reinterpret_cast<std::uintptr_t>(actor) + 0x20, pos, sizeof pos);
+			const bool moved = hero_last_valid[k] && std::memcmp(pos, hero_last_pos[k], sizeof pos) != 0;
+			std::memcpy(hero_last_pos[k], pos, sizeof pos); hero_last_valid[k] = true;
+			if (moved && !hero_lines_armed && !hero_move_rearmed)
+			{
+				hero_move_rearmed = true;
+				logger::write("jip move: party slot %u (handle %08x) first moved at frame %u (xyz %08x,%08x,%08x)", k, handle, frame, pos[0], pos[1], pos[2]);
+				hero_lines_arm("the first movement", frame);
+			}
+		}
+		if (!hero_lines_armed || hero_lines >= hero_line_limit) return;
+		++hero_lines;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
+			if (!actor) continue;
+			const auto a = reinterpret_cast<std::uintptr_t>(actor);
+			char line[1100]; int n = std::snprintf(line, sizeof line, "jip hero: frame=%u slot=%u handle=%08x ctl=%d t=%08x dt=%08x", frame, k, handle,
+				probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(game_static + 0x3ec));
+			for (const auto& sp : hero_dump_spans)
+			{
+				n += std::snprintf(line + n, sizeof line - n, " d%x=", sp.at);
+				for (std::uint32_t off = 0; off < sp.bytes && n > 0 && n < int(sizeof line) - 12; off += 4)
+					n += std::snprintf(line + n, sizeof line - n, "%s%08x", off ? "," : "", probe_at<std::uint32_t>(a + sp.at + off));
+			}
+			logger::write("%s", line);
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:hero-line-fault", "jip hero: a line faulted"); }
+}
 unsigned cam_lines = 0; constexpr unsigned cam_line_limit = 60;
 bool cam_lines_armed = false; // set at the frame-0 epoch
 void camera_lines(bool arm) { cam_lines_armed = arm && probe_enabled; cam_lines = 0; }
 void probe_frame_camera()
 {
-	if (!probe_enabled || !cam_lines_armed || cam_lines >= cam_line_limit) return;
+	if (!probe_enabled) return;
+	{ const auto f = probe_at<std::uint16_t>(native_frame); if (f) probe_hero_frame(unsigned(f)); } // AE15b: every gated frame inside a late epoch
+	if (!cam_lines_armed || cam_lines >= cam_line_limit) return;
 	__try
 	{
 		const auto frame = probe_at<std::uint16_t>(native_frame);
@@ -844,6 +913,7 @@ void device_switch_probe()
 		probe_events("device switch");
 		probe_camera_dump(unsigned(frame));
 		camera_lines(true);
+		hero_lines_arm("a prompt device change", unsigned(frame));
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:switch-probe-fault", "jip switch: the device-switch probe faulted"); }
 }

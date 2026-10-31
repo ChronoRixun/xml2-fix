@@ -249,7 +249,7 @@ namespace join_in_progress
 		void __cdecl deferred_campaign_start(void*);
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
-		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
+		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); void hero_lines_arm(const char* why, unsigned frame); extern bool hero_move_rearmed; extern bool hero_last_valid[4]; // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
 		void canonical_event_queue(const char* where); void canonical_event_queue(const char* where, bool wanted); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue); follow-up 9: the frame-0 epoch forces the rebuild
 		extern unsigned event_rebuilds;
 		bool event_pump_slot_ok(); // follow-up 8 (residue): the pump slot is retail or the xml1 turrets hook
@@ -436,6 +436,7 @@ namespace join_in_progress
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
 				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release, moved state, ground re-probe, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
+				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
 				snapshot("frame 0 epoch");
 				probe_events("frame 0 epoch");
 				probe_think(0); // probe only (returns at once otherwise)

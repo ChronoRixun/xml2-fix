@@ -313,9 +313,50 @@ def spawn_mode(host, guest):
     return 1 if bad else 0
 
 
+HERO = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
+
+
+def hero_mode(host, guest):
+    """AE15b: the per-hero raw-field lines paired by (frame, slot); the first differing frame and dword offset are named,
+    with the `jip move:` first-movement frames of both peers. The handle's generation is ignored."""
+    def parse(path):
+        out, moves = {}, []
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            if 'jip move:' in line:
+                moves.append(line.split('jip move: ', 1)[1].strip())
+            m = HERO.search(line)
+            if not m:
+                continue
+            key = (int(m['frame']), int(m['slot']))
+            if key in out:
+                continue  # the first window's line for that frame
+            fields = {}
+            for item in m['spans'].strip().split(' '):
+                name, words = item.split('=')
+                base = int(name[1:], 16)
+                for i, w in enumerate(words.split(',')):
+                    fields[base + 4 * i] = w
+            out[key] = (m['ctl'], m['t'], m['dt'], fields)
+        return out, moves
+    (h, hm), (g, gm) = parse(host), parse(guest)
+    print('first movement (host):', hm or 'none'); print('first movement (guest):', gm or 'none')
+    keys = sorted(set(h) & set(g))
+    print(f'hero lines: host {len(h)}, guest {len(g)}, {len(keys)} paired (frame, slot)')
+    for key in keys:
+        a, b = h[key], g[key]
+        diffs = [(off, a[3][off], b[3].get(off)) for off in sorted(a[3]) if a[3][off] != b[3].get(off)]
+        if a[0] != b[0] or a[1] != b[1] or a[2] != b[2] or diffs:
+            print(f'  first difference at frame {key[0]} slot {key[1]}: ctl {a[0]}/{b[0]} t {a[1]}/{b[1]} dt {a[2]}/{b[2]}')
+            for off, x, y in diffs[:16]:
+                print(f'    +{off:#05x}: host {x} guest {y}')
+            return 1
+    print('every paired hero line agrees')
+    return 0
+
+
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode}[mode](sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode, 'hero': hero_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))
