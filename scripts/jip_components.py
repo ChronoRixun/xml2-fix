@@ -136,7 +136,9 @@ def parse_rng(path):
     for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
         m = RNG.search(line)
         if m:
-            out[(int(m['phase']), int(m['count']))] = (int(m['frame']), m['caller'], actor_index(m['actor']), m['ctl'], m['think'], m['dist'], m['actor'])
+            phase = int(m['phase'])
+            if phase == 5: phase = 4  # AE17: phase 5 = the ring re-armed after a device switch on one peer; the same draws as phase 4
+            out[(phase, int(m['count']))] = (int(m['frame']), m['caller'], actor_index(m['actor']), m['ctl'], m['think'], m['dist'], m['actor'])
     return out
 
 
@@ -149,7 +151,11 @@ def rng_mode(host, guest):
         print(f'phase {ph}: host {len(hk)} draw(s), guest {len(gk)} draw(s)')
         for key in sorted(set(hk) | set(gk)):
             a, b = h.get(key), g.get(key)
-            if a is None or b is None or a[:6] != b[:6]:
+            if a is None or b is None:
+                # AE17: one peer's trace ends here (its window closed, or its ring was not flushed): not a value difference
+                print(f'  the {"host" if a is None else "guest"} trace ends before phase {key[0]} count {key[1]} (the other peer continues); every earlier draw agreed')
+                break
+            if a[:6] != b[:6]:
                 first = first or (key, a, b)
                 print(f'  first difference at phase {key[0]} count {key[1]} (frame, caller, actor index, controller, think, dist, handle): host {a} guest {b}')
                 break
@@ -313,7 +319,10 @@ def spawn_mode(host, guest):
     return 1 if bad else 0
 
 
-HERO = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
+HEROLINE = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
+
+
+PER_PROCESS_ACTOR_DWORDS = {0x21c, 0x220}  # round 11: a per-process count/pointer pair on every hero, never a lockstep term
 
 
 def hero_mode(host, guest):
@@ -324,7 +333,7 @@ def hero_mode(host, guest):
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
             if 'jip move:' in line:
                 moves.append(line.split('jip move: ', 1)[1].strip())
-            m = HERO.search(line)
+            m = HEROLINE.search(line)
             if not m:
                 continue
             key = (int(m['frame']), int(m['slot']))
@@ -344,13 +353,13 @@ def hero_mode(host, guest):
     print(f'hero lines: host {len(h)}, guest {len(g)}, {len(keys)} paired (frame, slot)')
     for key in keys:
         a, b = h[key], g[key]
-        diffs = [(off, a[3][off], b[3].get(off)) for off in sorted(a[3]) if a[3][off] != b[3].get(off)]
+        diffs = [(off, a[3][off], b[3].get(off)) for off in sorted(a[3]) if off not in PER_PROCESS_ACTOR_DWORDS and a[3][off] != b[3].get(off)]
         if a[0] != b[0] or a[1] != b[1] or a[2] != b[2] or diffs:
             print(f'  first difference at frame {key[0]} slot {key[1]}: ctl {a[0]}/{b[0]} t {a[1]}/{b[1]} dt {a[2]}/{b[2]}')
             for off, x, y in diffs[:16]:
                 print(f'    +{off:#05x}: host {x} guest {y}')
             return 1
-    print('every paired hero line agrees')
+    print('every paired hero line agrees (+0x21c/+0x220 per-process, not compared)')
     return 0
 
 
