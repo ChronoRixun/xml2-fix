@@ -617,6 +617,39 @@ E2 trace O:/Projects/agent-work/e2-settle-re/RESULT.md):
   +0x178, +0x190..+0x1a4, +0x1d0..+0x1e8, one contiguous +0x1e8..+0x320 and
   CHero +0x7e4..+0x81c; every `jip cam:` line carries the raw basis and the
   decoded stick floats (compared by `--mode cam`).
+- Closing summary (live-060y-ae round 11, 2026-10-30: late join holds - 5/5
+  admissions through 60 s of joiner movement, 60 s of host movement and
+  walked exits, one PC and two PCs, E1/E2/E3, no checksum mismatch). What
+  every peer does at a late restart, and the round that proved each step:
+  the 0x47 late-restart marker (rounds 1-2); the camera singleton back to
+  its constructed image before the native start (060y, rounds 1-2);
+  synchronized RNG epochs at the zone load, the zone start and the first
+  shared frame (rounds 2-3); the AI brain free ring in ascending order
+  (round 3); the zone-start camera anchored on party slot 0 and
+  re-initialised at frame 0 (rounds 3-4); the dormant-entity respawn held
+  to frame 0 (round 3); the timed-event queue rebuilt in canonical order at
+  the three epochs, composing with the turrets hook (rounds 4-6); the
+  frame-0 epoch unconditional and ending the restart on every peer (round
+  6); the party heroes' moved-check state cold after the party binding and
+  at frame 0, their queued moved events dropped (rounds 8-9); the camera's
+  derived spans - eye, target, history, basis, scratch - back to the
+  pristine image before the frame-0 re-anchor (rounds 9-11: the retail
+  camera term is one _ftol of six summed components, blind to the ULPs
+  that moved the heroes apart); a party hero's ground attach callback
+  suppressed while armed and FindGround re-run at frame 0 in party order
+  (E2, rounds 9-11); the motion stamps canonical at frame 0 (AE16,
+  hardening); given-up seats dropped natively (round 2). Every step is
+  gated on the armed late restart; a lobby START, an ordinary transition,
+  a host-only session and offline play never arm. Probe-only: the draw and
+  spawn JMP bridges, every `jip ...` line, the device-switch re-arm (now
+  unnecessary - round 10b disproved the switch as a cause; recommended for
+  removal at integration). Removed along the way: the AE10 zone-start
+  controls resume, the AE12 world hold, the AE8 FPU write, the AE14
+  pre-placement pass. Residual risks: the camera span list is empirical
+  over two zones (a magnet zone needs one probed late join with `--mode
+  camdump`), +0x23c/+0x240 are logged not canonicalised, two-PC coverage is
+  one admission, and a 3-peer admission / host quit during the reload were
+  not re-run on this line.
 - Toggles: `[Dev] LateJoinRestartReset` (the whole canonical restart, A/B
   returning the 060y pattern), `[Dev] LateJoinProbe` (bug reports only) and
   `[Dev] LateJoinMovedCanonical` (until E2 is settled).

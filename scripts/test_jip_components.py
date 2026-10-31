@@ -49,5 +49,11 @@ class ComponentsTest(unittest.TestCase):
         self.assertIn('+0x020: host 3f800000 guest 3f800001', output.getvalue())
 
 
+    def test_per_process_dwords_and_local_controllers_together_still_agree(self):
+        line = 'jip hero: frame=30 slot=0 handle=00003802 ctl={ctl} t=40000000 dt=3d088889 d20=3f800000 d21c={count},{ptr}\n'
+        self.write_pair(line.format(ctl=0, count='00000001', ptr='02000000'), line.format(ctl=1, count='00000002', ptr='03000000'))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(tool.hero_mode(self.host, self.guest), 0)
+
 if __name__ == '__main__':
     unittest.main()
