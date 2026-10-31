@@ -13,8 +13,9 @@ permissions:
 env:
   # GameNetworkingSockets package (include/, lib/, ca-pin.txt): built by scripts/build-gns.ps1, linked statically into
   # dinput.dll, so the release has no GNS, protobuf or abseil DLL to ship. No spaces in these paths.
-  GNS_ROOT: C:/gns-pkg
-  GNS_WORK: C:/gns-work
+  # Keep package headers under the checkout's mapped prefix as well.
+  GNS_ROOT: ${{ github.workspace }}/.build/gns-pkg
+  GNS_WORK: ${{ github.workspace }}/.build/gns-work
 
 jobs:
   build:
@@ -28,6 +29,9 @@ jobs:
 
       - name: Test the native runner's matrix mode
         run: python scripts/test_run_native.py
+
+      - name: Test embedded build-path checks
+        run: python scripts/test_check_build_paths.py
 
       - name: Validate release tag
         if: github.ref_type == 'tag'
@@ -95,7 +99,7 @@ jobs:
         run: cmake -S . -B build -G "${{ steps.msvc.outputs.generator }}" -A Win32 -DXML2_FIX_GNS_ROOT=${{ env.GNS_ROOT }}
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build --config Release -- /m:1 /nr:false
 
       - name: Test
         run: build/bin/Release/xml2_test.exe

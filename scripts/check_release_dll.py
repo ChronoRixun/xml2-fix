@@ -28,6 +28,10 @@ _spec = importlib.util.spec_from_file_location('release_metadata', Path(__file__
 _release = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_release)
 
+_paths_spec = importlib.util.spec_from_file_location('check_build_paths', Path(__file__).with_name('check_build_paths.py'))
+_paths = importlib.util.module_from_spec(_paths_spec)
+_paths_spec.loader.exec_module(_paths)
+
 # GameNetworkingSockets' own strings (not the fix's log lines, which a GNS-less build keeps): the P2P ICE transport class
 # names and the protobuf package of its wire messages.
 GNS_MARKERS = (b'CConnectionTransportP2PICE_Valve::Init', b'Valve.SteamNetworkingSockets')
@@ -122,6 +126,11 @@ def main() -> int:
     problems = []
     data = args.dll.read_bytes()
     print(f'{args.dll}: {len(data):,} bytes')
+    path_hits = _paths.scan(data)
+    local_paths = [hit for hit in path_hits if hit['kind'] == 'local-path']
+    print(f'embedded local build paths: {len(local_paths)}; intentional broad-pattern hits: {len(path_hits)-len(local_paths)}')
+    for hit in local_paths:
+        problems.append(f"embedded local path at {hit['offset']} ({hit['encoding']}): {hit['text']}")
 
     try:
         machine, imports = pe_imports(data)
