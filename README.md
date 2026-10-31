@@ -2,10 +2,6 @@
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
 </p>
 
-> Local release draft: Legends Classic 0.6.0-beta.1 (content 30 / catalogue 8 / LC40) and XML2 Fix 1.11.0-beta.1.
-> Co-op menu, session, controller and flying-pickup fixes are integrated; final live acceptance is pending.
-> Guard defaults OFF; corrected XML1 Guard awaits a real-controller check. See CHANGELOG.md. No release is published.
-
 <p align="center">
   <a href="https://github.com/ChronoRixun/xml2-fix/releases/latest"><img src="https://img.shields.io/github/v/release/ChronoRixun/xml2-fix?label=download&color=ad6bff" alt="Latest release"></a>
   <a href="https://github.com/ChronoRixun/xml2-fix/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/ChronoRixun/xml2-fix/build.yml?branch=main&label=build" alt="Build status"></a>
@@ -42,10 +38,11 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.9.0-beta.2** (the port's beta 8 with the controller-pause hotfix, the launcher's Beta channel),
-paired with Legends Classic builder 0.4.1-beta.1 (content 28 / LC37). A 1.9.0 game and a 1.8.0 game refuse each other
-at join. See the
-[1.9.0 release notes](packaging/release-notes/v1.9.0.md).
+**Beta: XML2 Fix 1.11.0-beta.1** (the launcher's Beta channel), paired with Legends Classic builder 0.6.0-beta.1
+(content 30 / catalogue 8 / LC40): online co-op from the game's own Play Online screens - Host, Join by code, Browse,
+a lobby and a Party screen - and friends can join a game in progress at the host's next area. The previous beta was
+XML2 Fix 1.10.0-beta.1 with builder 0.5.0-beta.1 (content 29 / catalogue 8 / LC38); a 1.11 game and a 1.10 game
+refuse each other at join. See the [1.11.0 release notes](packaging/release-notes/v1.11.0.md).
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
