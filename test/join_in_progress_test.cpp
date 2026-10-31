@@ -503,6 +503,21 @@ int main(int argc, char** argv)
 			      "AJ: the all-flag compare, its 10000.0f threshold and the finish's setter call are guarded, ending where the site guard begins");
 			const auto threshold = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == respawn_sweep_threshold; });
 			check(threshold != guards.end() && threshold->hex == "00401c46", "AJ: the threshold constant is 10000.0f (0x461c4000)");
+			// AJ2: the periodic event (kind 0x6d5e30) follows the AI bit: 0x71 (released seat) -> clear + drop; 0x51 -> drop only (nothing queued); 0x70 player keeps; 0x50 player without one is reported
+			{
+				const auto r71 = hero_event_rule(0x71), r51 = hero_event_rule(0x51), r70 = hero_event_rule(0x70), r50 = hero_event_rule(0x50);
+				check(r71.clear_pending && r71.drop_events && !r71.missing, "AJ2: a released seat's AI hero (0x71) loses its pending bit and its queued periodic events");
+				check(!r51.clear_pending && r51.drop_events && !r51.missing, "AJ2: a never-bound AI hero (0x51) is in the drop set with nothing to clear");
+				check(!r70.clear_pending && !r70.drop_events && !r70.missing, "AJ2: a player hero (0x70) keeps its periodic event");
+				check(!r50.clear_pending && !r50.drop_events && r50.missing, "AJ2: a player hero without the event (0x50) is only reported");
+				check(hero_ai_bit == 0x01 && hero_event_pending_bit == 0x20 && hero_event_kind == 0x6d5e30, "AJ2: the bits and the kind are the retail ones (0x42a460 / 0x42ef30 / 0x41da60)");
+				check(guarded_span(hero_event_arm, 18) && guarded_span(hero_event_fire + 0xd, 16) && guarded_span(hero_ai_switch_on + 3, 9), "AJ2: the pending-bit setter, the fire's clear and the AI switch-on are guarded retail bytes");
+				const auto arm = std::find_if(guards.begin(), guards.end(), [](const auto& g) { return g.va == hero_event_arm; });
+				check(arm != guards.end() && arm->hex.find("a820") != std::string_view::npos && arm->hex.find("0c20") != std::string_view::npos, "AJ2: the setter's bytes test and OR bit 0x20");
+				event_entry e{}; e.handle = 0x3404; e.token = true; e.event = hero_event_kind; e.live = true; e.owner = 0x03b118e0;
+				const std::uint32_t party[1] = {0x3404};
+				check(moved_event_dropped(e, hero_event_kind, party, 1, 0x3ff) && !moved_event_dropped(e, moved_event_kind, party, 1, 0x3ff), "AJ2: the rebuild's per-kind drop matches the periodic kind by the owner's dense index only");
+			}
 			check(image_rides_running_transfer(true, true) && !image_rides_running_transfer(true, false) && !image_rides_running_transfer(false, true) && !image_rides_running_transfer(false, false),
 			      "AJ: a second newcomer rides the running transfer only inside this late restart (a lobby START's sender still refuses)");
 			// 2..4 peers, 1..3 newcomers: the host machine seats every newcomer admitted at one zone load in the same step

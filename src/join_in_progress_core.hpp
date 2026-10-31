@@ -321,6 +321,16 @@ namespace join_in_progress_core
 		anchor[0] = respawn_far_marker_bits; anchor[1] = 0; anchor[2] = 0;
 		return had;
 	}
+	// p060fix/AJ2: a party hero's periodic event (static kind 0x6d5e30, +0x3d8 bit 0x20 pending) follows its AI bit:
+	// a player hero carries one, an AI hero none. At the frame-0 epoch every peer clears the pending bit of an AI hero
+	// that still has one (a seat released at runtime) and drops its queued events in the rebuild; a player hero
+	// without one is only reported (it never arises from the drop path; the host is the reference either way).
+	struct hero_event_decision { bool clear_pending, drop_events, missing; };
+	inline hero_event_decision hero_event_rule(std::uint8_t flags, std::uint8_t ai_bit = 0x01, std::uint8_t pending_bit = 0x20)
+	{
+		const bool ai = (flags & ai_bit) != 0, pending = (flags & pending_bit) != 0;
+		return {ai && pending, ai, !ai && !pending};
+	}
 	// A second newcomer admitted at the same zone load rides the campaign transfer the first one started (the native
 	// sender images every participant and the 0x26 broadcast restarts the cohort once every image is in); only a
 	// sender that is not this late restart's refuses the image.

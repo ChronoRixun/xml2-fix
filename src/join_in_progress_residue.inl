@@ -739,6 +739,50 @@ void probe_events(const char* where)
 }
 // Follow-up 12: the party handles whose queued "moved" events the NEXT rebuild drops (set by the frame-0 canonicalisation).
 std::array<std::uint32_t, 4> moved_drop_handles{}; unsigned moved_drop_count = 0; unsigned moved_dropped_last = 0;
+// p060fix/AJ2: the AI party heroes whose queued periodic events (kind 0x6d5e30) the NEXT rebuild drops.
+std::array<std::uint32_t, 4> seat_drop_handles{}; unsigned seat_drop_count = 0; unsigned seat_dropped_last = 0; unsigned seat_canonical_runs = 0;
+// p060fix/AJ2 (ZB-4Pb): a party hero's periodic event follows its AI bit on every peer at frame 0 (rules: hero_event_*).
+// A seat given up on the host before its reload (hero AI from the zone start: 0x51, no event) and removed on an
+// existing guest after its restore (player-bound at the restore, released at runtime: 0x71, the event still queued)
+// left that guest one more same-time entry at t=3.0; its pop reshaped the heap and the think order parted at frame
+// 31. Here every AI party hero loses the pending bit and the rebuild drops its queued events; a player hero without
+// one is counted (never seen; the host is the reference), the flags before/after are logged per slot.
+void canonical_party_seat_events(const char* where, bool wanted)
+{
+	seat_drop_count = 0;
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		unsigned heroes = 0, ai = 0, cleared = 0, missing = 0;
+		char detail[160]{}; int n = 0;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			if (!actor) continue;
+			++heroes;
+			const auto before = at<std::uint8_t>(actor, hero_ai_flags);
+			const auto d = join_in_progress_core::hero_event_rule(before, std::uint8_t(hero_ai_bit), std::uint8_t(hero_event_pending_bit));
+			if (d.drop_events) { ++ai; seat_drop_handles[seat_drop_count++] = handle; }
+			if (d.clear_pending) { ++cleared; at<std::uint8_t>(actor, hero_ai_flags) = std::uint8_t(before & ~hero_event_pending_bit); }
+			if (d.missing) ++missing;
+			if (n >= 0 && n < int(sizeof detail) - 24) n += std::snprintf(detail + n, sizeof detail - n, "%s%u:%02x->%02x/%08x", n ? " " : "", k, before, at<std::uint8_t>(actor, hero_ai_flags), at<std::uint32_t>(actor, 0x774));
+		}
+		++seat_canonical_runs;
+		logger::write("join in progress: canonical restart - the party heroes' periodic event (kind 0x6d5e30) follows the AI bit at %s on every peer: %u hero(s), %u AI (their queued periodic events go in the rebuild), %u pending bit(s) cleared on released seats, %u player hero(s) without one; flags (slot:before->after/+0x774) %s (run %u)",
+			where, heroes, ai, cleared, missing, detail, seat_canonical_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		seat_drop_count = 0;
+		logger::write_once("jip:seat-events-fault", "join in progress: the party heroes' periodic-event state could not be made canonical (read fault) - left as it is");
+	}
+}
 void canonical_event_queue_body(const char* where)
 {
 	{
@@ -768,6 +812,15 @@ void canonical_event_queue_body(const char* where)
 				moved_dropped_last += d ? 1u : 0u; return d; }), entries.end());
 			moved_drop_count = 0;
 		}
+		// p060fix/AJ2: an AI party hero's queued periodic events (kind 0x6d5e30) go with its cleared pending bit.
+		seat_dropped_last = 0;
+		if (seat_drop_count)
+		{
+			entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& e) {
+				const bool d = join_in_progress_core::moved_event_dropped(e, hero_event_kind, seat_drop_handles.data(), seat_drop_count, mask);
+				seat_dropped_last += d ? 1u : 0u; return d; }), entries.end());
+			seat_drop_count = 0;
+		}
 		// Follow-up 14 (S2): a kept entry whose kind object lies outside the image is keyed by its vtable; say so once.
 		for (const auto& e : entries)
 			if (e.owner && e.event - e.owner >= join_in_progress_core::event_member_span && !join_in_progress_core::event_kind_in_image(e.event))
@@ -793,8 +846,8 @@ void canonical_event_queue_body(const char* where)
 			fn<void(__thiscall*)(void*, const void*)>(event_heap_push)(body + event_heap_at, &pair);
 		}
 		++event_rebuilds; event_last_live = unsigned(entries.size()); event_last_dead = dead;
-		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept, %u party-hero moved event(s) dropped), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
-			where, unsigned(entries.size()), dead, stale, moved_dropped_last, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
+		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept, %u party-hero moved event(s) dropped, %u AI-hero periodic event(s) dropped), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
+			where, unsigned(entries.size()), dead, stale, moved_dropped_last, seat_dropped_last, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
 			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at), mask, event_rebuilds);
 	}
 }
