@@ -1,5 +1,6 @@
 #include "e4_observe.hpp"
 #include "actor_ai_layout.hpp"
+#include "actor_pools.hpp"
 #include "e4_core.hpp"
 #include "e4_core_sites.hpp"
 #include "join_in_progress.hpp"
@@ -107,10 +108,25 @@ namespace join_in_progress
 		using seat_active_t = char(__thiscall*)(void*, std::int32_t);
 		using participant_drop_t = void(__thiscall*)(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 
+		// p060fix/AI (S1): the standalone ActorPools=124 install (stage 1, no E4 core) relocated the ring read at
+		// 0x522a18 into its cave before this module installs; the guard composes exactly the bytes that module reports
+		// it committed there (retail everywhere else). Nothing composes when it reports nothing or at another stage.
+		std::string composed_brain_ring_pop(const join_in_progress_rules::guard& g, const actor_ai::descriptor& d)
+		{
+			std::string expected(g.hex);
+			if (g.va != brain_ring_pop || d.stage != 1 || e4_core::installed()) return expected;
+			const auto& detour = actor_pools::installed_controller_reset();
+			const std::size_t at = brain_ring_pop_relocated - g.va;
+			if (detour.empty() || at + detour.size() > g.hex.size() / 2) return expected;
+			for (std::size_t i = 0; i < detour.size(); ++i) expected.replace((at + i) * 2, 2, actor_ai::hex32(detour[i]).substr(0, 2));
+			return expected;
+		}
 		bool guard_matches(const join_in_progress_rules::guard& g, const std::uint8_t* actual)
 		{
 			const auto& d = actor_ai::installed();
-			if ((g.va != brain_ring_init && g.va != 0x522a10) || !e4_core::installed() || d.stage != 2 || d.controllers != 96)
+			if (g.va == brain_ring_pop && d.stage == 1 && !e4_core::installed())
+				return limits_rules::matches(actual, composed_brain_ring_pop(g, d));
+			if ((g.va != brain_ring_init && g.va != brain_ring_pop) || !e4_core::installed() || d.stage != 2 || d.controllers != 96)
 				return limits_rules::matches(actual, g.hex);
 			// These stock-ring observations are rewritten by the earlier committed E4
 			// transaction. Compose only its ledger operands, then its published observer
@@ -1687,6 +1703,12 @@ namespace join_in_progress
 		}
 		if (const auto hook = xml1_turrets::installed_process_hook())
 			logger::write("online: JoinInProgress composes with the xml1 turrets scheduler dispatch hook at the timed-event manager's pump slot (%08x); the canonical queue rebuild never calls the pump (retail alloc/store/push only)", hook);
+		if (const auto& detour = actor_pools::installed_controller_reset(); detour.size() >= 5 && detour[0] == 0xe9 && actor_ai::installed().stage == 1 && !e4_core::installed())
+		{
+			std::uint32_t rel = 0; std::memcpy(&rel, detour.data() + 1, 4);
+			logger::write("online: JoinInProgress composes with the standalone ActorPools W11 controller-reset relocation at the AI brain alloc (0x%06X -> cave %08x; stock 32-slot pool); the canonical brain-ring rebuild writes the stock ring directly and never calls the alloc",
+				unsigned(brain_ring_pop_relocated), unsigned(brain_ring_pop_relocated + 5 + rel));
+		}
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		std::vector<xml1_hook_transaction::patch> writes{

@@ -259,6 +259,10 @@ namespace join_in_progress_rules
 	inline constexpr std::array<unsigned char, 5> zone_start_entry_original{0xe8,0x8d,0x00,0x11,0x00};
 	constexpr std::uint32_t brain_ring_init = 0x522f70, brain_pool_stock = 0x78ba14, brain_ring_write = 0xc408, brain_ring_read = 0xc40c,
 		brain_ring_free = 0xc410, brain_ring_bitmap = 0xc414, brain_slots = 32;
+	// p060fix/AI: the brain alloc guard (0x522a10, 16 bytes) also covers the standalone ActorPools=124 install's W11
+	// controller-reset relocation at 0x522a18 (a 5-byte JMP into its cave plus 2 pad bytes, written before this module
+	// installs); guard_matches composes exactly the bytes actor_pools reports it committed there (stage 1, E4 off).
+	constexpr std::uint32_t brain_ring_pop = 0x522a10, brain_ring_pop_relocated = 0x522a18;
 	constexpr std::uint32_t draw_entry = 0x560090, draw_resume = 0x560096, draw_wrapper_float_return = 0x5601bd,
 		draw_wrapper_int_return_a = 0x5601fb, draw_wrapper_int_return_b = 0x56023f;
 	inline constexpr std::array<unsigned char, 6> draw_entry_original{0xff,0x05,0xb4,0xd8,0x7a,0x00};

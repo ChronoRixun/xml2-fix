@@ -123,7 +123,12 @@ cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "admission
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "refusal-transport"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "e4-guards"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"])
-installer_modes |= {"xml2_online_menus_test"}
+# AE's canonical restart and xml1-turrets composition modes, and p060fix/AI's ActorPools=124 composition mode.
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "restart"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "turrets"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "actorpools"])
+# One log per boundary mode (the mode runs used to overwrite one +exe log).
+installer_modes |= {"xml2_online_menus_test", "xml2_join_in_progress_boundary_test"}
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.
