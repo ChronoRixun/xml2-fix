@@ -480,7 +480,47 @@ std::vector<void*> team_tests(bool keep=false,const std::string& tref={}){
  for(unsigned w=0;w<3;++w)check(word(arena,e4_core_state::team_constructed+w*4)==0&&word(arena,e4_core_state::team_active+w*4)==0,"T6/T15 team reset clears all3 bitmap words");return {};
 }
 }
+namespace {
+// Exercise configuration during the CRT's dynamic initialization, before the
+// retail image or any AI constructor exists. In particular, a zero init flag
+// must never make configuration invoke the lazy AI getter or inspect a record.
+bool preinit_checked=false;
+struct preinit_probe {
+ preinit_probe(){
+  char option[8]{};if(!GetEnvironmentVariableA("XML2_E4_PREINIT_PROBE",option,sizeof option))return;
+  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
+  const bool requested=std::strcmp(option,"on")==0;
+  if(requested){
+   settings[{L"Limits",L"Actors"}]="96";
+   for(const auto& [name,value]:std::array<std::pair<const wchar_t*,const char*>,6>{{{L"EntityCapacity","1"},{L"ActorPools","124"},{L"AnimEnums","512"},{L"CharSounds","127"},{L"ResidentStats","320"},{L"MotionPool","22528"}}})settings[{L"Limits",name}]=value;
+  }
+  const auto before=snapshot();DWORD getter_protection=0,ai_protection=0;
+  check(word(0x79889c)==0,"preinit fixture starts with AI init flag clear");
+  if(!VirtualProtect(ptr(0x525000),0x1000,PAGE_NOACCESS,&getter_protection)||
+     !VirtualProtect(ptr(0x78b000),0xd000,PAGE_NOACCESS,&ai_protection))ExitProcess(3);
+  e4_core::configure();e4_observe::configure();
+  check(word(0x79889c)==0,"dynamic configuration leaves the AI init flag clear");
+  check(e4_core_state::requested==requested&&e4_core_state::eligible==requested,
+        "dynamic configuration reads only the requested settings");
+  check(!e4_core_state::prepared&&!e4_core_state::installed&&!e4_core_state::cai,
+        "dynamic configuration neither prepares nor publishes the AI arena");
+  // Plan generation is data-only too: it must not dereference the target arena.
+  const e4_core_plan::targets targets{1,2,3,4,5,6,7,8};
+  const auto plan=e4_core_plan::make(0x20000000,0x21000000,targets);
+  check(plan.has_value(),"core plan can be built before the AI system exists");
+  DWORD unused=0;
+  if(!VirtualProtect(ptr(0x525000),0x1000,getter_protection,&unused)||
+     !VirtualProtect(ptr(0x78b000),0xd000,ai_protection,&unused))ExitProcess(3);
+  check(snapshot()==before,"dynamic configuration and plan generation write no retail bytes");
+  settings.clear();preinit_checked=true;
+ }
+} early_configuration;
+}
 int main(int argc,char** argv){
+ if(argc>=3&&std::strcmp(argv[2],"preinit")==0){
+  check(preinit_checked,"configuration probe ran from a dynamic initializer before main");
+  std::printf("E4 preinit host: %u checks, %u failures\n",checks,failures);return failures?1:0;
+ }
  if(argc<3){std::puts("usage: e4_core_host owned-XMen2.exe mode");return 2;}mode=argv[2];std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
  AddVectoredExceptionHandler(0,crash);if(address(fixture_space)!=0x401000||!load(read(argv[1])))return 3;
  const std::array<const wchar_t*,6> names{L"EntityCapacity",L"ActorPools",L"AnimEnums",L"CharSounds",L"ResidentStats",L"MotionPool"};

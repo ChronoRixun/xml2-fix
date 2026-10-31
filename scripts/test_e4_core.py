@@ -3,6 +3,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -15,16 +16,21 @@ def main():
     args=parser.parse_args();host=Path(args.host).resolve();exe=Path(args.exe).resolve();out=Path(args.out).resolve();out.mkdir(parents=True,exist_ok=True)
     rows=int(re.search(r'std::array<edit,(\d+)>', (ROOT/'src/e4_core_sites.hpp').read_text())[1])
     results=[]
-    def run(mode,extra=(),expected=0,tag=None):
+    def run(mode,extra=(),expected=0,tag=None,env=None):
         folder=out/(tag or mode);folder.mkdir(exist_ok=True)
         command=[str(host),str(exe),mode,*map(str,extra)]
-        p=subprocess.run(command,cwd=folder,capture_output=True,timeout=60,creationflags=0x08004000)
+        p=subprocess.run(command,cwd=folder,capture_output=True,timeout=60,creationflags=0x08004000,
+                         env=dict(os.environ,**(env or {})))
         (folder/'host.log').write_bytes(p.stdout+p.stderr)
         result=dict(mode=tag or mode,exit=p.returncode,expected=expected)
         assert p.returncode==expected,(mode,p.returncode,p.stdout[-2000:],p.stderr[-500:])
         if expected==77:assert b'invariant broken' in p.stdout or b'construction escaped' in p.stdout,mode
         results.append(result)
         return p.stdout
+    for option in ('off','on'):
+        output=run('preinit',tag='preinit-'+option,env={'XML2_E4_PREINIT_PROBE':option})
+        assert b'E4 preinit host: 7 checks, 0 failures' in output,output
+    print('PASS preinit: dynamic configuration with AI flag clear and getter/controller pages inaccessible (OFF and Actors=96)',flush=True)
     negative=['off','invalid']+[f'{kind}{i}' for kind in ('missing','wrong','unverified') for i in range(6)]+[f'guard{i}' for i in range(rows)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         for completed in concurrent.futures.as_completed([pool.submit(run,mode) for mode in negative]):completed.result()
