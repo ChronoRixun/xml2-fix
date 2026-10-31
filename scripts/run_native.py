@@ -121,6 +121,7 @@ cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "gamespy"]
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "checksum"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "admission"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "refusal-transport"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "e4-guards"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"])
 installer_modes |= {"xml2_online_menus_test"}
 

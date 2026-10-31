@@ -1,5 +1,7 @@
 #include "e4_observe.hpp"
 #include "actor_ai_layout.hpp"
+#include "e4_core.hpp"
+#include "e4_core_sites.hpp"
 #include "join_in_progress.hpp"
 #include "join_in_progress_core.hpp"
 #include "join_in_progress_rules.hpp"
@@ -104,6 +106,30 @@ namespace join_in_progress
 		using seat_active_t = char(__thiscall*)(void*, std::int32_t);
 		using participant_drop_t = void(__thiscall*)(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 
+		bool guard_matches(const join_in_progress_rules::guard& g, const std::uint8_t* actual)
+		{
+			const auto& d = actor_ai::installed();
+			if ((g.va != brain_ring_init && g.va != 0x522a10) || !e4_core::installed() || d.stage != 2 || d.controllers != 96)
+				return limits_rules::matches(actual, g.hex);
+			// These stock-ring observations are rewritten by the earlier committed E4
+			// transaction. Compose only its ledger operands, then its published observer
+			// bytes (the pop observer starts at the last byte of the second guard).
+			std::string expected(g.hex);
+			for (const auto& e : e4_core_sites::edits)
+			{
+				const auto old = std::string_view(e.hex);
+				if (e.va >= g.va + g.hex.size() / 2 || g.va >= e.va + old.size() / 2) continue;
+				for (std::size_t i = 0; i < old.size() / 2; ++i)
+					if (e.va + i >= g.va && e.va + i < g.va + g.hex.size() / 2 &&
+						g.hex.substr((e.va + i - g.va) * 2, 2) != old.substr(i * 2, 2)) return false;
+				const auto value = e.value + (e.dynamic ? d.cai_object : 0);
+				const auto hex = actor_ai::hex32(value);
+				for (unsigned i = 0; i < e.size; ++i)
+					if (e.va + e.offset + i >= g.va && e.va + e.offset + i < g.va + g.hex.size() / 2)
+						expected.replace((e.va + e.offset + i - g.va) * 2, 2, hex.substr(i * 2, 2));
+			}
+			return limits_rules::matches(actual, actor_ai::guard(g.va, expected, d));
+		}
 		const join_in_progress_rules::guard* mismatch()
 		{
 			__try
@@ -114,7 +140,7 @@ namespace join_in_progress
 				for (const auto& g : guards)
 				{
 					if (g.va == campaign_receive && composed_receiver) continue;
-					if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
+					if (!guard_matches(g, image + g.va - 0x400000)) return &g;
 				}
 				return nullptr;
 			}

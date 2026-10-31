@@ -37,6 +37,7 @@ bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool)
 }
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
 namespace xml1_turrets { std::uint32_t fixture_hook = 0; std::uint32_t installed_process_hook() { return fixture_hook; } }
+namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }
 namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace ini {
@@ -78,6 +79,36 @@ void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_checksum.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
+void e4_guard_composition() {
+    assert(join_in_progress::mismatch()==nullptr);
+    // Exact E4 operand edits from its published 96-controller layout. The last
+    // byte of the pop prefix also belongs to its mandatory observer detour.
+    auto decode=[](const char* h) { std::vector<unsigned char> b;while(*h){char pair[3]{h[0],h[1],0};b.push_back(static_cast<unsigned char>(std::strtoul(pair,nullptr,16)));h+=2;}return b; };
+    const auto init=decode("5633f65789b1104c020089b1144c020089b1184c020033d2");
+    const auto pop=decode("8bd18b82144c02008b84828c4a020056");
+    std::memcpy(reinterpret_cast<void*>(0x522f70),init.data(),init.size());
+    std::memcpy(reinterpret_cast<void*>(0x522a10),pop.data(),pop.size());
+    actor_ai::published={2,0x30000000,0x30000004,0x61c,96,0x30024db8,0x268,96,2,0x24db0,0x525302};
+    actor_ai::observed_spans={{0x522a1f,{0x56},{0xe9,0x12,0x34,0x56,0x78}}};
+    *reinterpret_cast<unsigned char*>(0x522a1f)=0xe9;
+    assert(join_in_progress::mismatch()!=nullptr); // metadata alone is no successful E4 install
+    e4_core::fixture_installed=true;
+    assert(join_in_progress::mismatch()==nullptr); // failing-first: the old raw guard refuses E4
+    for(const auto va:{0x522f70u,0x522a10u}) {
+        const auto guard=std::find_if(join_in_progress_rules::guards.begin(),join_in_progress_rules::guards.end(),[&](const auto& g){return g.va==va;});
+        assert(guard!=join_in_progress_rules::guards.end());
+        for(unsigned i=0;i<guard->hex.size()/2;++i) {
+            auto* byte=reinterpret_cast<unsigned char*>(va+i);*byte^=1;
+            assert(join_in_progress::mismatch()==&*guard); // opcode, operand and observer bytes all remain guarded
+            *byte^=1;
+        }
+    }
+    actor_ai::observed_spans.clear();assert(join_in_progress::mismatch()->va==0x522a10);
+    actor_ai::observed_spans={{0x522a1f,{0x56},{0xe9,0x12,0x34,0x56,0x78}}};
+    actor_ai::published.controllers=32;assert(join_in_progress::mismatch()!=nullptr);
+    actor_ai::published.controllers=96;actor_ai::published.stage=1;assert(join_in_progress::mismatch()!=nullptr);
+    std::cout<<"PASS E4/JIP guards: certified stage2/96 operands plus reported observer accepted; uninstalled/wrong-layout/unreported and every altered prefix byte refused\n";
+}
 }
 int main(int argc,char** argv) {
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
@@ -94,6 +125,7 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
+        if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();return 0; }
         if(std::string_view(argv[2])=="refusal-transport") { refusal_transport_fixture::run();return 0; }
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }

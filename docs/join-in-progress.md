@@ -540,3 +540,12 @@ moved-check fields and the return-address chain above the draw, 24 lines per
 epoch). The party heroes' moved-check state is also made cold at the
 zone-start notice, before the players are placed (same toggle); the frame-0
 pass stays.
+
+Integration 11 composes the two stock AI-ring observation guards with an already
+committed Actors=96 transaction. Their E4 ledger operands are accepted only when
+E4 reports installation and publishes stage 2 / 96; the mandatory controller-pop
+observer's reported bytes are composed afterwards. Every other prefix byte stays
+guarded. The mapped-image `e4-guards` fixture refuses uninstalled, wrong-layout,
+unreported-observer and individually corrupted prefixes. This restores JIP
+installation for that optional configuration; it does not establish late-restart
+determinism with 96 controllers, whose stock-ring canonicalisation remains off.
