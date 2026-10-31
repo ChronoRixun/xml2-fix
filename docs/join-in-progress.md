@@ -468,41 +468,14 @@ shares; the probe's `jip events:` lines now carry every entry (`part=k/n`,
 walk the party list (game vt+0x11c). `--mode events` lists the entries present
 on one peer only.
 
-Follow-up 11 (the world hold, design in the work folder's REPORT section 16):
-the remaining frame-0 difference is the world ticking a different number of
-times per peer between `zone started` and frame 0 (the barrier wait: AE9 host
-~2 iterations, joiner ~7). The main-loop iteration (0x401d70) calls the game
-update (game vt+0x16c = 0x46eef0) at 0x40235a, and that update gates its whole
-world section 0x46f0ca..0x46f60d (timed-event pump, countdowns, the physics
-and collision singletons, the camera update, the smart-entity update, the AI)
-on `test byte ptr [esi+0x728], 2; je 0x46f60d` at 0x46f0a9. A CALL-shape
-bridge over that 7-byte test returns ZF=1 (skip) while the hold is on and
-executes retail's own test otherwise. The hold opens at the `zone started`
-milestone of an ARMED late restart only (the pump poll that also resumes an
-existing member's controls; a lobby START never arms) and closes first thing
-in the frame-0 epoch, at the session's end, on a first-frame reset fault, and
-by a 2 s watchdog that logs (`resumes at the watchdog ...`: frame 0 never
-came, the restart proceeds as AE11 did). What keeps running while held: the
-clock tick, the input manager update 0x55a2b0 (called at 0x40219e on the main
-loop, before the game update; its 0x559700 samples the local pad, broadcasts
-the record through 0x611270 and advances the ring's write cursor +0x3174 - the
-host's frame-0 input is produced THERE, outside the held section), the
-scheduler tasks (the frame gate 0x606a50 from the pump at 0x401f74, this
-module's pump with the controls resume), rendering. The game update's direct
-callees include none of the input-manager, controllers or net-step functions.
-Log: `the world update ... is held from the zone start until the first shared
-frame on every peer (hold N; the watchdog releases it after 2000 ms)` at the
-opening and `the world update resumes at the first shared frame (N world
-update(s) skipped on this PC while held)` first in the frame-0 epoch, N per
-peer. `[Dev] LateJoinWorldHold=0` is the A/B control. Retail guard
-0x46f0a0..0x46f0bb (the vt+0x20 call tail, the test, the je, the seats getter
-call); the native fixture enters the bridge by CALL with every register known
-and asserts retail's flags for every bit pattern with the hold off, ZF=1 held,
-and every open/close trigger including the watchdog with a stubbed clock.
-Live round 8 (AE11) showed the game clock, the world counters and the camera
-yaw history unchanged between `zone started` and frame 0 on both peers with
-the native pause byte set through the wait, so the world section does not run
-there and this hold is inert; it stays behind the toggle.
+Follow-up 11 (the AE12 world hold) is gone (follow-up 14): the bridge over the
+game update's world-section gate at 0x46f0a9, its watchdog, `[Dev]
+LateJoinWorldHold` and the guard were removed after live rounds 8, 9 and 10
+logged `0 world update(s) skipped` on every peer in every admission - the
+world section does not run during the barrier wait (the pause byte holds it).
+The AE8 FPU "correction" is gone too: the only thing it ever changed was MXCSR
+bit 5, the sticky precision FLAG (0x1fa0 -> 0x1f80), which affects no result;
+the probe keeps its `fpu=` field.
 
 Follow-up 12 (round 8): the joiner alone held a queued "moved" event (the
 static kind 0x6d7c5c) for its OWN hero at frame 0 and the host alone
@@ -537,9 +510,116 @@ host's heroes reach the zone start with warm last-known vectors): with
 draw-ring flushes and snapshots every 30 frames, an events dump every 60 -
 and the three touch-nudge draws log `jip touch:` (the touched entity, its
 moved-check fields and the return-address chain above the draw, 24 lines per
-epoch). The party heroes' moved-check state is also made cold at the
-zone-start notice, before the players are placed (same toggle); the frame-0
-pass stays.
+epoch; since follow-up 14 also `parent=`, the entity the child stands on). The
+cold moved pass that follow-up 13 put at the zone-start notice ran on an
+EMPTY party list (0x4867fe is before the heroes are placed by game vt+0x190 at
+0x486884 and bound by 0x422520 at 0x4868a5: round 10 logged `0 hero(s)` on
+both peers); follow-up 14 runs it from the party-binding tail instead.
+
+Follow-up 14 (AE15; review O:/Projects/agent-work/ae-review/REVIEW.md and the
+E2 trace O:/Projects/agent-work/e2-settle-re/RESULT.md):
+- The camera canonical at frame 0. Every round's frame-0 camdump had 49-74
+  dwords differing between the peers AFTER the re-anchor (eye/target copies by
+  0.66 units, the yaw history by 8 ULPs) because the zone-start init vt+0x74
+  (0x4458a0) takes the party target from the seat manager's vt+0x58
+  (0x48e120, which reads the camera back through vt+0x88 / vt+0xd8) and the
+  yaw through 0x43f150 from the CURRENT eye/target (fpatan at 0x43f1f8) and
+  the history +0x2f0: per-peer state the loading-screen updates drifted. The
+  checksum's camera term is six ROUNDED components, so a 1-ULP difference
+  flips it only when a component lands on a half-unit while the camera moves:
+  the late, delta-1..8 drops (frames 720..4200). Now, at the frame-0 epoch and
+  before vt+0x74 runs from the party anchor, every peer puts the camera's
+  derived spans (`join_in_progress_rules::camera_derived_spans`: the union of
+  every dword that differed between the peers at frames 0/1/2 in the 11
+  dumped admissions, plus the current yaw +0x74 and the matrix head +0x18c;
+  0x1c8 bytes) back to the pristine image, so the init runs from identical
+  inputs. The other 205 dwords were equal on both peers in every pair. Log:
+  `the camera is re-initialised from party slot 0 at frame 0 (was ...; N
+  derived dword(s) back to the pristine image first; now ...)`.
+- E2's touch-nudge. CEntity vt+0xac is "OnAttached(child)"; CActor's override
+  0x429710 draws three bools (0x42974d/63/73) and sets the CHILD's move target
+  (+0x120/+0x138 through 0x473640) when a character lands on an actor. The
+  only entity-to-entity caller is 0x419f20 ("set ground entity": when the
+  child's +0xbc changes to a non-world entity it resolves the parent, calls
+  parent->vt+0xac(child) and stores +0xbc), reached from FindGround 0x470bb0
+  inside the physics steps. A fresh actor has +0xbc = 0, so its first
+  non-world ground touches; the cold joiner's zone-loaded finish (110 ms) ran
+  such a step for Storm before `zone started`, the warm host's (13 ms) did
+  not. During an armed late restart a JMP-shape bridge at the override's
+  entry (its 8-byte prologue displaced) answers `ret 4` for a party hero - no
+  draws, no move target; 0x419f20 still stores +0xbc - and at the frame-0
+  epoch (after the RNG epoch and the moved pass, before the queue rebuild)
+  every peer puts each party hero's +0xbc back to 0 and runs FindGround in
+  party order: the same ray from the same position, the same ground fields
+  and, if an actor is below, the same nudge draws at the same count. Logs:
+  `a party hero's ground attach callback (CActor OnAttached 0x429710: the
+  settle nudge and its three draws) is suppressed before the first shared
+  frame on this PC (hero H on entity E; suppression N)` (joiner expected,
+  host not) and `the party heroes' ground is re-probed at the first shared
+  frame on every peer: N hero(s), S had a ground entity before, H ray hit(s),
+  C attach callback(s) (...)` with equal N/H/C on both. The probe's hero lines
+  carry `gnd:<+0xbc>/<+0x200>`. Retail guards 0x429710, 0x419f88, 0x470bb0.
+- The cold moved pass moved to a CALL-shape bridge over `call 0x495350` at
+  0x4868ad (right after 0x422520 bound the party; guard 0x4868a5), logged as
+  `... canonical at the zone start (after the party is bound, before the first
+  physics step)`.
+- Review fixes: a heap-allocated event kind (outside [0x401000, 0xa40000)) is
+  keyed by its vtable (S2; logged once when a kept entry has one); the probe's
+  30-period budget applies to a late restart's epoch only (S6); the draw ring
+  is heap-allocated only with the probe (S5); `scripts/jip_components.py
+  --mode events` never compares the payload (S7). The native checksum
+  comparison bridge now logs `jip checksum MISMATCH: frame=N heads(...)` with
+  this PC's LAST producer sample (hash, hero subtotal, camera subtotal, draw
+  count, the six raw camera components, every hero transform) whenever two
+  present heads disagree at one frame - outside the observation window too -
+  so a late drop names the term that broke.
+- The device-switch probe. Round 10 (ae14): with everything above, three E1
+  admissions (one on two PCs) agreed on every term and every draw through
+  frame 900 and one sat idle to frame 4200; every late drop of rounds 9-10
+  came 1.2-1.7 s after the JOINER logged `prompts: player 1's prompts show
+  the pad` (its first pad input device, before any stick deflection), while a
+  lobby START survives the same switch. The retail input record (0x558ec0:
+  four scaled axis bytes, the buttons, a frame time) carries no device flag,
+  so the switch's effect is local to that PC; the fix's own `pad_hotplug`
+  runs a local "arrival refresh" there (binding rebind, retail 0x628e20).
+  With `[Dev] LateJoinProbe=1` the producer sample is now logged at every
+  period on both peers, and a prompt device change (pad_prompts' counter,
+  polled from the pump) re-arms the 30-period window in the same epoch,
+  restarts the draw ring in phase 5 and dumps the snapshot, queue, camera
+  and camera lines again on the switching PC (`jip switch:`), so the next
+  drop is bracketed on both peers and names its term and first draw.
+- The movement probe (round 10 A/C: the drop follows the first period of
+  movement of either hero in a late-joined session - the pad-only joiner
+  moving dropped at frame 420, the host moving with the joiner idle at 540 -
+  on hero_sum only: the moving hero's last-bit x/y and a following AI hero's
+  heading by 1-6 ULPs; the device switch itself is harmless, a lobby START
+  survives it). With the probe on, one `jip hero:` line per party hero per
+  gated frame carries the raw dwords of +0x20..+0x38, +0x120..+0x168,
+  +0x1e8..+0x270 and +0x2b0..+0x320 (the ranges the physics steps 0x496f20 /
+  0x4762c0 / 0x472cf0, FindGround and the move-target setter 0x473640 read)
+  with the game's t/dt, for 60 frames after the frame-0 epoch, again from
+  the first frame a party hero's position changes after that window
+  (`jip move:`), and after a device switch; `scripts/jip_components.py
+  --mode hero` pairs the lines by (frame, slot) and names the first
+  differing dword offset.
+- AE16 (O:/Projects/agent-work/padswitch-re/RESULT.md): the controlled hero's
+  move direction is stick x the shared camera's basis vectors (0x42dbf0 ->
+  camera vt+0xcc 0x43fe00 copies +0x2cc/+0x2d8/+0x2e4; 0x447730 rewrites all
+  nine each frame) and the retail camera term is one _ftol of six summed
+  components, blind to ULPs - so a ULP-different camera moves the heroes
+  differently while the term agrees (the first-movement drops of round 10
+  A/C). The derived spans now cover +0x2cc..+0x2f8 as one span. At the
+  frame-0 epoch, after the ground re-probe, every peer also makes each party
+  hero's motion fields canonical: gravity hold +0x2f0 := 0, last fall +0x28c
+  := t, last update +0x150 := t, the velocity and angular pairs := 0 (log:
+  `the party heroes' motion fields are canonical at the first shared frame on
+  every peer (t ...)` with the before-values). The hero probe line adds
+  +0x178, +0x190..+0x1a4, +0x1d0..+0x1e8, one contiguous +0x1e8..+0x320 and
+  CHero +0x7e4..+0x81c; every `jip cam:` line carries the raw basis and the
+  decoded stick floats (compared by `--mode cam`).
+- Toggles: `[Dev] LateJoinRestartReset` (the whole canonical restart, A/B
+  returning the 060y pattern), `[Dev] LateJoinProbe` (bug reports only) and
+  `[Dev] LateJoinMovedCanonical` (until E2 is settled).
 
 Integration 11 composes the two stock AI-ring observation guards with an already
 committed Actors=96 transaction. Their E4 ledger operands are accepted only when

@@ -145,8 +145,9 @@ namespace join_in_progress_rules
 	// (exports.cpp order), so the slot is accepted when it holds retail or that module's installed hook (follow-up 8;
 	// round 5: the 16-byte vtable guard refused the whole install on every boot with Game.Xml1Turrets on).
 	constexpr std::uint32_t event_manager_pump = 0x4b2d60, event_manager_pump_slot = event_manager_vtable + 0xc;
-	constexpr std::uint16_t game_x87_control_word = 0x027f; // the CRT's _PC_53 at 0x6729f6; the D3D8 device is created with FPU_PRESERVE (det_math.hpp)
-	constexpr std::uint32_t game_mxcsr = 0x1f80;            // Windows' default; nothing in XMen2.exe or the Alchemy DLLs loads MXCSR (scripts/fpu_sites.py)
+	// Follow-up 14 (review S2): an event object outside the executable image (a heap-allocated kind: round 10's
+	// `kind 33a4568` host / `3454568` guest on the same owners) is keyed by its vtable pointer, which is static.
+	constexpr std::uint32_t image_code_lo = 0x401000, image_code_hi = 0xa40000;
 	// Host alone: the host menu's Start Game (0x5bacd0) refuses a room list of one; with rule 26 the host starts alone
 	// and players drop in later (admission stays open after Start Game).
 	constexpr std::uint32_t start_alone = 0x5bae34;
@@ -292,19 +293,56 @@ namespace join_in_progress_rules
 	// position, orientation, flag) is entered by JUMP with its first six bytes displaced (push ecx/ebx/ebp/esi; xor esi,esi).
 	constexpr std::uint32_t spawn_entry = 0x4612e0, spawn_resume = 0x4612e6;
 	inline constexpr std::array<unsigned char, 6> spawn_entry_original{0x51,0x53,0x55,0x56,0x33,0xf6};
-	// Follow-up 11 (the world hold): the game update 0x46eef0 (game vt+0x16c, called from the main-loop iteration
-	// 0x401d70 at 0x40235a) gates its whole world section 0x46f0ca..0x46f60d on bit 1 of game+0x728 - the 7-byte
-	// `test byte ptr [esi+0x728], 2` at 0x46f0a9 and its `je 0x46f60d` (0x46f094 also jumps to the test). During a
-	// late restart's barrier wait the main loop keeps running the update, each peer a different number of times
-	// (AE9: host ~2, joiner ~7), and the dt-independent per-tick work (settle, touch nudge, camera) parts the heroes
-	// that were bit-identical at `zone started` (round 7). The frame gate (0x606a50, a scheduler task pumped at
-	// 0x401f74), the input manager update 0x55a2b0 (0x40219e, the main loop; its 0x559700 samples the local pad,
-	// broadcasts the record and advances the ring's write cursor +0x3174) and the pump's controls resume are all
-	// outside that section, so a CALL-shape bridge over the test returns ZF=1 (skip) while the hold is on and
-	// retail's own test otherwise; a lobby START never arms it.
-	constexpr std::uint32_t world_gate_site = 0x46f0a9, world_gate_flag_at = 0x728, world_gate_flag_bit = 2;
-	inline constexpr std::array<unsigned char, 7> world_gate_original{0xf6,0x86,0x28,0x07,0x00,0x00,0x02};
-	constexpr std::uint32_t world_hold_watchdog_ms = 2000;
+	// Follow-up 14 (AE15): the AE12 world hold at 0x46f0a9 is gone - rounds 8-10 logged `0 world update(s) skipped`
+	// on every peer in every admission (the world section does not run during the barrier wait).
+	// (1) The camera at frame 0. Every round's frame-0 camdump (11 admissions, ae11/ae13/ae14) had 49-74 dwords
+	// differing between the peers after the re-anchor - eye/target/history copies by 0.66 units or a few ULPs -
+	// because vt+0x74 (0x4458a0) takes the party target from the seat manager's vt+0x58 (0x48e120, which reads the
+	// camera back: vt+0x88, vt+0xd8) and the yaw through 0x43f150 from the CURRENT eye/target (+0xe0/+0x104: fpatan at
+	// 0x43f1f8) and the history +0x2f0..: per-peer state the loading-screen updates had drifted. The spans below are
+	// the union of every dword that differed between the peers at frames 0/1/2 in those 11 pairs (camunion.py over
+	// the camdumps; 236 of the 311 dwords never differed) plus the current yaw +0x74 (the init keeps it unless snapped)
+	// and the head of the matrix at +0x18c (vt+0xd0 0x43fe60 writes +0x18c..). At the frame-0 epoch every peer puts
+	// these bytes back from the pristine image before vt+0x74 runs from the party anchor, so the init runs from
+	// identical inputs on every peer; the other 205 dwords were equal on both peers in every pair.
+	struct camera_span { std::uint32_t at, bytes; };
+	// AE16 (O:/Projects/agent-work/padswitch-re/RESULT.md): the controlled hero's move direction is stick x camera BASIS
+	// (0x42dbf0 -> camera vt+0xcc 0x43fe00 copies +0x2cc/+0x2d8/+0x2e4; 0x447730 rewrites all nine dwords each frame) and
+	// the retail camera term is ONE _ftol of six summed components, blind to ULPs - so +0x2cc..+0x2f8 is one span (the
+	// +0x2d8 dword sat between the two earlier spans).
+	inline constexpr std::array<camera_span, 11> camera_derived_spans{{
+		{0x010, 0x18}, {0x074, 0x04}, {0x088, 0x0c}, {0x0e0, 0x48}, {0x18c, 0x3c}, {0x1c8, 0xc4},
+		{0x2cc, 0x2c}, {0x414, 0x0c}, {0x458, 0x0c}, {0x484, 0x0c}, {0x4cc, 0x0c}}};
+	constexpr std::uint32_t camera_basis_at = 0x2cc, camera_basis_bytes = 0x24, input_object_pointer = 0xa6abfc, input_stick_floats_at = 0xc610;
+	// (2) E2's touch-nudge (O:/Projects/agent-work/e2-settle-re/RESULT.md): CEntity vt+0xac is "OnAttached(child)";
+	// CActor's override 0x429710 draws three bools (0x42974d/63/73) and sets the CHILD's move target (+0x120/+0x138
+	// through 0x473640) when a character lands on an actor; the only entity-to-entity caller is 0x419f20 ("set ground
+	// entity": when the child's +0xbc changes to a non-world entity it resolves the parent, calls parent->vt+0xac(child)
+	// at 0x419f8d and stores +0xbc), reached from FindGround 0x470bb0 inside the physics steps (0x496f20 vt+0x128,
+	// 0x472cf0). A fresh actor has +0xbc = 0, so its FIRST non-world ground touches; the cold joiner's finish (110 ms)
+	// ran such a step for Storm before `zone started`, the warm host's (13 ms) did not. During an armed late restart a
+	// JMP-shape bridge at the override's entry (its 8-byte prologue displaced, position-independent) answers `ret 4`
+	// for a party hero (the +0xbc store in 0x419f20 still happens; no draw, no move target); at the frame-0 epoch every
+	// peer puts each party hero's +0xbc back to 0 and runs FindGround (thiscall, no arguments) in party order, so the
+	// same ray, ground and - if an actor is below - the same nudge draws happen on every peer at the same count.
+	constexpr std::uint32_t attach_override = 0x429710, attach_override_resume = 0x429718, find_ground = 0x470bb0, set_ground_call = 0x419f88;
+	inline constexpr std::array<unsigned char, 8> attach_override_original{0x83,0xec,0x18,0x56,0x8b,0x74,0x24,0x20};
+	constexpr std::uint32_t actor_ground_at = 0xbc, actor_ground_height_at = 0x200;
+	// AE16: the actor physics step's time stamps and velocity pair (my listing of 0x496f20 / 0x476220): +0x2f0 is compared
+	// with the game time at 0x4971c9..0x4971d7 (gravity held until then), +0x28c is `now - last fall` at 0x497287 and is
+	// rewritten `:= now` at 0x497305, +0x150 is the per-actor last update time (dt = t - +0x150 at 0x476226, rewritten at
+	// 0x476295), +0x120/+0x138 the velocity pair 0x473640 writes, +0x12c/+0x144 the angular pair (0x475f50). A warm host's
+	// heroes can carry stamps from the pre-restart clock (the clock restarts at 2.0) that a cold joiner's cannot; at the
+	// frame-0 epoch every peer makes them canonical. +0x278 (gravity scale), +0x254 (mass) and +0x259 (flags) are not
+	// velocity and stay; CHero +0x808 (auto-move flag) is logged, not written.
+	constexpr std::uint32_t actor_velocity_at = 0x120, actor_angular_at = 0x12c, actor_velocity_prev_at = 0x138, actor_angular_prev_at = 0x144,
+		actor_last_update_at = 0x150, actor_last_fall_at = 0x28c, actor_gravity_hold_at = 0x2f0, hero_auto_move_flag_at = 0x808, game_time_at = 0x3e8;
+	// (3) The AE14 pre-placement moved pass ran on an EMPTY party list (0x4867fe is before the heroes are placed by
+	// game vt+0x190 at 0x486884 and bound by 0x422520 at 0x4868a5: round 10 `0 hero(s)` on both peers). It now runs
+	// from a CALL-shape bridge over the argument-less getter call right after that binding (0x4868ad `call 0x495350`),
+	// before the finish's settle loop and the first physics step.
+	constexpr std::uint32_t party_bound_call = 0x4868ad, party_bound_target = 0x495350;
+	inline constexpr std::array<unsigned char, 5> party_bound_original{0xe8,0x9e,0xea,0x00,0x00};
 	// Follow-up 12 (round 8): the joiner alone holds a queued "moved" event (static kind 0x6d7c5c) for its OWN hero at
 	// frame 0, and the host alone registers them for the AI heroes at frames 1-3. The moved check is the entity's
 	// vt+0xf4 = 0x471740(time): when the position +0x20 is farther than [0x68012c] from the last-known +0x1e8, or the
@@ -317,11 +355,14 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t moved_check = 0x471740, moved_fire = 0x4729b0, moved_event_kind = 0x6d7c5c;
 	constexpr std::uint32_t actor_position_at = 0x20, actor_orientation_at = 0x2c, actor_last_position_at = 0x1e8, actor_last_orientation_at = 0x1f4,
 		actor_moved_flags_at = 0x258, actor_moved_pending_bit = 0x2, actor_moved_extra_a = 0x23c, actor_moved_extra_b = 0x240, actor_vector_bytes = 12;
-	inline constexpr std::array<guard, 133> guards{{
+	inline constexpr std::array<guard, 136> guards{{
+		{0x429710,"83ec18568b74242085f60f8484000000", "CActor OnAttached override (vt+0xac): prologue, the child argument, its null test"},
+		{0x419f88,"8b10568bc8ff92ac0000008b078986bc000000", "set ground entity: parent->vt+0xac(child) then the +0xbc store"},
+		{0x470bb0,"83ec2c5356578bf16a008d4c2410e8ad", "FindGround entry (thiscall, no arguments; the downward ray from +0x20)"},
+		{0x4868a5,"e876bcf9ff83c408e89eea00008b106a008bc8ff5204", "zone-loaded finish: the party binding 0x422520, then the argument-less getter call the cold pass bridges"},
 		{0x471740,"568bf18d4620508d8ee8010000ff15ccf96700d81d2c016800dfe0f6c4057a2c8d4e2c518d8ef4010000", "entity moved check: position +0x20 vs last-known +0x1e8, orientation +0x2c vs +0x1f4"},
 		{0x47178c,"8a8658020000a80275198b542408520c02685c7c6d008bce888658020000e8818ffaff", "entity moved check: +0x258 bit 2 pending flag, the static kind 0x6d7c5c scheduled"},
 		{0x4729b0,"568b74240880a658020000fd", "moved event fire: clears +0x258 bit 2 before re-registering the owner"},
-		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the seats getter call"},
 		{0x46f2d8,"7505c644241001e80c8404008b4c24108b10518bc8ff5204", "game update: the CSmartEntMgr getter call and its vt+4 update (all flag) every tick"},
 		{0x4612e0,"5153555633f6e8d5120000", "spawn by definition / instance names: entry prologue"},
 		{0x68e440,"d0764b0000714b0000704b00e0704b00c06f4b00b06f4b00f06f4b00c0754b00", "CSmartEntMgr vtable: destructor, update, allocate, reset, clear, count, at, append"},

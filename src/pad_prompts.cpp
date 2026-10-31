@@ -30,6 +30,7 @@ namespace pad_prompts
 		bool installed = false;
 		activity seen;                             // the game thread's, from the poll
 		std::array<int, players> last_shown{{-1, -1, -1, -1}}; // for the log
+		std::atomic<unsigned> switches{0};            // every change of last_shown (AE15: the join-in-progress probe polls it)
 
 		// The labels handed back: the renderer reads one before it asks for the next, as with the game's single
 		// buffer (0xa68c18); a few in turn all the same.
@@ -66,6 +67,7 @@ namespace pad_prompts
 			if (last != static_cast<int>(s))
 			{
 				last = static_cast<int>(s);
+				++switches;
 				logger::write("prompts: player %d's prompts show the %s", player + 1, s == shown::pad ? "pad" : "keyboard");
 			}
 			return s;
@@ -340,4 +342,5 @@ namespace pad_prompts
 		              describe(chosen_mode),
 		              colours ? "A B X Y in the Xbox colours (0x5ef777)" : "every pad button as [A]-style text ([Input] PromptColors=0)");
 	}
+	unsigned device_switches() { return switches.load(); }
 }

@@ -331,6 +331,7 @@ namespace join_in_progress_core
 		std::uint32_t owner = 0;                           // the resolved owner entity (0: none)
 		std::uint8_t payload[16]{};                        // the record's +8..+23
 		bool token = false, live = false;                  // a positive entity token; resolved to an entity
+		std::uint32_t kind_vtable = 0;                     // follow-up 14 (S2): the event object's vtable when it lies outside the image (0 otherwise)
 	};
 	// Follow-up 9: the event object is either a member of its owner (the actor update at +0x320 and its siblings:
 	// its OFFSET is the process-independent name) or a static kind object in the executable's .data (round 6: the
@@ -339,10 +340,17 @@ namespace join_in_progress_core
 	// between boots), so the key is the offset inside the owner, else the absolute address; every offset (< 0x2000)
 	// sorts before every address (>= 0x400000).
 	constexpr std::uint32_t event_member_span = 0x2000;
+	// Follow-up 14 (review S2): an event object outside the executable image is a heap allocation whose address is
+	// per-process (round 10 `zone start before rebuild`: kinds 33a4568 / 3454568 on the same owners); its vtable
+	// pointer is static and names the class, so that is the key (the raw address only when no vtable was read).
+	constexpr std::uint32_t image_lo = 0x401000, image_hi = 0xa40000;
+	inline bool event_kind_in_image(std::uint32_t event) { return event >= image_lo && event < image_hi; }
 	inline std::uint32_t event_kind_key(const event_entry& e)
 	{
 		const std::uint32_t offset = e.event - e.owner;
-		return (e.owner && offset < event_member_span) ? offset : e.event;
+		if (e.owner && offset < event_member_span) return offset;
+		if (event_kind_in_image(e.event) || !e.kind_vtable) return e.event;
+		return e.kind_vtable;
 	}
 	// Canonical order: time, then the owner's DENSE index (never its generation: the warm host's generations are
 	// higher than a cold joiner's for the same slots), then the event's kind key (offset inside its owner, or the
@@ -372,13 +380,31 @@ namespace join_in_progress_core
 	// Follow-up 8: the manager's pump slot composes with the one module that hooks it (xml1_turrets): retail, or that
 	// module's installed hook (never 0, never anything else).
 	inline bool event_pump_slot_accepted(std::uint32_t slot, std::uint32_t native, std::uint32_t module_hook) { return slot == native || (module_hook != 0 && slot == module_hook); }
-	// Follow-up 11: the world hold (the game update's world section skipped) is wanted only inside an armed late
-	// restart with the reset on, from the moment the epoch has seen the world loading and then not loading (the
-	// `zone started` milestone) until the frame-0 epoch; a lobby START never arms, [Dev] LateJoinWorldHold=0 turns it
-	// off. The watchdog releases an open hold once limit_ms have passed since it opened (frame 0 never came: the
-	// first shared frame needs a world tick on that build - logged, the restart proceeds as before).
-	inline bool world_hold_wanted(bool enabled, bool late_restart, bool armed, bool window_open) { return enabled && late_restart && armed && window_open; }
-	inline bool world_hold_watchdog_expired(bool open, std::uint32_t opened_ms, std::uint32_t now_ms, std::uint32_t limit_ms) { return open && now_ms - opened_ms >= limit_ms; }
+	// Follow-up 14 (AE15): a party hero's ground-attach callback (CActor OnAttached 0x429710: the settle nudge draws)
+	// is suppressed only inside an armed late restart with the reset on - from the mode-2 load to the frame-0 epoch,
+	// which consumes `armed` before it re-probes every party hero's ground on every peer. A lobby START never arms.
+	inline bool attach_suppressed(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	inline bool party_member(std::uint32_t handle, const std::uint32_t* party, unsigned party_count, std::uint32_t index_mask)
+	{
+		if (!positive_entity_token(handle)) return false;
+		for (unsigned i = 0; i < party_count; ++i) if (party[i] && (party[i] & index_mask) == (handle & index_mask)) return true;
+		return false;
+	}
+	// The camera's derived spans (rules camera_derived_spans) back to the pristine image's bytes; returns how many
+	// dwords changed. Pure: both images are plain byte arrays of `bytes` bytes.
+	template<class Spans>
+	inline unsigned restore_camera_spans(std::uint8_t* camera, const std::uint8_t* pristine, const Spans& spans, std::uint32_t bytes)
+	{
+		unsigned changed = 0;
+		for (const auto& s : spans)
+		{
+			if (!s.bytes || s.at + s.bytes > bytes) continue;
+			for (std::uint32_t off = s.at; off + 4 <= s.at + s.bytes; off += 4)
+				if (std::memcmp(camera + off, pristine + off, 4) != 0) ++changed;
+			std::memcpy(camera + s.at, pristine + s.at, s.bytes);
+		}
+		return changed;
+	}
 	// Follow-up 12 (round 8): at the frame-0 epoch the rebuild also drops a queued "moved" event (the static kind
 	// 0x6d7c5c) whose owner is one of the party heroes (by dense index), after their moved-check state was made
 	// canonical (last-known = current, pending bit clear) on every peer; other owners' moved events are kept.

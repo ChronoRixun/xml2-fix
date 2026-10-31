@@ -545,23 +545,10 @@ int main(int argc, char** argv)
 		      && join_in_progress_rules::event_record_bytes * join_in_progress_rules::event_records == join_in_progress_rules::event_used_bitmap_at, "follow-up 7: the manager layout is self-consistent (1125 records of 24 bytes, 1125 heap pairs before the count)");
 		for (const auto va : {0x4b2fc0u, 0x68de14u, 0x4b2d70u, 0x4b2c10u, 0x4b2b80u, 0x4b2c90u, 0x4b2a10u, 0x41a76bu, 0x41e440u, 0x4b2de0u})
 			check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 7: every timed-event site is guarded");
-		check(join_in_progress_rules::game_x87_control_word == 0x027f && join_in_progress_rules::game_mxcsr == 0x1f80, "follow-up 7: the canonical FPU control state is the game's (CRT _PC_53, Windows MXCSR)");
 		check(event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0) && event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0x50001000) && event_pump_slot_accepted(0x50001000, 0x4b2d60, 0x50001000)
 		      && !event_pump_slot_accepted(0x50001000, 0x4b2d60, 0) && !event_pump_slot_accepted(0x12345678, 0x4b2d60, 0x50001000) && !event_pump_slot_accepted(0, 0x4b2d60, 0),
 		      "follow-up 8: the pump slot composes with the xml1 turrets hook only (retail, or the module's reported hook)");
 		check(std::none_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= 0x68de20 && 0x68de20 < g.va + g.hex.size() / 2; }), "follow-up 8: no retail guard covers the hooked pump slot 0x68de20");
-		// Follow-up 11: the world hold is wanted only inside an armed late restart with the reset on and the window open
-		// (`zone started` reached); the watchdog fires once the limit has passed since the window opened, never while
-		// closed, not before the limit, and across the tick wrap.
-		check(world_hold_wanted(true, true, true, true) && !world_hold_wanted(false, true, true, true) && !world_hold_wanted(true, false, true, true) && !world_hold_wanted(true, true, false, true) && !world_hold_wanted(true, true, true, false),
-		      "follow-up 11: the world hold needs the reset on, a late restart, the armed epoch and the open window");
-		check(!world_hold_watchdog_expired(false, 1000, 999999, 2000) && !world_hold_watchdog_expired(true, 1000, 2999, 2000) && world_hold_watchdog_expired(true, 1000, 3000, 2000)
-		      && world_hold_watchdog_expired(true, 0xfffffc18u, 1000, 2000) && !world_hold_watchdog_expired(true, 0xfffffc18u, 999, 2000),
-		      "follow-up 11: the watchdog fires at the limit, not before, never while closed, and across the tick wrap");
-		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= join_in_progress_rules::world_gate_site && join_in_progress_rules::world_gate_site + join_in_progress_rules::world_gate_original.size() <= g.va + g.hex.size() / 2; }),
-		      "follow-up 11: one retail guard covers every byte of the world-section gate site");
-		check(join_in_progress_rules::world_gate_original.size() == 7 && join_in_progress_rules::world_gate_original[0] == 0xf6 && join_in_progress_rules::world_gate_original[1] == 0x86 && join_in_progress_rules::world_gate_original[6] == join_in_progress_rules::world_gate_flag_bit,
-		      "follow-up 11: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
 		{
 			// Follow-up 12 (round 8): a party hero's queued "moved" event (static kind 0x6d7c5c) is dropped by dense index
 			// whatever its generation; another owner's moved event, a member event of a party hero and a non-token owner stay.
@@ -582,6 +569,70 @@ int main(int argc, char** argv)
 			check(join_in_progress_rules::actor_last_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_last_orientation_at
 			      && join_in_progress_rules::actor_position_at + join_in_progress_rules::actor_vector_bytes == join_in_progress_rules::actor_orientation_at, "follow-up 12: the last-known vectors are adjacent 12-byte copies of position/orientation");
 		}
+	}
+	{
+		// Follow-up 14 (AE15). (1) The camera's derived spans: inside the object, dword-aligned, non-overlapping, and
+		// never the fields the zone path configures (mode +0x84, flags +0x4d8, pitch +0x2f8, magnet count +0x428); the
+		// pure restore copies exactly those spans and counts the dwords it changed.
+		using namespace join_in_progress_rules;
+		bool spans_ok = true; std::uint32_t total = 0;
+		for (std::size_t i = 0; i < camera_derived_spans.size(); ++i)
+		{
+			const auto& x = camera_derived_spans[i];
+			spans_ok &= x.bytes != 0 && x.at % 4 == 0 && x.bytes % 4 == 0 && x.at + x.bytes <= camera_bytes;
+			for (std::size_t j = i + 1; j < camera_derived_spans.size(); ++j) spans_ok &= x.at + x.bytes <= camera_derived_spans[j].at || camera_derived_spans[j].at + camera_derived_spans[j].bytes <= x.at;
+			for (const std::uint32_t keep : {camera_mode_at, camera_flags_at, 0x2f8u, 0x428u, 0x154u, 0x0u}) spans_ok &= !(x.at <= keep && keep < x.at + x.bytes);
+			total += x.bytes;
+		}
+		check(spans_ok && total == 0x1cc, "follow-up 14 / AE16: the derived camera spans are aligned, disjoint, inside the object and exclude the configured fields (0x1cc bytes)");
+		check(std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= camera_basis_at && camera_basis_at + camera_basis_bytes <= x.at + x.bytes && x.at + x.bytes >= 0x2f8; }),
+		      "AE16: the nine camera basis dwords +0x2cc..+0x2f0 and the yaw history up to +0x2f8 lie in ONE span");
+		check(actor_gravity_hold_at == 0x2f0 && actor_last_fall_at == 0x28c && actor_last_update_at == 0x150 && actor_velocity_at + 0x18 == actor_velocity_prev_at && actor_angular_at == actor_velocity_at + 0xc && actor_angular_prev_at == actor_velocity_prev_at + 0xc,
+		      "AE16: the motion fields are the physics step's stamps and the two velocity pairs");
+		std::array<std::uint8_t, camera_bytes> cam{}, pristine{};
+		for (std::uint32_t i = 0; i < camera_bytes; ++i) { cam[i] = std::uint8_t(i * 7); pristine[i] = std::uint8_t(i * 3 + 1); }
+		auto before = cam;
+		const unsigned changed = restore_camera_spans(cam.data(), pristine.data(), camera_derived_spans, camera_bytes);
+		bool restored = true, untouched = true;
+		for (std::uint32_t i = 0; i < camera_bytes; ++i)
+		{
+			bool in = false;
+			for (const auto& x : camera_derived_spans) in |= x.at <= i && i < x.at + x.bytes;
+			if (in) restored &= cam[i] == pristine[i]; else untouched &= cam[i] == before[i];
+		}
+		check(restored && untouched && changed == total / 4, "follow-up 14: the restore copies exactly the derived spans from the pristine image and counts every changed dword");
+		check(restore_camera_spans(cam.data(), pristine.data(), camera_derived_spans, camera_bytes) == 0, "follow-up 14: a second restore changes nothing");
+		check(camera_yaw_at == 0x74 && std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= 0x74u && 0x74u < x.at + x.bytes; })
+		      && std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= camera_yaw_history_at && camera_yaw_history_at + 8 <= x.at + x.bytes; })
+		      && std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= 0x104u && 0x104u + 12 <= x.at + x.bytes; })
+		      && std::any_of(camera_derived_spans.begin(), camera_derived_spans.end(), [](const auto& x) { return x.at <= 0xe0u && 0xe0u + 12 <= x.at + x.bytes; }),
+		      "follow-up 14: the current yaw, the yaw history, the eye +0x104 and the target +0xe0 are derived spans");
+		// (2) The attach suppression and the party test.
+		check(attach_suppressed(true, true, true) && !attach_suppressed(false, true, true) && !attach_suppressed(true, false, true) && !attach_suppressed(true, true, false),
+		      "follow-up 14: a party hero's ground attach callback is suppressed only in an armed late restart with the reset on");
+		const std::uint32_t party[4] = {0x3801, 0x3802, 0, 0x3804};
+		check(party_member(0x1802, party, 4, 0x3ff) && party_member(0x3804, party, 4, 0x3ff) && !party_member(0x1803, party, 4, 0x3ff) && !party_member(0, party, 4, 0x3ff) && !party_member(0x80000002u, party, 4, 0x3ff) && !party_member(0x1802, party, 0, 0x3ff),
+		      "follow-up 14: party membership is by dense index whatever the generation; 0, a negative token, an empty slot and an empty party are not members");
+		check(attach_override_original.size() == 8 && attach_override_resume == attach_override + 8 && attach_override_original[0] == 0x83 && attach_override_original[3] == 0x56 && attach_override_original[4] == 0x8b,
+		      "follow-up 14: the displaced OnAttached prologue is sub esp,0x18 / push esi / mov esi,[esp+0x20] (8 bytes, position-independent)");
+		check(party_bound_call + 5 + 0x0000ea9e == party_bound_target, "follow-up 14: the replaced call at 0x4868ad reaches the retail getter 0x495350");
+		for (const auto va : {0x429710u, 0x419f88u, 0x470bb0u, 0x4868a5u})
+			check(std::any_of(guards.begin(), guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 14: the OnAttached override, the set-ground call, FindGround and the party-binding tail are guarded");
+		check(std::none_of(guards.begin(), guards.end(), [](const auto& g) { return g.va <= 0x46f0a9u && 0x46f0a9u < g.va + g.hex.size() / 2; }), "follow-up 14: the world-section gate is no longer guarded (the AE12 hold is gone)");
+		// (3) Review S2: a heap-allocated kind object is keyed by its vtable, in-image kinds by their address.
+		event_entry heap_host{}, heap_guest{}, in_image{}, member{};
+		heap_host.time = heap_guest.time = in_image.time = member.time = 2.0f;
+		heap_host.token = heap_guest.token = in_image.token = member.token = true; heap_host.live = heap_guest.live = in_image.live = member.live = true;
+		heap_host.handle = 0x3516; heap_host.owner = 0x03290100; heap_host.event = 0x033a4568; heap_host.kind_vtable = 0x687418;
+		heap_guest.handle = 0x1516; heap_guest.owner = 0x032d0100; heap_guest.event = 0x03454568; heap_guest.kind_vtable = 0x687418;
+		in_image.handle = 0x1516; in_image.owner = 0x032d0100; in_image.event = 0x6d7c5c; in_image.kind_vtable = 0x12345678;
+		member.handle = 0x1516; member.owner = 0x032d0100; member.event = 0x032d0100 + 0x320; member.kind_vtable = 0x12345678;
+		check(event_kind_key(heap_host) == 0x687418 && event_kind_key(heap_guest) == 0x687418 && !canonical_event_less(heap_host, heap_guest, 0x3ff) && !canonical_event_less(heap_guest, heap_host, 0x3ff),
+		      "follow-up 14 (S2): the same heap kind at two per-process addresses has one key and sorts equal");
+		check(event_kind_key(in_image) == 0x6d7c5c && event_kind_key(member) == 0x320 && !event_kind_in_image(0x033a4568) && event_kind_in_image(0x6d7c5c) && !event_kind_in_image(0xa40000),
+		      "follow-up 14 (S2): an in-image kind keeps its address, a member its offset; the image range is [0x401000, 0xa40000)");
+		event_entry heap_no_vtable = heap_host; heap_no_vtable.kind_vtable = 0;
+		check(event_kind_key(heap_no_vtable) == 0x033a4568, "follow-up 14 (S2): a heap kind whose vtable could not be read keeps its raw address");
 	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;

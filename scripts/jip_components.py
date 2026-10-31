@@ -161,8 +161,9 @@ def rng_mode(host, guest):
 def events_mode(host, guest):
     """Follow-up 7/9: the timed-event queue lines per milestone (heap/records/ring/live/dead/stale and every heap pair as
     time:index:handle:kind[:payload], several `part=k/n` lines per milestone since AE10); the handle's generation is
-    masked before comparing; the kind is the event's offset inside its owner or the static kind object's address (the
-    same in every process). Entries present on one peer only are listed by (time, slot, kind, payload)."""
+    masked before comparing; the kind is the event's offset inside its owner, the static kind object's address or (AE15,
+    a heap kind) its vtable - the same in every process. Entries present on one peer only are listed by (time, slot,
+    kind); the payload is never compared (follow-up 14, review S7: per-process pointers / stale residue)."""
     def parse(path):
         out, seen_parts = {}, {}
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
@@ -190,7 +191,11 @@ def events_mode(host, guest):
     bad = 0
     for where in [w for w in h if w in g]:
         a, b = h[where], g[where]
-        ka, kb = [e[:4] for e in a[7]], [e[:4] for e in b[7]]
+        # Follow-up 14 (review S7): the 16 payload bytes carry per-process pointers for several kinds (round 10 frame 900:
+        # one pointer byte apart on an otherwise identical entry) and are stale residue for the "moved" kind, so an entry
+        # is compared by (time, slot, kind) only; the payload is printed for reference on the one-sided entries.
+        pa, pb = {e[:3]: e[3] for e in a[7]}, {e[:3]: e[3] for e in b[7]}
+        ka, kb = [e[:3] for e in a[7]], [e[:3] for e in b[7]]
         same = a[0] == b[0] and a[3] == b[3] and ka == kb
         verdict = 'AGREE  ' if same else 'DIFFERS'
         print(f"{verdict} {where}: host heap {a[0]} records {a[1]} ring {a[2]} live {a[3]} dead {a[4]} stale {a[5]} rebuilds {a[6]} | guest heap {b[0]} records {b[1]} ring {b[2]} live {b[3]} dead {b[4]} stale {b[5]} rebuilds {b[6]}")
@@ -202,9 +207,9 @@ def events_mode(host, guest):
                     break
             from collections import Counter
             ca, cb = Counter(ka), Counter(kb)
-            for who, extra in (('host', ca - cb), ('guest', cb - ca)):
+            for who, extra, payloads in (('host', ca - cb, pa), ('guest', cb - ca, pb)):
                 for key, n in sorted(extra.items()):
-                    print(f'  only on the {who} ({n}x): time {key[0]} slot {key[1]:#x} kind {key[2]} payload {key[3] or "-"}')
+                    print(f'  only on the {who} ({n}x): time {key[0]} slot {key[1]:#x} kind {key[2]} payload {payloads.get(key) or "-"} (payload not compared)')
     for who, only in (('host', [w for w in h if w not in g]), ('guest', [w for w in g if w not in h])):
         for w in only:
             print(f'  only on the {who}: {w}')
@@ -257,7 +262,7 @@ def normalise_caller(caller):
     return caller if 0x400000 <= int(caller, 16) < 0x700000 else 'dll'
 
 
-CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?:t=\S+ )?(?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+) table=(?P<table>\S+)(?: fpu=(?P<fpu>\S+))?')
+CAM = re.compile(r'jip cam: frame=(?P<frame>\d+) count=(?P<count>\d+) (?:t=\S+ )?(?P<rest>yaw=\S+ hist=\S+ mode=\S+ flags=\S+ eye=\S+ target=\S+(?: basis=\S+ stick=\S+)?) table=(?P<table>\S+)(?: fpu=(?P<fpu>\S+))?')  # AE16: basis + stick compared too
 
 
 def cam_mode(host, guest):
@@ -308,9 +313,50 @@ def spawn_mode(host, guest):
     return 1 if bad else 0
 
 
+HERO = re.compile(r'jip hero: frame=(?P<frame>\d+) slot=(?P<slot>\d+) handle=(?P<handle>[0-9a-f]{8}) ctl=(?P<ctl>-?\d+) t=(?P<t>[0-9a-f]{8}) dt=(?P<dt>[0-9a-f]{8})(?P<spans>(?: d[0-9a-f]+=[0-9a-f,]+)+)')
+
+
+def hero_mode(host, guest):
+    """AE15b: the per-hero raw-field lines paired by (frame, slot); the first differing frame and dword offset are named,
+    with the `jip move:` first-movement frames of both peers. The handle's generation is ignored."""
+    def parse(path):
+        out, moves = {}, []
+        for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+            if 'jip move:' in line:
+                moves.append(line.split('jip move: ', 1)[1].strip())
+            m = HERO.search(line)
+            if not m:
+                continue
+            key = (int(m['frame']), int(m['slot']))
+            if key in out:
+                continue  # the first window's line for that frame
+            fields = {}
+            for item in m['spans'].strip().split(' '):
+                name, words = item.split('=')
+                base = int(name[1:], 16)
+                for i, w in enumerate(words.split(',')):
+                    fields[base + 4 * i] = w
+            out[key] = (m['ctl'], m['t'], m['dt'], fields)
+        return out, moves
+    (h, hm), (g, gm) = parse(host), parse(guest)
+    print('first movement (host):', hm or 'none'); print('first movement (guest):', gm or 'none')
+    keys = sorted(set(h) & set(g))
+    print(f'hero lines: host {len(h)}, guest {len(g)}, {len(keys)} paired (frame, slot)')
+    for key in keys:
+        a, b = h[key], g[key]
+        diffs = [(off, a[3][off], b[3].get(off)) for off in sorted(a[3]) if a[3][off] != b[3].get(off)]
+        if a[0] != b[0] or a[1] != b[1] or a[2] != b[2] or diffs:
+            print(f'  first difference at frame {key[0]} slot {key[1]}: ctl {a[0]}/{b[0]} t {a[1]}/{b[1]} dt {a[2]}/{b[2]}')
+            for off, x, y in diffs[:16]:
+                print(f'    +{off:#05x}: host {x} guest {y}')
+            return 1
+    print('every paired hero line agrees')
+    return 0
+
+
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode}[mode](sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode, 'cam': cam_mode, 'events': events_mode, 'camdump': camdump_mode, 'hero': hero_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

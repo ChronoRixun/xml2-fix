@@ -38,6 +38,7 @@ bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool)
 namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
 namespace xml1_turrets { std::uint32_t fixture_hook = 0; std::uint32_t installed_process_hook() { return fixture_hook; } }
 namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }
+namespace pad_prompts { unsigned device_switches() { return 0; } }
 namespace entity_capacity { std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { static const entity_capacity_layout::descriptor stock; return stock; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace ini {

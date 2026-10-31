@@ -57,6 +57,7 @@ unsigned smart_holds = 0; // updates handed to the stand-in while held
 std::uint32_t smart_manager_getter_at = smart_manager_getter; // mutable for the owned native fixture only
 unsigned spawn_notes = 0, spawn_notes_dropped = 0; // the spawn probe's lines per late epoch (reset at the zone load)
 unsigned touch_lines = 0; constexpr unsigned touch_line_limit = 24; // follow-up 13: `jip touch:` lines per late epoch (reset at the zone load)
+std::uint32_t last_attach_parent = 0, last_attach_child = 0; // follow-up 14: the last CActor OnAttached (0x429710) this/child seen by the entry bridge (probe: `parent=` on the touch line)
 bool probe_read(std::uintptr_t address, void* out, std::size_t size)
 {
 	__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
@@ -112,12 +113,14 @@ void snapshot(const char* where)
 			const auto a = reinterpret_cast<std::uintptr_t>(actor);
 			// Follow-up 12: the moved-check memory (last-known position/orientation), its pending bit (+0x258) and the two
 			// extra deciders of 0x470b30 (+0x23c, +0x240), so the next round names the asymmetry's source.
-			logger::write("jip snapshot: where=%s hero[%d]=handle:%08x own:%08x brain:%08x ctl:%d ai:%08x xyz:%08x,%08x,%08x ang:%08x,%08x,%08x hp:%08x lk:%08x,%08x,%08x/%08x,%08x,%08x mv:%02x/%08x/%08x",
+			// Follow-up 14: `gnd:` = the ground entity +0xbc and the ground height +0x200 (FindGround's results).
+			logger::write("jip snapshot: where=%s hero[%d]=handle:%08x own:%08x brain:%08x ctl:%d ai:%08x xyz:%08x,%08x,%08x ang:%08x,%08x,%08x hp:%08x lk:%08x,%08x,%08x/%08x,%08x,%08x mv:%02x/%08x/%08x gnd:%08x/%08x",
 				where, k, handle, probe_at<std::uint32_t>(a + 0x1c), probe_at<std::uint32_t>(a + 0x7dc), probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(a + hero_ai_flags),
 				probe_at<std::uint32_t>(a + 0x20), probe_at<std::uint32_t>(a + 0x24), probe_at<std::uint32_t>(a + 0x28), probe_at<std::uint32_t>(a + 0x2c), probe_at<std::uint32_t>(a + 0x30), probe_at<std::uint32_t>(a + 0x34), probe_at<std::uint32_t>(a + 0x27c),
 				probe_at<std::uint32_t>(a + actor_last_position_at), probe_at<std::uint32_t>(a + actor_last_position_at + 4), probe_at<std::uint32_t>(a + actor_last_position_at + 8),
 				probe_at<std::uint32_t>(a + actor_last_orientation_at), probe_at<std::uint32_t>(a + actor_last_orientation_at + 4), probe_at<std::uint32_t>(a + actor_last_orientation_at + 8),
-				unsigned(probe_at<std::uint8_t>(a + actor_moved_flags_at)), probe_at<std::uint32_t>(a + actor_moved_extra_a), probe_at<std::uint32_t>(a + actor_moved_extra_b));
+				unsigned(probe_at<std::uint8_t>(a + actor_moved_flags_at)), probe_at<std::uint32_t>(a + actor_moved_extra_a), probe_at<std::uint32_t>(a + actor_moved_extra_b),
+				probe_at<std::uint32_t>(a + actor_ground_at), probe_at<std::uint32_t>(a + actor_ground_height_at));
 		}
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write("jip snapshot: where=%s (read fault)", where); }
@@ -152,8 +155,9 @@ void __cdecl note_draw(const std::uint32_t* sp)
 			if (touch_lines < touch_line_limit)
 			{
 				++touch_lines;
-				char line[480]; int n = std::snprintf(line, sizeof line, "jip touch: phase=%u frame=%u count=%u caller=%08x entity=%08x xy=%08x lk=%08x,%08x,%08x mv=%02x/%08x/%08x chain=",
-					unsigned(draws->phase), unsigned(*reinterpret_cast<const std::uint16_t*>(native_frame)), *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, caller, a, b,
+				char line[480]; int n = std::snprintf(line, sizeof line, "jip touch: phase=%u frame=%u count=%u caller=%08x entity=%08x parent=%08x xy=%08x lk=%08x,%08x,%08x mv=%02x/%08x/%08x chain=",
+					unsigned(draws->phase), unsigned(*reinterpret_cast<const std::uint16_t*>(native_frame)), *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, caller, a,
+					last_attach_child == entity ? probe_at<std::uint32_t>(last_attach_parent + 0x1c) : 0u, b, // follow-up 14: the entity the child stands on (0x429710's this, noted by the entry bridge)
 					*reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at), *reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at + 4), *reinterpret_cast<const std::uint32_t*>(entity + actor_last_position_at + 8),
 					unsigned(*reinterpret_cast<const std::uint8_t*>(entity + actor_moved_flags_at)), *reinterpret_cast<const std::uint32_t*>(entity + actor_moved_extra_a), *reinterpret_cast<const std::uint32_t*>(entity + actor_moved_extra_b));
 				unsigned found = 0;
@@ -238,22 +242,99 @@ void probe_think(unsigned frame)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:think-line-fault", "jip think: a line faulted"); }
 }
+// AE15b (round 10 A/C: a drop within the first period of MOVEMENT of either hero in a late-joined session, term hero_sum
+// only - the moving hero's last-bit x/y and a following AI hero's heading by 1-6 ULPs; lk:/mv: equal): one `jip hero:` line
+// per party hero per gated frame for 60 frames after the frame-0 epoch, again for 60 frames from the first frame a party
+// hero's position changes after that window (`jip move:`), and after a device switch. Each line is the raw dwords of the
+// actor ranges the physics steps read (my listings of 0x496f20 / 0x4762c0 / 0x472cf0 touch +0x20, +0x164, +0x238..+0x244,
+// +0x259, +0x265, +0x2b4, +0x2f8, +0x30c/d, +0x31a; FindGround +0x200/+0x204/+0x266; 0x473640 +0x120/+0x138; 0x476220 +0x150):
+// d20 = +0x20..+0x38 (position, orientation), d120 = +0x120..+0x168 (move target, step time, speed fields), d1e8 =
+// +0x1e8..+0x270 (last-known vectors, ground entity/height/normal, the settle fields, flags, surface), d2b0 = +0x2b0..+0x320
+// (the physics step's state); plus the game's t/dt. `jip_components.py --mode hero` pairs them by (frame, slot) and names
+// the first differing dword offset.
+struct hero_span { std::uint32_t at, bytes; };
+// AE16: one contiguous +0x1e8..+0x320 (closes the +0x270..+0x2af gap: gravity scale +0x278, last fall +0x28c, gravity hold
+// +0x2f0), +0x178 (collision filter), +0x190..+0x1a4 (scripted interpolator), +0x1d0..+0x1e8 (animation root motion), CHero
+// +0x7e4..+0x81c (auto-move target/flag/distances read by 0x42dbf0).
+constexpr hero_span hero_dump_spans[7] = {{0x20, 0x18}, {0x120, 0x48}, {0x178, 0x04}, {0x190, 0x14}, {0x1d0, 0x18}, {0x1e8, 0x138}, {0x7e4, 0x38}};
+unsigned hero_lines = 0; constexpr unsigned hero_line_limit = 60; bool hero_lines_armed = false, hero_move_rearmed = false;
+std::uint32_t hero_last_pos[4][3]{}; bool hero_last_valid[4]{};
+void hero_lines_arm(const char* why, unsigned frame)
+{
+	if (!probe_enabled) return;
+	hero_lines_armed = true; hero_lines = 0;
+	logger::write("jip hero: per-hero field lines armed for %u frames at %s (frame %u)", hero_line_limit, why, frame);
+}
+void probe_hero_frame(unsigned frame)
+{
+	if (!probe_enabled || !probe_epoch_late) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{}; std::uint32_t count = 0;
+		if (void* game = fn<getter_t>(game_getter)())
+		{
+			fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+			count = party[party_list_count_at / 4];
+		}
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
+			if (!actor) { hero_last_valid[k] = false; continue; }
+			std::uint32_t pos[3]; probe_read(reinterpret_cast<std::uintptr_t>(actor) + 0x20, pos, sizeof pos);
+			const bool moved = hero_last_valid[k] && std::memcmp(pos, hero_last_pos[k], sizeof pos) != 0;
+			std::memcpy(hero_last_pos[k], pos, sizeof pos); hero_last_valid[k] = true;
+			if (moved && !hero_lines_armed && !hero_move_rearmed)
+			{
+				hero_move_rearmed = true;
+				logger::write("jip move: party slot %u (handle %08x) first moved at frame %u (xyz %08x,%08x,%08x)", k, handle, frame, pos[0], pos[1], pos[2]);
+				hero_lines_arm("the first movement", frame);
+			}
+		}
+		if (!hero_lines_armed || hero_lines >= hero_line_limit) return;
+		++hero_lines;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			auto* actor = handle ? static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle)) : nullptr;
+			if (!actor) continue;
+			const auto a = reinterpret_cast<std::uintptr_t>(actor);
+			char line[1500]; int n = std::snprintf(line, sizeof line, "jip hero: frame=%u slot=%u handle=%08x ctl=%d t=%08x dt=%08x", frame, k, handle,
+				probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(game_static + 0x3ec));
+			for (const auto& sp : hero_dump_spans)
+			{
+				n += std::snprintf(line + n, sizeof line - n, " d%x=", sp.at);
+				for (std::uint32_t off = 0; off < sp.bytes && n > 0 && n < int(sizeof line) - 12; off += 4)
+					n += std::snprintf(line + n, sizeof line - n, "%s%08x", off ? "," : "", probe_at<std::uint32_t>(a + sp.at + off));
+			}
+			logger::write("%s", line);
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:hero-line-fault", "jip hero: a line faulted"); }
+}
 unsigned cam_lines = 0; constexpr unsigned cam_line_limit = 60;
 bool cam_lines_armed = false; // set at the frame-0 epoch
 void camera_lines(bool arm) { cam_lines_armed = arm && probe_enabled; cam_lines = 0; }
 void probe_frame_camera()
 {
-	if (!probe_enabled || !cam_lines_armed || cam_lines >= cam_line_limit) return;
+	if (!probe_enabled) return;
+	{ const auto f = probe_at<std::uint16_t>(native_frame); if (f) probe_hero_frame(unsigned(f)); } // AE15b: every gated frame inside a late epoch
+	if (!cam_lines_armed || cam_lines >= cam_line_limit) return;
 	__try
 	{
 		const auto frame = probe_at<std::uint16_t>(native_frame);
 		if (frame == 0) return;
 		++cam_lines;
 		const auto c = std::uintptr_t(camera_object);
-		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x table=%08x,%08x,%08x,%08x fpu=%04x/%08x",
+		// AE16: the basis vectors the move direction is built from (+0x2cc/+0x2d8/+0x2e4) and the decoded stick floats
+		// [input+0xc610..] every peer feeds the controllers from (0x558cc0).
+		const auto input = probe_at<std::uintptr_t>(input_object_pointer);
+		logger::write("jip cam: frame=%u count=%u t=%08x yaw=%08x hist=%08x/%08x mode=%u flags=%08x eye=%08x,%08x,%08x target=%08x,%08x,%08x basis=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x stick=%08x,%08x,%08x,%08x table=%08x,%08x,%08x,%08x fpu=%04x/%08x",
 			unsigned(frame), probe_at<std::uint32_t>(rng_count), probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(c + camera_yaw_at), probe_at<std::uint32_t>(c + camera_yaw_history_at), probe_at<std::uint32_t>(c + camera_yaw_history_at + 4),
 			probe_at<std::uint32_t>(c + camera_mode_at), probe_at<std::uint32_t>(c + camera_flags_at),
 			probe_at<std::uint32_t>(c + 0x104), probe_at<std::uint32_t>(c + 0x108), probe_at<std::uint32_t>(c + 0x10c), probe_at<std::uint32_t>(c + 0xec), probe_at<std::uint32_t>(c + 0xf0), probe_at<std::uint32_t>(c + 0xf4),
+			probe_at<std::uint32_t>(c + 0x2cc), probe_at<std::uint32_t>(c + 0x2d0), probe_at<std::uint32_t>(c + 0x2d4), probe_at<std::uint32_t>(c + 0x2d8), probe_at<std::uint32_t>(c + 0x2dc), probe_at<std::uint32_t>(c + 0x2e0), probe_at<std::uint32_t>(c + 0x2e4), probe_at<std::uint32_t>(c + 0x2e8), probe_at<std::uint32_t>(c + 0x2ec),
+			input ? probe_at<std::uint32_t>(input + input_stick_floats_at) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 4) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 8) : 0u, input ? probe_at<std::uint32_t>(input + input_stick_floats_at + 12) : 0u,
 			probe_at<std::uint32_t>(hero_table), probe_at<std::uint32_t>(hero_table + 4), probe_at<std::uint32_t>(hero_table + 8), probe_at<std::uint32_t>(hero_table + 12),
 			unsigned(x87_control_word()), unsigned(_mm_getcsr()));
 		probe_think(unsigned(frame));
@@ -292,11 +373,8 @@ void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
 	segment_reseed("the zone start (before the players are placed)");
-	// Follow-up 13 (round 9): the host's party heroes reach the zone start with WARM last-known vectors (the previous
-	// session's positions/angles, mv:40) while the joiner's equal their spawn (mv:42); only the joiner's Storm is
-	// touch-nudged during placement at E2. Cold state on every peer BEFORE the players are placed (the frame-0 pass
-	// stays): last-known = current, pending bit clear, their queued moved events dropped by the zone-start rebuild.
-	canonical_party_moved_state("the zone start (before the players are placed)", restart_reset_enabled && moved_canonical_enabled && late_restart && restart.armed);
+	// Follow-up 13's cold moved pass used to run here - on an EMPTY party list (round 10: `0 hero(s)` on both peers;
+	// the heroes are placed and bound later in the finish). Follow-up 14 runs it from party_bound_notice (0x4868ad).
 	hold_smart_update();
 	if (late_restart && restart.armed) probe_events("zone start before rebuild");
 	canonical_event_queue("the zone start");
@@ -357,6 +435,15 @@ __declspec(naked) void zone_load_zone_entry_bridge()
 		jmp dword ptr [zone_load_zone_entry_target_at]
 	}
 }
+// Follow-up 14: the camera's derived spans back to the pristine image (the pure core helper over the two images);
+// nothing when there is no pristine image or the singleton's vtable is not the camera's.
+unsigned restore_camera_derived(const char* where)
+{
+	if (!restart.snapshot) { logger::write_once("jip:camera-derived-none", "join in progress: no pristine camera image - the derived camera spans keep this PC's values at %s", where); return 0; }
+	auto* camera = reinterpret_cast<std::uint8_t*>(camera_object);
+	if (at<std::uint32_t>(camera, 0) != camera_vtable_value) return 0;
+	return join_in_progress_core::restore_camera_spans(camera, camera_pristine, camera_derived_spans, camera_bytes);
+}
 // Follow-up 4: at the first shared frame the camera is re-initialised from the party anchor on every peer, so the
 // camera updates that ran between the zone start and frame 0 (the probe round: the joiner waited ~1.3 s longer at
 // the barrier, yaw history 60.7 vs 67.4 deg) are discarded and both peers start frame 0 from the same camera state.
@@ -372,9 +459,13 @@ void reanchor_camera_at_frame0()
 		auto* camera = reinterpret_cast<std::uint8_t*>(camera_object);
 		if (at<std::uint32_t>(camera, 0) != camera_vtable_value) return;
 		const auto yaw = at<std::uint32_t>(camera, camera_yaw_at), hist = at<std::uint32_t>(camera, camera_yaw_history_at);
+		// Follow-up 14: the init's inputs first (rules camera_derived_spans: eye/target/history/scratch back to the
+		// pristine image), so vt+0x74 runs from identical state on every peer; the rest of the object was equal on both
+		// peers in every dumped admission.
+		const unsigned restored = restore_camera_derived("frame 0");
 		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(camera, 0), 0x74))(camera, actor); // the zone-start camera init, again
-		logger::write("join in progress: canonical restart - the camera is re-initialised from party slot 0 at frame 0 (was yaw %08x history %08x; now yaw %08x history %08x)",
-			yaw, hist, at<std::uint32_t>(camera, camera_yaw_at), at<std::uint32_t>(camera, camera_yaw_history_at));
+		logger::write("join in progress: canonical restart - the camera is re-initialised from party slot 0 at frame 0 (was yaw %08x history %08x; %u derived dword(s) back to the pristine image first; now yaw %08x history %08x)",
+			yaw, hist, restored, at<std::uint32_t>(camera, camera_yaw_at), at<std::uint32_t>(camera, camera_yaw_history_at));
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:reanchor-fault", "join in progress: the frame-0 camera re-init faulted - the camera keeps its state"); }
 }
@@ -546,6 +637,8 @@ bool read_event_entries(std::uint8_t* body, std::vector<join_in_progress_core::e
 		e.handle = at<std::uint32_t>(record, 0); e.event = at<std::uint32_t>(record, 4);
 		std::memcpy(e.payload, record + 8, sizeof e.payload);
 		e.token = join_in_progress_core::positive_entity_token(e.handle);
+		// Follow-up 14 (S2): a heap-allocated kind object's vtable (guarded read: the object may be gone) keys it.
+		if (!join_in_progress_core::event_kind_in_image(e.event)) { std::uint32_t vt = 0; if (probe_read(e.event, &vt, 4)) e.kind_vtable = vt; }
 		if (e.token)
 		{
 			const std::uint32_t handle = e.handle;
@@ -628,6 +721,13 @@ void canonical_event_queue_body(const char* where)
 				moved_dropped_last += d ? 1u : 0u; return d; }), entries.end());
 			moved_drop_count = 0;
 		}
+		// Follow-up 14 (S2): a kept entry whose kind object lies outside the image is keyed by its vtable; say so once.
+		for (const auto& e : entries)
+			if (e.owner && e.event - e.owner >= join_in_progress_core::event_member_span && !join_in_progress_core::event_kind_in_image(e.event))
+			{
+				logger::write_once("jip:events-heap-kind", "join in progress: the timed-event queue keeps an entry whose kind object is outside the image (event %08x, vtable %08x, owner index %u) - ordered by its vtable", e.event, e.kind_vtable, e.handle & mask);
+				break;
+			}
 		std::stable_sort(entries.begin(), entries.end(), [mask](const auto& a, const auto& b) { return join_in_progress_core::canonical_event_less(a, b, mask); });
 		// The pool back to its constructed state (retail pool init: the free ring 0..1124 ascending, read 0), both
 		// bitmaps and both counts cleared, then every kept entry re-added through the retail alloc / store / heap push.
@@ -661,25 +761,9 @@ void canonical_event_queue(const char* where, bool wanted)
 	}
 }
 void canonical_event_queue(const char* where) { canonical_event_queue(where, join_in_progress_core::event_queue_rebuild_wanted(restart_reset_enabled, late_restart, restart.armed)); }
-// The game thread's x87 control word and MXCSR: logged by the probe, and at the frame-0 epoch set to the values the
-// retail process runs with after its own init (the CRT's _PC_53 word 0x027f at 0x6729f6; MXCSR 0x1f80, Windows'
-// default, which nothing in XMen2.exe or the Alchemy DLLs loads - scripts/fpu_sites.py) should either have drifted.
+// The game thread's x87 control word, for the probe's `fpu=` field only (follow-up 14 / review S4: the AE8 "correction"
+// cleared MXCSR bit 5, the sticky precision FLAG - no effect on any result - and is gone).
 std::uint16_t x87_control_word() { std::uint16_t cw = 0; __asm { fnstcw cw } return cw; }
-void x87_control_word_set(std::uint16_t cw) { __asm { fldcw cw } }
-unsigned fpu_corrections = 0;
-void fpu_canonical(const char* where, bool wanted)
-{
-	if (!wanted) return;
-	const auto cw = x87_control_word(); const auto csr = _mm_getcsr();
-	if (cw == game_x87_control_word && csr == game_mxcsr)
-	{
-		logger::write("join in progress: canonical restart - FPU control state at %s is the game's (x87 %04x, mxcsr %08x)", where, cw, csr);
-		return;
-	}
-	x87_control_word_set(game_x87_control_word); _mm_setcsr(game_mxcsr); ++fpu_corrections;
-	logger::write("join in progress: canonical restart - FPU control state at %s CORRECTED to the game's (x87 %04x -> %04x, mxcsr %08x -> %08x; correction %u)", where, cw, game_x87_control_word, csr, game_mxcsr, fpu_corrections);
-}
-void fpu_canonical(const char* where) { fpu_canonical(where, restart_reset_enabled && late_restart); }
 // The whole camera object as dwords (the frame-0 epoch, frames 1 and 2) so the next pair of logs names the first
 // field that parts (round 4: equal yaw/history/eye/target at frame 0, 22 ULPs apart in eye/target y at frame 1).
 void probe_camera_dump(unsigned frame)
@@ -698,67 +782,196 @@ void probe_camera_dump(unsigned frame)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:camdump-fault", "jip camdump: a line faulted"); }
 }
-// ---- follow-up 11: the world section held from `zone started` to the first shared frame ------------------------
-// (rules: world_gate_*). The game update's world section (0x46f0ca..0x46f60d, behind `test byte ptr [esi+0x728], 2`
-// at 0x46f0a9) runs on every main-loop iteration once bit 1 of game+0x728 is set; between `zone started` and frame 0
-// each peer runs it a different number of times (the barrier wait: AE9 host ~2, joiner ~7 iterations) and the
-// dt-independent per-tick settle parts heroes that were bit-identical at `zone started` (round 7). While the hold
-// is on, the bridge answers the gate's test with ZF=1 (the section is skipped) on every peer; the first shared frame
-// releases it first thing, so both peers enter frame 0 with the world exactly as the zone start left it. What keeps
-// running: the clock tick, the input manager update 0x55a2b0 (0x40219e on the main loop: the local frame-0 input is
-// sampled, broadcast and queued there by 0x559700), the scheduler tasks (the frame gate 0x606a50, this module's
-// pump with the controls resume), rendering. A watchdog releases a hold whose frame 0 never came (the restart then
-// proceeds as AE11 did) and says so; the session's end and a first-frame reset fault release it too.
-volatile std::uint8_t world_hold = 0;      // read by the bridge on the game thread; written on the game thread only
-bool world_hold_enabled = true;            // [Dev] LateJoinWorldHold=0: the A/B control
-std::uint32_t world_hold_opened_ms = 0;    // the clock at the window's opening (watchdog)
-unsigned world_hold_skips = 0;             // game updates whose world section was skipped on this PC (logged at the release)
-unsigned world_holds = 0;                  // windows opened (log numbering)
-DWORD (WINAPI* world_hold_clock)() = &GetTickCount; // mutable for the owned native fixture only
-// In place of `test byte ptr [esi+0x728], 2` at 0x46f0a9 (7 bytes: call rel32 + 2 nops; the site's `je 0x46f60d`
-// follows and reads ZF only - the instruction after the je is a call, so CF/OF/SF/PF/AF are dead), entered by CALL
-// with ESI = the game object exactly as at the site. Hold off: retail's own instruction, every flag as it leaves it.
-// Hold on: the flags of that test with the bit clear (ZF=1), no register changed, the skip counted.
-__declspec(naked) void world_gate_bridge()
+// ---- follow-up 14 (AE15): the party heroes' ground attach and FindGround canonical; the cold moved pass after the binding
+// (rules: attach_override / find_ground / party_bound_*; O:/Projects/agent-work/e2-settle-re/RESULT.md). The AE12 world
+// hold that stood here is gone: rounds 8-10 logged `0 world update(s) skipped` on every peer in every admission.
+unsigned attach_suppressions = 0, attach_calls_during_probe = 0; constexpr unsigned attach_log_limit = 8;
+bool ground_probe_running = false;
+std::uint32_t find_ground_at = find_ground, attach_override_resume_at = attach_override_resume; // mutable for the owned native fixture only
+// Decides for one CActor OnAttached(child) call (ecx = the entity stood on, [esp+4] = the child): 1 = answer `ret 4`
+// (a party hero during an armed late restart: no settle nudge, no draws; the caller 0x419f20 still stores +0xbc),
+// 0 = run the override. Reads the party list through game vt+0x11c only while the suppression is wanted.
+std::uint32_t __cdecl attach_decide(std::uint32_t child, std::uint32_t parent)
+{
+	last_attach_parent = parent; last_attach_child = child;
+	if (!join_in_progress_core::attach_suppressed(restart_reset_enabled, late_restart, restart.armed) && !ground_probe_running) return 0;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		if (!child || !join_in_progress_core::party_member(at<std::uint32_t>(reinterpret_cast<void*>(child), 0x1c), party, count < 4 ? count : 4, event_index_mask())) return 0;
+		if (ground_probe_running) { ++attach_calls_during_probe; return 0; } // the frame-0 re-probe: every peer runs it alike
+		if (++attach_suppressions <= attach_log_limit)
+			logger::write("join in progress: canonical restart - a party hero's ground attach callback (CActor OnAttached 0x429710: the settle nudge and its three draws) is suppressed before the first shared frame on this PC (hero %08x on entity %08x; suppression %u)",
+				at<std::uint32_t>(reinterpret_cast<void*>(child), 0x1c), parent ? at<std::uint32_t>(reinterpret_cast<void*>(parent), 0x1c) : 0u, attach_suppressions);
+		return 1;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// In place of the first eight bytes of 0x429710 (entered by JUMP: [esp] = the caller's return, [esp+4] = the child;
+// ecx = this). Suppressed: `ret 4` with every other register as the caller left it. Otherwise the displaced prologue
+// (`sub esp,0x18; push esi; mov esi,[esp+0x20]`: position-independent) and the rest of the override.
+__declspec(naked) void attach_override_bridge()
 {
 	__asm {
-		cmp byte ptr [world_hold], 0
-		jne held
-		test byte ptr [esi+728h], 2
-		ret
-	held:
-		inc dword ptr [world_hold_skips]
-		test esp, 0
-		ret
+		pushfd
+		pushad
+		push ecx
+		push dword ptr [esp+2Ch]
+		call attach_decide
+		add esp, 8
+		test eax, eax
+		jnz suppressed
+		popad
+		popfd
+		sub esp, 18h
+		push esi
+		mov esi, dword ptr [esp+20h]
+		jmp dword ptr [attach_override_resume_at]
+	suppressed:
+		popad
+		popfd
+		ret 4
 	}
 }
-void open_world_hold()
+// At the frame-0 epoch (after the moved-state pass, before the queue rebuild): every party hero's ground entity back
+// to 0 and FindGround run in party order on every peer - the same ray from the same position, the same +0xbc /
+// +0x200 / +0x204 / +0x266, and the same attach callback (nudge draws) if an actor is below.
+unsigned ground_probes = 0;
+void canonical_party_ground(const char* where, bool wanted)
 {
-	if (world_hold || !join_in_progress_core::world_hold_wanted(restart_reset_enabled && world_hold_enabled, late_restart, restart.armed, true)) return;
-	world_hold_skips = 0;
-	world_hold_opened_ms = world_hold_clock();
-	world_hold = 1;
-	++world_holds;
-	logger::write("join in progress: canonical restart - the world update (the game update's world section) is held from the zone start until the first shared frame on every peer (hold %u; the watchdog releases it after %u ms)",
-		world_holds, world_hold_watchdog_ms);
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		unsigned heroes = 0, hits = 0, were_set = 0;
+		attach_calls_during_probe = 0; ground_probe_running = true;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			if (!actor) continue;
+			++heroes;
+			if (at<std::uint32_t>(actor, actor_ground_at)) ++were_set;
+			at<std::uint32_t>(actor, actor_ground_at) = 0;
+			if (fn<char(__thiscall*)(void*)>(find_ground_at)(actor)) ++hits;
+		}
+		ground_probe_running = false;
+		++ground_probes;
+		logger::write("join in progress: canonical restart - the party heroes' ground is re-probed at %s on every peer: %u hero(s), %u had a ground entity before, %u ray hit(s), %u attach callback(s) (probe %u; %u callback(s) suppressed earlier in this restart)",
+			where, heroes, were_set, hits, attach_calls_during_probe, ground_probes, attach_suppressions);
+		attach_suppressions = 0;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		ground_probe_running = false;
+		logger::write_once("jip:ground-probe-fault", "join in progress: the party heroes' ground re-probe faulted - their ground stays as each PC left it");
+	}
 }
-void release_world_hold(const char* why)
+// AE16: the party heroes' motion fields canonical at the frame-0 epoch (after the ground re-probe, before the queue
+// rebuild) on every peer: gravity hold +0x2f0 := 0 (expired), last fall +0x28c := t, last update +0x150 := t (the first
+// step after frame 0 then sees dt = 0 on every peer alike), the velocity and angular pairs := 0 (they are zero at idle on
+// both peers anyway). CHero +0x808 (auto-move flag) is read into the line only.
+unsigned motion_canonical_runs = 0;
+void canonical_party_motion(const char* where, bool wanted)
 {
-	if (!world_hold) return;
-	world_hold = 0;
-	logger::write("join in progress: canonical restart - the world update resumes at %s (%u world update(s) skipped on this PC while held)", why, world_hold_skips);
+	if (!wanted) return;
+	__try
+	{
+		alignas(16) std::uint32_t party[16]{};
+		void* game = fn<getter_t>(game_getter)();
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, party);
+		const std::uint32_t count = party[party_list_count_at / 4];
+		const std::uint32_t t = at<std::uint32_t>(reinterpret_cast<const void*>(game_static), game_time_at);
+		unsigned heroes = 0, holds = 0, falls = 0, updates = 0, velocities = 0, auto_moves = 0;
+		char detail[200]{}; int n = 0;
+		for (std::uint32_t k = 0; k < 4 && k < count; ++k)
+		{
+			const std::uint32_t handle = party[k];
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle_at)(&handle));
+			if (!actor) continue;
+			++heroes;
+			if (at<std::uint32_t>(actor, actor_gravity_hold_at)) ++holds;
+			if (at<std::uint32_t>(actor, actor_last_fall_at) != t) ++falls;
+			if (at<std::uint32_t>(actor, actor_last_update_at) != t) ++updates;
+			bool moving = false;
+			for (const auto off : {actor_velocity_at, actor_angular_at, actor_velocity_prev_at, actor_angular_prev_at})
+				for (std::uint32_t i = 0; i < actor_vector_bytes; i += 4) moving |= at<std::uint32_t>(actor, off + i) != 0;
+			if (moving) ++velocities;
+			const auto auto_move = at<std::uint32_t>(actor, hero_auto_move_flag_at);
+			if (auto_move) ++auto_moves;
+			if (n >= 0 && n < int(sizeof detail) - 40) n += std::snprintf(detail + n, sizeof detail - n, "%s%u:%08x/%08x/%08x/%08x", n ? " " : "", k, at<std::uint32_t>(actor, actor_gravity_hold_at), at<std::uint32_t>(actor, actor_last_fall_at), at<std::uint32_t>(actor, actor_last_update_at), auto_move);
+			at<std::uint32_t>(actor, actor_gravity_hold_at) = 0;
+			at<std::uint32_t>(actor, actor_last_fall_at) = t;
+			at<std::uint32_t>(actor, actor_last_update_at) = t;
+			for (const auto off : {actor_velocity_at, actor_angular_at, actor_velocity_prev_at, actor_angular_prev_at}) std::memset(actor + off, 0, actor_vector_bytes);
+		}
+		++motion_canonical_runs;
+		logger::write("join in progress: canonical restart - the party heroes' motion fields are canonical at %s on every peer (t %08x): %u hero(s); gravity hold cleared on %u, last fall set on %u, last update set on %u, velocity zeroed on %u, auto-move flag set on %u (not written); before (slot:hold/fall/update/auto) %s (run %u)",
+			where, t, heroes, holds, falls, updates, velocities, auto_moves, detail, motion_canonical_runs);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:motion-canonical-fault", "join in progress: the party heroes' motion fields could not be made canonical (read fault) - left as they are");
+	}
 }
-// Every pump, whether or not the epoch is still active (`cohort synchronized` can land before frame 0).
-void world_hold_watchdog()
+// In place of `call 0x495350` at 0x4868ad (the zone-loaded finish, right after 0x422520 bound the party; an
+// argument-less cdecl getter whose result the site reads): the cold moved pass on the party that now exists, then the
+// real getter (the site's return address stays).
+std::uint32_t party_bound_target_at = party_bound_target; // mutable for the owned native fixture only
+void __cdecl party_bound_notice()
 {
-	if (join_in_progress_core::world_hold_watchdog_expired(world_hold != 0, world_hold_opened_ms, world_hold_clock(), world_hold_watchdog_ms))
-		release_world_hold("the watchdog - frame 0 did not arrive within the limit, so the first shared frame needs a world tick on this build (report it); the restart proceeds as before");
+	canonical_party_moved_state("the zone start (after the party is bound, before the first physics step)", restart_reset_enabled && moved_canonical_enabled && late_restart && restart.armed);
 }
-// From observe_epoch, every pump: the window opens at the `zone started` milestone (the epoch started, saw the world
-// loading, and the loading flags are now clear) - idempotent; a lobby START (never a late restart) never opens it.
-void world_hold_milestone(bool loading)
+__declspec(naked) void party_bound_bridge()
 {
-	if (!loading && late_restart && epoch.started && epoch.saw_loading) open_world_hold();
+	__asm {
+		pushfd
+		pushad
+		call party_bound_notice
+		popad
+		popfd
+		jmp dword ptr [party_bound_target_at]
+	}
+}
+// ---- AE15: the probe re-arms at a prompt device change ------------------------------------------------------------
+// Round 10: every late drop (rounds 9-10, frames 720..4200, deltas 1..8) came 1.2-1.7 s after the JOINER logged
+// `prompts: player 1's prompts show the pad` - its first pad input device - before any stick deflection, while a
+// lobby START survives the same switch. The retail input record (0x558ec0: four scaled axis bytes, the buttons, a
+// frame time; no device flag) carries nothing about the device, so the switch's effect is local to that PC. The
+// probe's windows had all ended by then; on a change (pad_prompts' counter, polled from the pump) the switching PC
+// re-arms the checksum window (same epoch number: the tool still pairs with the other peer, whose every-period
+// sample lines run throughout), flushes and restarts the draw ring in phase 5, dumps the snapshot / queue / camera
+// and the 60 camera lines again, so the next pair of logs names the term and the first differing draw.
+unsigned device_switches_seen = 0;
+void device_switch_probe()
+{
+	const auto n = pad_prompts::device_switches();
+	if (n == device_switches_seen) return;
+	device_switches_seen = n;
+	if (!probe_enabled || !machine.started) return;
+	__try
+	{
+		const auto frame = probe_at<std::uint16_t>(native_frame);
+		logger::write("jip switch: a player's prompts changed device (switch %u) at native frame %u, draw count %u - the checksum window (%u periods), the draw ring (phase 5), the queue/camera dumps and the camera lines are re-armed on this PC",
+			n, unsigned(frame), probe_at<std::uint32_t>(rng_count), checksum_period_budget);
+		rearm_checksums(checksum_period_budget, "a prompt device change");
+		probe_epoch_late = true;
+		if (draws) { flush_draws("device switch"); draws->phase = 5; }
+		snapshot("device switch");
+		probe_events("device switch");
+		probe_camera_dump(unsigned(frame));
+		camera_lines(true);
+		hero_lines_arm("a prompt device change", unsigned(frame));
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:switch-probe-fault", "jip switch: the device-switch probe faulted"); }
 }
 // ---- follow-up 12: the party heroes' moved-check state canonical at the first shared frame ---------------------
 // (rules: moved_* / actor_*). Round 8: the joiner alone held a queued "moved" event for its own hero at frame 0 (the

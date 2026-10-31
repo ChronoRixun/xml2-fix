@@ -18,6 +18,9 @@ struct window {
     bool armed = false;
     unsigned limit = periods; // follow-up 13: the probe raises it (30 periods = frame 900) for a late restart's epoch
     void begin(std::uint32_t now) { ++epoch; produced = compared = 0; since = now; armed = true; have_frame = false; }
+    // AE15: a second observation window inside the same epoch (the probe re-arms at a device switch): the epoch number
+    // stays so the offline tool still pairs this PC's samples with the other peer's.
+    void rearm(std::uint32_t now) { produced = compared = 0; since = now; armed = true; have_frame = false; }
     bool active(std::uint32_t now) const { return armed && std::uint32_t(now - since) < 180000; }
     bool capture(std::uint32_t now) const { return active(now) && produced < limit; }
     bool compare(std::uint32_t now, bool complete, std::uint16_t frame) {
