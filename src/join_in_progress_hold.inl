@@ -170,6 +170,7 @@ void hold_area_boundary(void* s)
 			if (seat.at == stage::pending && seat.index > 0 && seat.index < 4 && listed(s, seat.record)) newcomers |= std::uint8_t(1u << seat.index);
 		// Unlike native 0x1f, this leaves immediately, before disk loading and outside the native parser's queue.
 		gns_transport::announce_join_boundary(frame, newcomers);
+		admission.announced |= newcomers; // p060fix/AR: a positive admission is followed by a cohort restart, whatever the newcomers do
 		if (newcomers) logger::write("join hold: reliable admission notice sent before the zone load (frame %u, newcomer seats 0x%x); every existing participant waits for this decision at its own same-frame area boundary", unsigned(frame), unsigned(newcomers));
 		return;
 	}
@@ -188,6 +189,7 @@ void hold_area_boundary(void* s)
 		Sleep(1);
 	}
 	if (!newcomers) return; // ordinary zone load: no world section skipped, no hold, no panel
+	gns_transport::note_admission_newcomers(newcomers); // p060fix/AR: only the host's decision removes one of them before the restart
 	for (int index = 1; index < 4; ++index) if (newcomers & (1u << index)) hold_arm_on(join_in_progress_core::join_hold::role::member, index);
 	if (hold.armed) hold.admitted_at = hold.since = began; // one absolute member deadline across wait/load/open
 	logger::write("join hold: reliable host admission notice accepted at this PC's area boundary (frame %u, newcomer seats 0x%x, waited %u ms); no world step before this PC's restart", unsigned(frame), unsigned(newcomers), unsigned(hold_clock() - began));
@@ -296,6 +298,9 @@ void hold_tick()
 			if (seat.at == stage::adding || seat.at == stage::streaming) ++waiting;
 			else if (seat.at == stage::starting || seat.at == stage::joined) ++done;
 		}
+		// p060fix/AR: every newcomer was lost before the restart, which still comes (owed or riding the running
+		// transfer): the host stays held with the old peers until it begins (bounded by the cap as ever).
+		if (!waiting && !done && admission.lost && epoch.active && !restart_begun()) waiting = 1;
 	}
 	const bool armed = hold.armed;
 	const auto now = hold_clock();

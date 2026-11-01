@@ -278,6 +278,58 @@ namespace join_in_progress_core
 		}
 	};
 
+	// p060fix/AR: a newcomer lost between its admission and the shared start (gns_transport_core.hpp newcomer_lost).
+	// The admission on the host: the boundary mask it announced and the newcomers it decided lost. A newcomer of it is a
+	// seat at adding/streaming/starting, a pending seat named in the announced mask, or one already decided lost.
+	struct admission_losses
+	{
+		std::uint8_t announced = 0, lost = 0;
+		std::uint32_t lost_at = 0;
+		unsigned owed_attempts = 0;
+		void clear() { *this = {}; }
+		static std::uint8_t bit(int index) { return index >= 1 && index <= 3 ? std::uint8_t(1u << index) : std::uint8_t(0); }
+		bool newcomer(const machine& m, int index) const
+		{
+			const auto b = bit(index);
+			if (!b) return false;
+			if ((lost | announced) & b) return true;
+			for (const auto& st : m.seats)
+				if (st.index == index && (st.at == stage::adding || st.at == stage::streaming || st.at == stage::starting)) return true;
+			return false;
+		}
+		// The newcomers still joining besides `except` (and those already decided lost).
+		std::uint8_t remaining(const machine& m, int except) const
+		{
+			std::uint8_t out = 0;
+			for (const auto& st : m.seats)
+				if (st.at == stage::adding || st.at == stage::streaming || st.at == stage::starting) out |= bit(st.index);
+			return std::uint8_t(out & ~bit(except) & ~lost);
+		}
+		void decided(int index, std::uint32_t now) { if (!lost) lost_at = now ? now : 1; lost |= bit(index); }
+	};
+	// The restart has begun on this PC: its 0x26 was broadcast (host) or handled, or its native campaign start entered.
+	inline bool restart_removal_held(bool active, bool announced, bool requested, bool started) { return active && (announced || requested || started); }
+	// Every peer refrains from removing a lost participant inside its own restart: from the restart's 0x26 until the
+	// restart's own zone load has been seen (the restored world; the transport also needs the zone running). Live ZJ-7j:
+	// the guest's timeout removal landed after resetgame, before the mode-2 load. After the load the restarted frame 0
+	// waits for the lost participant on every peer and the agreed cut frame removes it there (never held to the cohort
+	// sync: a host seat waiting at `starting` for a dead newcomer would hold that sync for its 120 s load limit).
+	inline bool removal_window(bool active, bool announced, bool requested, bool started, bool saw_loading)
+	{
+		return restart_removal_held(active, announced, requested, started) && !(started && saw_loading);
+	}
+	// Once the host announced a positive admission (every old peer holds for it), a cohort restart follows whatever
+	// happens to the newcomers: the held worlds are only made equal again by the one image. When every newcomer of the
+	// admission was lost before its image, the host still captures one for the existing participants (owed restart).
+	constexpr std::uint32_t owed_add_wait_ms = 3000; // the native "Adding player" wait normally ends with the removal
+	constexpr unsigned owed_attempts_max = 5;
+	inline bool owed_restart_due(std::uint8_t lost, bool restart_begun, bool sender_running, bool newcomer_left, bool other_participants,
+		bool zone_loading, bool add_waiting, std::uint32_t since_ms, unsigned attempts)
+	{
+		return lost && !restart_begun && !sender_running && !newcomer_left && other_participants && !zone_loading &&
+			(!add_waiting || since_ms >= owed_add_wait_ms) && attempts < owed_attempts_max;
+	}
+
 	// Canonical cohort restart (p060fix/AE, join_in_progress_rules.hpp "Canonical cohort restart"): the camera singleton
 	// goes back to its constructed image on every peer before the native campaign start, and the synchronized RNG is
 	// reseeded by every peer at the first shared simulation frame (frame 0 of the restarted network epoch).

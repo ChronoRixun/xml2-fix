@@ -17,6 +17,12 @@ namespace gns_transport
 	bool poll_join_boundary(std::uint16_t frame, std::uint8_t& newcomers);
 	void service_join_boundary();
 	void clear_join_boundaries();
+	// p060fix/AR, game thread only: a newcomer lost between its admission and the cohort restart. The host alone
+	// decides (reliable link kind 11, before the native 0x2b and the restart's 0x26) and removes it at once; every
+	// other PC records the admission's newcomers (boundary mask, mesh newcomers), never removes one by its own
+	// timeout before its restart, and carries out the host's decision at once or at its restart entry at the latest.
+	void note_admission_newcomers(std::uint8_t mask);
+	void newcomers_restart_entry(const char* where, bool session_ended = false);
 	// Menu-thread pump after the room worker loaded the authenticated identity.
 	void room_ui_tick();
 	bool room_can_start();

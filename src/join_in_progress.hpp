@@ -22,4 +22,13 @@ namespace join_in_progress
 	// A script is about to change the party (seatParty): the heroes the players hold right now, for a solo segment
 	// that may start at the next zone load. Lockstep: the script runs on the same frame on every PC.
 	void note_party_change();
+	// p060fix/AR, game thread only: a newcomer lost between its admission and the shared start. The host's admission
+	// (seats adding/streaming/starting, the announced boundary mask, newcomers already decided lost); the restart's
+	// window on every role (from its 0x26 until its own restart load was seen: no removal inside it).
+	bool admission_newcomer(int index);
+	unsigned char admission_remaining(int lost);
+	void newcomer_lost_decided(int index);
+	bool restart_begun();
+	bool restart_started();
+	bool restart_removal_held();
 }

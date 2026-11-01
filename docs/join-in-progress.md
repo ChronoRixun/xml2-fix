@@ -465,6 +465,53 @@ restart` covers:
 `xml2_test` draws the message with `hold_overlay::draw` on a real windowed Direct3D 8 device (blend and clear paths)
 and reads it back with the test pipe's capture.
 
+## A newcomer lost before the shared start (p060fix/AR)
+
+Live 060zj ZJ-7j/7j2 (host + lobby guest + late joiner killed right after the image capture, 2/2): the host removed the
+joiner natively only after its 20 s native fallback (its own cut-frame announcement never came: the never-started
+joiner's input ring read 1..0, not empty), just before its own restart; the lobby guest's 8.5 s cut-frame timeout was
+blocked by a non-empty ring until its restart reset the ring, so it removed the joiner INSIDE its restart (after
+`resetgame`, before the mode-2 load: `vanished ... removed now at its frame 0 ... NOT AGREED (timeout)`), and ended on the
+native pause/ready screen ("Not Ready") with no checksum while the host played on. The two peers began their restarts
+with different participant lists.
+
+One host decision, one rule for every peer:
+
+- **The host decides.** A newcomer of the admission in progress (a seat at adding/streaming/starting, a pending seat
+  named in the announced boundary mask, or one already decided) whose loss reaches the host before its restart is
+  announced (0x26 not broadcast, no restart begun) is decided lost: the host sends every other bound participant the
+  reliable GNS control kind 11 `[11, lost index, newcomers still joining (mask), 0xa4]`, then removes it at once (no cut
+  frame: the restart replaces every peer's world from the one image). Every native removal path on the host passes the
+  same choke points (the notice 0x611550 and the removal 0x612c40 filters: its watchdog, its leave, the seat's give-up
+  drop, our own hand-over), so the decision always goes out before the native 0x2b. A refused send is queued on that
+  link and leaves before any later game message (flush_link), so the decision precedes the restart's 0x26 on every
+  host link (GNS reliable delivery is ordered).
+- **Every other peer carries it out before its restart.** It records the admission's newcomers (the accepted boundary
+  mask, its mesh newcomers, the decisions), never removes one by its own agreement or timeout before its restart,
+  removes a decided one at once when its zone runs, and at the latest at its restart entry (`deferred_campaign_start`,
+  before the hold ends and before the native campaign start).
+- **The restart always follows a positive admission.** If every newcomer was lost before its image (no transfer runs)
+  and an old peer remains, the host still captures one image for the existing participants (the owed restart); the
+  host stays held with the old peers until it begins. With nobody else left the host plays on as before.
+- **Nobody removes anyone inside a restart.** From the restart's 0x26 (host: its broadcast) until its own restart load
+  was seen, removals wait; then the restarted frame 0 waits for a participant lost after the 0x26 on every peer and the
+  agreed cut frame removes it there (the existing in-epoch path; AJ2 makes its hero canonical). A loss noticed before
+  the restart and not decided by the host starts its agreement afresh at the restart entry.
+
+So every peer begins its restart with the same participants, at the same epoch frame 0; the hold releases at the
+restart on every peer (or at its cap, as before). A second newcomer of the same admission rides on (the sender
+completes when its image is in). A host lost at the same time ends every guest's session as before (no guest waits on
+a decision; none removes the newcomer by its own timeout). Residual: a second newcomer that sees the first one's link
+end while the host still hears it may remove it by its own timeout before the host does (it has no admission ledger
+before the host's decision); and a newcomer whose host link is not yet switched to GNS gets the 0x26 on the stock path,
+outside the ordering.
+
+Tests: `xml2_join_in_progress_test` (wire, ledger, classification, admission accounting, restart window, owed-restart
+rule, and a message-level cohort model: 1-2 existing guests x 1-2 newcomers x five loss points x 8 delivery orders, all
+peers equal at the restart entry and at frame 0, every hold released, the second newcomer in; the host lost too; a
+060zj control and a sensitivity check). `xml2_join_in_progress_boundary_test restart` blocks AR-1..AR-6 run the
+production admission, advance, hold, owed restart, restart entry and session end.
+
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 
 The late admission already reloads EVERY peer from one campaign image: the host

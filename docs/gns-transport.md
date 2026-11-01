@@ -53,7 +53,9 @@ this adapter's game lane; a build without them drops them as malformed/refused t
 Rule 25 is revision 6 / framing 4 for them (`{1, 1000, 4, 0}`); revision-4 builds are refused by name.
 Kind 9 removal_notice (0.6 preview fix F, rule 64 OnlineRemovalNotice, [online-party-menu.md](online-party-menu.md)
 section 4) is the same kind of room-module message: host to the removed member only, before the tunnel policy. Kind 16 is
-rule 63's restore transaction (not sent yet); kinds 10-15 are free.
+rule 63's restore transaction (not sent yet). Kind 10 is the host's admission boundary decision (AQ3) and kind 11 the
+host's lost-newcomer decision (p060fix/AR, [join-in-progress.md](join-in-progress.md) "A newcomer lost before the shared
+start"); both are GNS-only reliable controls, accepted only from the bound host. Kinds 12-15 are free.
 
 ## A participant lost abruptly (three or more players)
 

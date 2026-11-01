@@ -1,4 +1,5 @@
 #include "join_in_progress_core.hpp"
+#include "gns_transport_core.hpp" // p060fix/AR: the lost-newcomer decision and its ledger (the cohort model below)
 #include "join_in_progress_rules.hpp"
 #include "join_in_progress_diagnostics.hpp"
 #include "gameplay_capabilities.hpp"
@@ -47,6 +48,73 @@ namespace
 		observation o;
 		o.zone_load_pending = load; o.add_waiting = waiting; o.image_done = image_done; o.loaded = loaded; o.host_loaded = host_loaded;
 		return o;
+	}
+#include "join_in_progress_lost_newcomer.inl"
+	// p060fix/AR: the pure pieces, one by one.
+	void lost_newcomer_units()
+	{
+		using namespace gns_transport_core;
+		{
+			const auto w = newcomer_lost(2, 0x08);
+			const auto p = parse(w.data(), w.size());
+			check(w.size() == newcomer_lost_size && w[0] == 11 && p.valid && p.k == kind::newcomer_lost && p.index == 2 && p.frame == 0x08,
+				"AR wire: [11, lost index, newcomers still joining, 0xa4] round-trips (player 2 lost, player 3 still joining)");
+			const auto self = newcomer_lost(3, 0x0e);
+			check(parse(self.data(), self.size()).frame == 0x06, "AR wire: the lost index is never listed as still joining");
+			const std::uint8_t host0[] = {11, 0, 0, 0xa4}, four[] = {11, 4, 0, 0xa4}, magic[] = {11, 2, 0, 0xa3}, own[] = {11, 2, 0x04, 0xa4}, hostbit[] = {11, 2, 0x01, 0xa4}, shortw[] = {11, 2, 0};
+			check(!parse(host0, 4).valid && !parse(four, 4).valid && !parse(magic, 4).valid && !parse(own, 4).valid && !parse(hostbit, 4).valid && !parse(shortw, 3).valid,
+				"AR wire: the host (0), index 4, a wrong marker, a mask naming the lost one or the host, and a short frame are refused");
+			check(newcomer_lost_authorized(true, true, 0) && !newcomer_lost_authorized(true, false, 0) && !newcomer_lost_authorized(false, true, 0) && !newcomer_lost_authorized(true, true, 1) && !newcomer_lost_authorized(true, true, -1),
+				"AR wire: only the bound host's reliable decision is taken (never another guest's, never unreliable)");
+			check(std::uint8_t(kind::newcomer_lost) != std::uint8_t(kind::join_boundary) && std::uint8_t(kind::newcomer_lost) != 7 && std::uint8_t(kind::newcomer_lost) != 8 && std::uint8_t(kind::newcomer_lost) != 9 && std::uint8_t(kind::newcomer_lost) != 16,
+				"AR wire: kind 11 is past the room's party (7/8), removal (9), restore (16) lanes and the boundary decision (10)");
+		}
+		{
+			newcomer_ledger l;
+			l.admit(0x0c | 0x01);
+			check(l.admitted == 0x0c && !l.own_removal_allowed(2) && !l.own_removal_allowed(3) && l.own_removal_allowed(1) && l.own_removal_allowed(0),
+				"AR ledger: the boundary mask's newcomers are never removed by this PC's own timeout before its restart; an old peer still is (the host bit is ignored)");
+			check(l.decide(2) && l.must_remove(2) && !l.decide(2), "AR ledger: the host's decision is taken once");
+			l.removed(2);
+			check(!l.must_remove(2) && !l.decide(2) && !l.own_removal_allowed(2), "AR ledger: a decision carried out is not repeated (the native 0x2b afterwards finds nothing)");
+			check(l.decide(1) && !l.own_removal_allowed(1), "AR ledger: a decision about a participant this PC did not know as a newcomer (a co-newcomer) also blocks its own timeout");
+			const auto left = l.restart_entry();
+			check(left == 0x02 && l.admitted == 0 && l.decided == 0 && l.applied == 0 && l.own_removal_allowed(2), "AR ledger: the restart entry returns the open decisions and starts afresh (the restarted epoch's agreement applies)");
+			check(!l.decide(0) && !l.decide(4) && !l.decide(-1), "AR ledger: no decision about the host or out-of-range indexes");
+		}
+		check(classify_newcomer_loss(true, true, false) == newcomer_loss::before_restart && classify_newcomer_loss(true, true, true) == newcomer_loss::ordinary &&
+			classify_newcomer_loss(true, false, false) == newcomer_loss::ordinary && classify_newcomer_loss(false, true, false) == newcomer_loss::ordinary,
+			"AR classify: only the host decides, only for an admission newcomer, only before its restart is announced");
+		{
+			machine m; m.started = true;
+			const void* r1 = reinterpret_cast<const void*>(0x1001); const void* r2 = reinterpret_cast<const void*>(0x1002); const void* r3 = reinterpret_cast<const void*>(0x1003);
+			m.seats[0] = seat{r1, 1, stage::streaming, 0}; m.seats[1] = seat{r2, 2, stage::starting, 0}; m.seats[2] = seat{r3, 3, stage::pending, 0};
+			admission_losses a;
+			check(a.newcomer(m, 1) && a.newcomer(m, 2) && !a.newcomer(m, 3) && !a.newcomer(m, 0), "AR admission: streaming/starting seats are newcomers; a pending seat outside the announced mask is not (outside the lockstep)");
+			a.announced = 0x08;
+			check(a.newcomer(m, 3), "AR admission: a pending seat named in the announced boundary mask is a newcomer (old peers hold for it)");
+			check(a.remaining(m, 1) == 0x04, "AR admission: the newcomers still joining besides the lost one");
+			a.decided(1, 5000); m.seats[0] = seat{};
+			check(a.newcomer(m, 1) && a.lost == 0x02 && a.lost_at == 5000 && a.remaining(m, 2) == 0, "AR admission: a decided newcomer stays one (its later native removal is the same decision)");
+			a.clear(); check(!a.lost && !a.announced, "AR admission: cleared at the restart entry / session end");
+		}
+		check(restart_removal_held(true, true, false, false) && restart_removal_held(true, false, true, false) && restart_removal_held(true, false, false, true) &&
+			!restart_removal_held(true, false, false, false) && !restart_removal_held(false, true, true, true),
+			"AR window: the restart has begun from its 0x26 (host: its broadcast) or its native start until the cohort epoch ends");
+		check(removal_window(true, false, true, false, false) && removal_window(true, false, false, true, false) && !removal_window(true, false, false, true, true) &&
+			!removal_window(true, false, false, false, false) && !removal_window(false, true, true, true, false) && removal_window(true, true, false, false, true),
+			"AR window: no removal from the restart's 0x26 until its own restart load was seen (then the agreed frame 0); a load seen before the start does not open it");
+		check(owed_restart_due(0x02, false, false, false, true, false, false, 0, 0) && !owed_restart_due(0, false, false, false, true, false, false, 0, 0) &&
+			!owed_restart_due(0x02, true, false, false, true, false, false, 0, 0) && !owed_restart_due(0x02, false, true, false, true, false, false, 0, 0) &&
+			!owed_restart_due(0x02, false, false, true, true, false, false, 0, 0) && !owed_restart_due(0x02, false, false, false, false, false, false, 0, 0) &&
+			!owed_restart_due(0x02, false, false, false, true, true, false, 0, 0),
+			"AR owed restart: only when every newcomer was lost before its image, no transfer runs, an old peer remains and no zone loads");
+		check(!owed_restart_due(0x02, false, false, false, true, false, true, owed_add_wait_ms - 1, 0) && owed_restart_due(0x02, false, false, false, true, false, true, owed_add_wait_ms, 0) &&
+			!owed_restart_due(0x02, false, false, false, true, false, false, 0, owed_attempts_max),
+			"AR owed restart: a native add wait still on is waited out for 3 s; at most 5 attempts");
+		lost_newcomer_model::run_all();
+		lost_newcomer_model::control_060zj();
+		lost_newcomer_model::sensitivity();
 	}
 }
 
@@ -826,6 +894,7 @@ int main(int argc, char** argv)
 		event_entry heap_no_vtable = heap_host; heap_no_vtable.kind_vtable = 0;
 		check(event_kind_key(heap_no_vtable) == 0x033a4568, "follow-up 14 (S2): a heap kind whose vtable could not be read keeps its raw address");
 	}
+	lost_newcomer_units(); // p060fix/AR
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }
