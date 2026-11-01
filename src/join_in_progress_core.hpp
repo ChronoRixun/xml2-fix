@@ -373,6 +373,10 @@ namespace join_in_progress_core
 	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t, std::uint32_t controllers)
 	{ return (stage <= 1 && controllers == 32) || (stage == 2 && controllers == 96); }
 	inline std::uint32_t brain_ring_held_words(std::uint32_t controllers) { return (controllers + 31) / 32; }
+	// p060fix/AP: a slot is held when its bit is set in the held words (one word per 32 slots); a slot past the words
+	// counts as held (nothing is reset that the bitmap does not show free).
+	inline bool brain_slot_held(std::span<const std::uint32_t> held, std::uint32_t slot)
+	{ return slot / 32 >= held.size() || (held[slot / 32] & (1u << (slot % 32))) != 0; }
 	// Follow-up 7: the timed-event queue (every actor update is one of its entries) is rebuilt in a canonical order at
 	// the late restart's epochs on every peer. One entry = one heap pair resolved to its record.
 	struct event_entry

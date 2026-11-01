@@ -48,8 +48,18 @@ void canonical_brain_ring()
 		const auto held = join_in_progress_core::rebuild_brain_ring(std::span<const std::uint32_t>(held_words.data(), words), std::span<std::uint32_t>(ring.data(), controllers), new_write, new_read, new_free);
 		std::memcpy(pool + ring_at, ring.data(), controllers * sizeof(std::uint32_t));
 		at<std::int32_t>(pool, write_at) = new_write; at<std::int32_t>(pool, read_at) = new_read; at<std::int32_t>(pool, free_at) = new_free;
-		logger::write("join in progress: canonical restart - AI brain free ring rebuilt over the %d free slots in ascending order (stage %u pool %08x, %u controllers; was read %d write %d free %d; held %08x %08x %08x = %u slot(s) kept); brain generations untouched",
-			new_free, stage, unsigned(reinterpret_cast<std::uintptr_t>(pool)), controllers, read, write, free_count, held_words[0], held_words[1], held_words[2], held);
+		// p060fix/AP: the brain consumers' own per-slot state (the npc power rule's combo deadline and reaction marks,
+		// kept outside the image) goes back to a fresh process's for every free slot, on every peer alike: a warm peer
+		// (the host above all, which ran frames alone after the last shared one) must not hand its marks to the
+		// restarted brains. The allocation itself resets a slot too; this is the epoch's own guarantee.
+		const auto slot_reset = actor_ai::reset_controller_slot;
+		unsigned reset = 0;
+		if (slot_reset)
+			for (std::uint32_t i = 0; i < controllers; ++i)
+				if (!join_in_progress_core::brain_slot_held(std::span<const std::uint32_t>(held_words.data(), words), i)) { slot_reset(i); ++reset; }
+		logger::write("join in progress: canonical restart - AI brain free ring rebuilt over the %d free slots in ascending order (stage %u pool %08x, %u controllers; was read %d write %d free %d; held %08x %08x %08x = %u slot(s) kept); brain generations untouched; %u free slot(s)' consumer state reset%s",
+			new_free, stage, unsigned(reinterpret_cast<std::uintptr_t>(pool)), controllers, read, write, free_count, held_words[0], held_words[1], held_words[2], held,
+			reset, slot_reset ? "" : " (no consumer keeps per-slot state)");
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{

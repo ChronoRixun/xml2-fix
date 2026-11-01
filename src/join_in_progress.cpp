@@ -1688,6 +1688,12 @@ namespace join_in_progress
 			logger::write("join in progress: [Dev] LateJoinProbe=1 (for bug reports only) - milestone snapshots and the synchronized-draw caller trace (bounded heap ring of %u%s) are on; think-branch scales [0x6819a0]=%08x (with controller) [0x6801ac]=%08x +[0x682ffc]=%08x (without)",
 				join_in_progress_core::draw_ring_size, draws ? "" : "; ring allocation FAILED - no draw trace", probe_at<std::uint32_t>(0x6819a0), probe_at<std::uint32_t>(0x6801ac), probe_at<std::uint32_t>(0x682ffc));
 		}
+		checksum_always = ini::flag(L"Dev", L"LockstepChecksumAlways", false);
+		if (checksum_always)
+		{
+			checksum_log_every_period = true;
+			logger::write("join in progress: [Dev] LockstepChecksumAlways=1 (probe only) - the native lockstep checksum's producer sample is logged at every period of every session, lobby STARTs included (`jip checksum produced/hero` lines, epoch 0 until a cohort start)");
+		}
 		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
 		moved_canonical_enabled = ini::flag(L"Dev", L"LateJoinMovedCanonical", true);
 		if (!moved_canonical_enabled) logger::write("join in progress: [Dev] LateJoinMovedCanonical=0 - the party heroes' moved-check state and queued moved events stay as each PC left them at frame 0 (AE12 behaviour; A/B control only)");

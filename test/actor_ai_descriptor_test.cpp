@@ -12,9 +12,20 @@
 
 int main()
 {
+    std::setvbuf(stdout,nullptr,_IONBF,0); // p060fix/AP: a failed assert aborts; the PASS lines before it still show
     const auto stock=actor_ai::stock;
     constexpr std::uint32_t base=0x20000000;
-    assert(npc_power_rules::block(base,stock)==npc_power_beta7::block(base));
+    {
+        // p060fix/AP: the brain allocation's slot reset (57 bytes at block+2240) is the one addition; beta 7 had int3
+        // filler there, and every other byte of the code page is beta 7's.
+        auto now=npc_power_rules::block(base,stock);const auto old=npc_power_beta7::block(base);
+        const auto l=npc_power_rules::layout_at(base,stock);const auto at=l.alloc_reset-base;
+        assert(now.size()==old.size()&&at==2240);
+        for(std::size_t i=0;i<npc_power_rules::alloc_reset_size;++i){assert(old[at+i]==0xcc);now[at+i]=0xcc;}
+        assert(now==old);
+        const auto fresh=npc_power_rules::block(base,stock);
+        assert(npc_power_rules::alloc_reset_bridge(l)==std::vector<std::uint8_t>(fresh.begin()+at,fresh.begin()+at+npc_power_rules::alloc_reset_size));
+    }
     for(const auto* s:npc_power_rules::sites)assert(actor_ai::guard(s->va,s->hex,stock)==s->hex);
     for(const auto va:{0x525160u,0x525302u})
     {
@@ -22,7 +33,7 @@ int main()
         assert(actor_ai::guard(va,before,stock)==before);
     }
     assert(stock.cai_object==0x78ba10&&stock.primary_base==0x78ba14&&stock.controllers==32);
-    std::puts("PASS T5: complete NpcPowerRule code page and all CAI guards equal beta-7 literals byte-for-byte");
+    std::puts("PASS T5: complete NpcPowerRule code page (but the AP allocation reset in beta 7's int3 filler) and all CAI guards equal beta-7 literals byte-for-byte");
     auto raised=stock;raised.stage=2;raised.cai_object=0x21000000;raised.primary_base=raised.cai_object+4;
     raised.controllers=96;raised.mask_offset_obj=0x24db0;
     const auto l=npc_power_rules::layout_at(base,raised);
@@ -38,6 +49,14 @@ int main()
     for(const auto b:{npc_power_rules::cont_bridge(l),npc_power_rules::start_bridge(l),npc_power_rules::react_cont_bridge(l),npc_power_rules::pre_start_bridge(l)})check(b,3,0xc,0x18);
     check(npc_power_rules::power_front_bridge(l),4,0x11,0x21);
     check(npc_power_rules::attack_front_bridge(l),4,0x11,0x21);
+    {
+        // p060fix/AP: the allocation reset bounds the slot by the descriptor's controllers (96 at stage 2) and writes
+        // the four 96-entry tables.
+        const auto b=npc_power_rules::alloc_reset_bridge(l);std::uint32_t v=0;
+        std::memcpy(&v,b.data()+6,4);assert(v==96);
+        std::memcpy(&v,b.data()+0x0f,4);assert(v==l.next);std::memcpy(&v,b.data()+0x1a,4);assert(v==l.react);
+        std::memcpy(&v,b.data()+0x25,4);assert(v==l.react_power);std::memcpy(&v,b.data()+0x30,4);assert(v==l.react_attack);
+    }
     std::puts("PASS descriptor: all six caves bind base/stride/count; four 96-entry tables fit writable page");
     using namespace gameplay_capabilities;
     record released,on,same,failed,other;

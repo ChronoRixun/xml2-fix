@@ -587,6 +587,17 @@ int main(int argc, char** argv)
 		      "follow-up 4: the brain ring is rebuilt over the free slots in ascending order (held slots kept out)");
 		check(rebuild_brain_ring(0u, ring, w, r, f) == 0 && w == 0 && r == 0 && f == 32 && ring[31] == 31, "follow-up 4: with every brain free the rebuilt ring is identity");
 		check(brain_ring_reset_wanted(0, 28, 32) && !brain_ring_reset_wanted(2, 32, 32), "follow-up 4: the rebuild runs on the stock pool whatever is held, not on a layout it does not know");
+		{
+			// p060fix/AP: the ring rebuild resets the consumers' per-slot state of exactly the free slots.
+			const std::array<std::uint32_t, 3> held{0x80000007u, 0x1u, 0u};
+			const std::span<const std::uint32_t> one(held.data(), 1), three(held.data(), 3);
+			unsigned free32 = 0, free96 = 0;
+			for (std::uint32_t i = 0; i < 32; ++i) free32 += brain_slot_held(one, i) ? 0u : 1u;
+			for (std::uint32_t i = 0; i < 96; ++i) free96 += brain_slot_held(three, i) ? 0u : 1u;
+			check(free32 == 28 && brain_slot_held(one, 0) && brain_slot_held(one, 31) && !brain_slot_held(one, 3) && brain_slot_held(one, 32) && brain_slot_held(one, 95)
+			      && free96 == 91 && brain_slot_held(three, 32) && !brain_slot_held(three, 33) && !brain_slot_held(three, 95),
+			      "AP: brain_slot_held reads the held words (0,1,2,31 / 32 held; a slot past the words counts as held, so it is never reset)");
+		}
 		// p060fix/AI S2: the rebuild also runs on the stock pool at stage 1 (the standalone ActorPools=124 install) and on
 		// E4's 96-slot pool at stage 2; any other stage/count pairing is left alone.
 		check(brain_ring_reset_wanted(1, 28, 32) && brain_ring_reset_wanted(2, 91, 96) && !brain_ring_reset_wanted(1, 32, 96) && !brain_ring_reset_wanted(0, 32, 96) && !brain_ring_reset_wanted(3, 96, 96),

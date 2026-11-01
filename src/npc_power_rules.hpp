@@ -437,6 +437,22 @@ namespace npc_power_rules
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16), static_cast<std::uint8_t>(rel >> 24)};
 	}
 
+	// 19. (p060fix/AP) The AI brain allocation. The bridges keep four per-slot tables in their own data page (the combo
+	//     step deadline `next`, and the reaction marks `react` / `react_power` / `react_attack`); in XML1 they are fields
+	//     of the brain, born with it. XMen2.exe hands out a brain by popping its free ring (0x522a10, eax = the slot)
+	//     from exactly three calls: the plain alloc 0x522e90 (0x522e94) and the typed creation 0x523060 (0x5230be,
+	//     0x52314f; no other reference to 0x522a10 exists in the image). Nothing reset a slot's tables when the slot was
+	//     handed to a new brain (actor_ai::reset_controller_slot is called only by ActorPools=124's W11 cave and by E4's
+	//     observer), so a brain inherited its slot's previous marks - and, across a late-join cohort restart, the
+	//     host's marks from the frames it ran alone after the last shared frame (live-060zg ZG-C-3Pp2: the host's attack
+	//     front drew at frame 682 where both guests made the native decision). Each call becomes a call to a bridge that
+	//     pops the slot as before and zeroes that slot's four cells, so every brain starts clean on every peer.
+	inline constexpr site alloc_call_site{0x522e90, "56578bf1e877fbffff", 0, "the AI brain alloc's free-ring pop call (0x522e94)"};
+	inline constexpr site alloc_typed_site{0x5230b9, "8d7e048bcfe84df9ffff", 0, "the typed AI creation's free-ring pop call (0x5230be)"};
+	inline constexpr site alloc_typed2_site{0x52314a, "8d7e048bcfe8bcf8ffff", 0, "the typed AI creation's second free-ring pop call (0x52314f)"};
+	constexpr address brain_pop_va = 0x522a10;
+	inline constexpr std::array<std::pair<const site*, address>, 3> alloc_calls{{{&alloc_call_site, 0x522e94}, {&alloc_typed_site, 0x5230be}, {&alloc_typed2_site, 0x52314f}}};
+
 	inline constexpr std::array<const site*, 47> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
@@ -518,12 +534,13 @@ namespace npc_power_rules
 		actor_ai::descriptor ai = actor_ai::stock;
 		address hit_roll = 0;                                         // revision 10: the to-hit roll's power-attack test
 		address power_lock = 0;                                       // revision 10: the power decision's input-lock test
+		address alloc_reset = 0;                                      // p060fix/AP: the brain allocation's slot reset
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
 	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 59, cont_size = 149, start_size = 71, end_delay_size = 32;
 	constexpr std::size_t react_cont_size = 125, power_lock_size = 22, pre_start_size = 43, mark_size = 85, power_front_size = 166, attack_front_size = 182;
-	constexpr std::size_t hit_roll_size = 35;
+	constexpr std::size_t hit_roll_size = 35, alloc_reset_size = 57;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base, const actor_ai::descriptor& d = actor_ai::stock)
 	{
@@ -546,6 +563,7 @@ namespace npc_power_rules
 		l.attack_front = base + 1248;
 		l.hit_roll = base + 2048; // block-bit's bridge (after the old attack front's 1728..1986, now free)
 		l.power_lock = base + 2112; // clear of beta6/block-bit's bridge (block+2048, 35 bytes)
+		l.alloc_reset = base + 2240; // p060fix/AP: clear of the test stubs at block+2176..2200 as well
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -1036,6 +1054,54 @@ namespace npc_power_rules
 		code[0x21] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
+	// 19. (p060fix/AP) Called from the three free-ring pop calls in place of `call 0x522a10` (ecx = the pool, thiscall,
+	//     no stack arguments): the pop as before (eax = the slot; it already used ecx and edx), then the new brain's four
+	//     cells are zeroed. A slot outside the tables (never with the stock 32 or E4's 96) is left alone. Registers but
+	//     the flags are as the pop left them; every caller's next instruction is `mov ecx,eax` (flags dead).
+	inline std::vector<std::uint8_t> alloc_reset_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0xe8, 0, 0, 0, 0,                               // 00 call 0x522a10 (eax = the slot)
+			0x3d, 0, 0, 0, 0,                               // 05 cmp eax,controllers
+			0x73, 0x2c,                                     // 0a jae done (0x38)
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 0c mov dword [eax*4+next],0 (the combo step deadline)
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 17 mov dword [eax*4+react],0
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 22 mov dword [eax*4+react_power],0
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 2d mov dword [eax*4+react_attack],0
+			0xc3,                                           // 38 done: ret
+		};
+		put32(code, 0x01, brain_pop_va - (l.alloc_reset + 5));
+		put32(code, 0x06, l.ai.controllers);
+		put32(code, 0x0f, l.next);
+		put32(code, 0x1a, l.react);
+		put32(code, 0x25, l.react_power);
+		put32(code, 0x30, l.react_attack);
+		return code;
+	}
+	// The write at each pop call: call the bridge (5 bytes, in place of `call 0x522a10`).
+	inline std::vector<std::uint8_t> alloc_reset_call(const layout& l, const address at)
+	{
+		std::vector<std::uint8_t> code{0xe8, 0, 0, 0, 0};
+		put32(code, 1, l.alloc_reset - (at + 5));
+		return code;
+	}
+	// The retail call at a pop site (its last five guarded bytes).
+	inline std::vector<std::uint8_t> alloc_retail_call(const site& s) { return sub_bytes(s, s.hex.size() / 2 - 5, 5); }
+	inline const site* first_alloc_mismatch(const std::uint8_t* image)
+	{
+		for (const auto& [s, at] : alloc_calls)
+		{
+			const auto call = alloc_retail_call(*s);
+			std::int32_t rel = 0;
+			std::memcpy(&rel, call.data() + 1, 4);
+			if (call[0] != 0xe8 || at + 5 + static_cast<address>(rel) != brain_pop_va || !limits_rules::matches(image + (s->va - image_base), s->hex))
+			{
+				return s;
+			}
+		}
+		return nullptr;
+	}
+
 	inline std::vector<std::uint8_t> attack_entry_jump(const layout& l)
 	{
 		const address rel = l.attack_front - (attack_entry_site.va + 5);
@@ -1151,6 +1217,7 @@ namespace npc_power_rules
 		put(l.power_front, power_front_bridge(l));
 		put(l.attack_front, attack_front_bridge(l));
 		put(l.hit_roll, hit_roll_bridge(l));
+		put(l.alloc_reset, alloc_reset_bridge(l)); // p060fix/AP
 		// Revision 12: 0x5187c4 no longer jumps to the item-17 bridge (power_lock_bytes); its place stays reserved.
 		return bytes;
 	}

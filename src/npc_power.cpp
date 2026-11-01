@@ -79,6 +79,21 @@ namespace npc_power
 		}
 	}
 
+	namespace
+	{
+		const npc_power_rules::site* first_alloc_mismatch_guarded()
+		{
+			__try
+			{
+				return npc_power_rules::first_alloc_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(npc_power_rules::image_base)));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return npc_power_rules::alloc_calls[0].first;
+			}
+		}
+	}
+
 	bool requested() { return wanted; }
 	bool installed() { return wanted && applied; }
 	bool verified() { return !wanted || applied; }
@@ -152,6 +167,19 @@ namespace npc_power
 			logger::write("npc power rule: no memory for the bridges (error %lu) - %s", GetLastError(), as_before);
 			return;
 		}
+		// p060fix/AP: the brain allocation's slot reset (item 19). E4's 96-slot stage owns the pool's alloc path and resets
+		// the slots through its observer; at stage 0 (stock) and 1 (ActorPools=124, whose W11 cave also resets) the three
+		// pop calls are ours. A pop call that isn't retail refuses the whole rule, as every other site does.
+		const bool own_alloc = actor_ai::installed().stage != 2;
+		if (own_alloc)
+		{
+			if (const site* s = first_alloc_mismatch_guarded())
+			{
+				logger::write("npc power rule: 0x%08lX isn't the retail code (%s) - %s", static_cast<unsigned long>(s->va), s->what, as_before);
+				VirtualFree(memory_block, 0, MEM_RELEASE);
+				return;
+			}
+		}
 		const auto base = static_cast<address>(reinterpret_cast<std::uintptr_t>(memory_block));
 		const auto code = block(base,actor_ai::installed());
 		std::memcpy(memory_block, code.data(), code.size()); // the data page (next press times) stays zero, read-write
@@ -164,7 +192,7 @@ namespace npc_power
 		}
 		const auto l = layout_at(base,actor_ai::installed());
 		const auto picker_retail = retail_bytes(picker_site, 7); // push 4; call 0x50fe50: the call is the last 5
-		const std::vector<xml1_hook_transaction::patch> all{
+		std::vector<xml1_hook_transaction::patch> all{
 			{charge_site.va, retail_bytes(charge_site, charge_site.patched), charge_jump(l)},
 			{recheck_site.va, retail_bytes(recheck_site, recheck_site.patched), recheck_call(l)},
 			{picker_call_va, std::vector<std::uint8_t>(picker_retail.begin() + 2, picker_retail.end()), picker_call(l)},
@@ -203,6 +231,8 @@ namespace npc_power
 			{class_juggernaut_va, sub_bytes(class_category_site, 4, 4), class_juggernaut_bytes()},
 			{danger_room_gate_va, retail_bytes(danger_room_gate_site, 5), danger_room_gate_bytes()},
 		};
+		if (own_alloc)
+			for (const auto& [s, at] : alloc_calls) all.push_back({at, alloc_retail_call(*s), alloc_reset_call(l, at)});
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		applied = xml1_hook_transaction::apply(memory, all, &safe);
@@ -232,8 +262,9 @@ namespace npc_power
 		              "Juggernaut take XML1's classes (0x694f1e, 0x511fb8); no Danger Room reaction gate (0x435b09); "
 		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
 		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
+		              "every AI brain allocation starts with clean side tables (%s); "
 		              "bridges at 0x%08lX; rule 16 revision 14 (NPR14)",
-		              static_cast<unsigned long>(base));
+		              own_alloc ? "0x522e94, 0x5230be, 0x52314f" : "E4's pool observer", static_cast<unsigned long>(base));
 		// "NPR14" is a byte marker as well: the Legends Classic builder requires it in the DLL before it writes
 		// NpcPowerRule=xml1 for a beta 8 build (a 1.8.0-beta.7 DLL runs revision 11; the unreleased 12 / 13 lack it).
 	}
