@@ -598,6 +598,47 @@ int main(int argc, char** argv)
 			      && free96 == 91 && brain_slot_held(three, 32) && !brain_slot_held(three, 33) && !brain_slot_held(three, 95),
 			      "AP: brain_slot_held reads the held words (0,1,2,31 / 32 held; a slot past the words counts as held, so it is never reset)");
 		}
+		{
+			// p060fix/AQ: the join hold's state machine (src/join_in_progress_core.hpp join_hold).
+			using ev = join_hold::event; using role = join_hold::role;
+			check(join_hold_default_seconds == 6 && join_hold_max_seconds == 15 && join_hold_seconds(6) == 6 && join_hold_seconds(0) == 0 && join_hold_seconds(-4) == 0 && join_hold_seconds(16) == 15 && join_hold_seconds(15) == 15,
+			      "AQ: JoinHoldSeconds defaults to 6 (Owen 10-31: 6 s unless the measured longest admission is above; measured 5.27 s) and is clamped to 0..15");
+			join_hold h; check(h.enabled() && h.cap_ms == 6000, "AQ: a default hold caps at 6000 ms");
+			// 1 newcomer, ready before the cap; the restart ends it
+			check(h.begin(role::host, 1, 1000) && h.active() && h.newcomers == 1 && !h.begin(role::host, 1, 1001), "AQ: the host opens one hold (a second open is refused while it lasts)");
+			check(h.poll(2000, 1, 0) == ev::none && h.poll(6999, 1, 0) == ev::none, "AQ: a newcomer still streaming keeps the hold (5999 ms)");
+			check(h.poll(4000, 0, 1) == ev::ready && h.all_ready && h.ready == 1 && h.ready_at == 4000 && h.poll(4500, 0, 1) == ev::none, "AQ: its image in, the hold reports ready once and keeps holding");
+			check(h.poll(7500, 0, 1) == ev::none, "AQ: once every newcomer is ready the cap no longer applies (the native start's 1 s wait follows)");
+			check(h.release(ev::restart, 5000) == ev::restart && !h.active() && h.ended_ms == 4000 && h.ready == 1 && h.last == ev::restart, "AQ: this PC's restart ends it (4000 ms, 1 ready)");
+			check(h.release(ev::restart, 6000) == ev::none && h.poll(9000, 1, 0) == ev::none, "AQ: a closed hold ignores a second release and every poll");
+			// 2 newcomers (the rider), ready only when both are in
+			check(h.begin(role::host, 1, 0) && (h.add_newcomer(), h.newcomers == 2) && std::strcmp(join_hold_text(h.newcomers), "2 players are joining...") == 0, "AQ: the rider joins the open hold: \"2 players are joining...\"");
+			check(h.poll(100, 2, 0) == ev::none && h.poll(200, 1, 1) == ev::none && !h.all_ready && h.poll(300, 0, 2) == ev::ready && h.ready == 2, "AQ: two newcomers: ready only when both images are in");
+			check(h.release(ev::restart, 400) == ev::restart && h.ready == 2, "AQ: two newcomers: the restart ends it, 2 ready");
+			// cap reached (a throttled joiner) at exactly cap_ms, across the tick wrap
+			check(h.begin(role::host, 1, 0xfffff000u) && h.poll(0xfffff000u + 5999u, 1, 0) == ev::none && h.poll(0xfffff000u + 6000u, 1, 0) == ev::cap && !h.active() && h.ended_ms == 6000 && h.ready == 0,
+			      "AQ: the cap ends a hold whose newcomer is not ready at 6000 ms, across the tick wrap (0 ready)");
+			// joiner killed / left: every seat freed ends it; one of two leaving keeps it
+			check(h.begin(role::host, 2, 0) && h.poll(100, 1, 0) == ev::none && h.poll(200, 0, 0) == ev::gone && !h.active(), "AQ: every newcomer gone (seat freed) ends the hold at once");
+			// host Quit / kill: the session's end
+			check(h.begin(role::host, 1, 0) && h.release(ev::session, 1500) == ev::session && h.ended_ms == 1500, "AQ: the session's end (host Quit) ends the hold");
+			// ready but the restart never begins: bounded
+			check(h.begin(role::host, 1, 0) && h.poll(1000, 0, 1) == ev::ready && h.poll(1000 + join_hold_restart_limit_ms - 1, 0, 1) == ev::none && h.poll(1000 + join_hold_restart_limit_ms, 0, 1) == ev::restart_late && !h.active(),
+			      "AQ: every newcomer ready but no restart within 4000 ms: the hold ends (never an endless freeze)");
+			// existing participants (3 / 4 peers): they cannot see the seats; only the cap, their restart or the session end
+			for (int joining = 1; joining <= 3; ++joining)
+			{
+				join_hold m; char what[160];
+				std::snprintf(what, sizeof what, "AQ: an existing participant with %d newcomer(s) holds until its restart (text \"%s\"), never ready by itself", joining, join_hold_text(joining));
+				check(m.begin(role::member, joining, 0) && m.newcomers == joining && m.poll(5999, -1, -1) == ev::none && !m.all_ready && m.release(ev::restart, 4000) == ev::restart && m.ready == joining, what);
+			}
+			{ join_hold m; check(m.begin(role::member, 0, 0) && m.newcomers == 1 && m.poll(6000, -1, -1) == ev::cap, "AQ: a member whose host died is released by the cap (count 0 shows as one player)"); }
+			{ join_hold n; check(!n.begin(role::none, 1, 0) && !n.active(), "AQ: a newcomer (role none) never holds"); }
+			{ join_hold off; off.configure(0); check(!off.enabled() && !off.begin(role::host, 1, 0) && off.poll(10000, 1, 0) == ev::none, "AQ: JoinHoldSeconds=0 never holds (today's path)"); }
+			{ join_hold big; big.configure(40); check(big.cap_ms == 15000, "AQ: JoinHoldSeconds above 15 is clamped to 15 s"); }
+			check(std::strcmp(join_hold_text(1), "A player is joining...") == 0 && std::strcmp(join_hold_text(3), "3 players are joining...") == 0 && std::strcmp(join_hold_text(0), "A player is joining...") == 0,
+			      "AQ: the hold screen text: \"A player is joining...\" / \"N players are joining...\"");
+		}
 		// p060fix/AI S2: the rebuild also runs on the stock pool at stage 1 (the standalone ActorPools=124 install) and on
 		// E4's 96-slot pool at stage 2; any other stage/count pairing is left alone.
 		check(brain_ring_reset_wanted(1, 28, 32) && brain_ring_reset_wanted(2, 91, 96) && !brain_ring_reset_wanted(1, 32, 96) && !brain_ring_reset_wanted(0, 32, 96) && !brain_ring_reset_wanted(3, 96, 96),
@@ -736,7 +777,13 @@ int main(int argc, char** argv)
 		check(party_bound_call + 5 + 0x0000ea9e == party_bound_target, "follow-up 14: the replaced call at 0x4868ad reaches the retail getter 0x495350");
 		for (const auto va : {0x429710u, 0x419f88u, 0x470bb0u, 0x4868a5u})
 			check(std::any_of(guards.begin(), guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 14: the OnAttached override, the set-ground call, FindGround and the party-binding tail are guarded");
-		check(std::none_of(guards.begin(), guards.end(), [](const auto& g) { return g.va <= 0x46f0a9u && 0x46f0a9u < g.va + g.hex.size() / 2; }), "follow-up 14: the world-section gate is no longer guarded (the AE12 hold is gone)");
+		// p060fix/AQ: the world-section gate is guarded again - by the join hold (the AE12 hold stays gone).
+		check(std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va <= world_gate_site && world_gate_site + world_gate_original.size() <= g.va + g.hex.size() / 2; }),
+		      "AQ: one retail guard covers every byte of the world-section gate site 0x46f0a9 (the join hold's only write)");
+		check(world_gate_original.size() == 7 && world_gate_original[0] == 0xf6 && world_gate_original[1] == 0x86 && world_gate_original[2] == 0x28 && world_gate_original[3] == 0x07 && world_gate_original[6] == world_gate_flag_bit,
+		      "AQ: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
+		check(std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va == message_clear; }) && std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va == message_show; }),
+		      "AQ: the native network message show 0x60a600 and expiry 0x60a690 are guarded (slot offsets +0x1c8 / +0x1f8)");
 		// (3) Review S2: a heap-allocated kind object is keyed by its vtable, in-image kinds by their address.
 		event_entry heap_host{}, heap_guest{}, in_image{}, member{};
 		heap_host.time = heap_guest.time = in_image.time = member.time = 2.0f;

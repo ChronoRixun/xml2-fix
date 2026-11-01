@@ -317,6 +317,25 @@ namespace join_in_progress_rules
 	inline constexpr std::array<unsigned char, 6> spawn_entry_original{0x51,0x53,0x55,0x56,0x33,0xf6};
 	// Follow-up 14 (AE15): the AE12 world hold at 0x46f0a9 is gone - rounds 8-10 logged `0 world update(s) skipped`
 	// on every peer in every admission (the world section does not run during the barrier wait).
+	// p060fix/AQ (the join hold): the same gate, now from the host's image capture (an existing participant: the
+	// late-restart 0x47) until this PC's own cohort restart begins, capped by [Online] JoinHoldSeconds. The game update
+	// 0x46eef0 (game vt+0x16c, called from the main-loop iteration 0x401d70 at 0x40235a) runs its whole world section
+	// 0x46f0ca..0x46f60d (the timed-event pump 0x4b2fc0 vt+0xc, countdowns, physics/collision, the camera update, the
+	// smart-entity update 0x46f2df, the AI) behind the 7-byte `test byte ptr [esi+0x728], 2` at 0x46f0a9 and its
+	// `je 0x46f60d` (0x46f094 also jumps to the test; the second gate 0x46f0b6..0x46f0c4 follows). Before the test only
+	// the clock reads, the slow-motion scale (+0x3ec/+0x3fc..+0x40c) and game time +0x3e8 (0x46f079) run; after
+	// 0x46f60d only the epilogue. The scheduler pump 0x401f74 (the network tasks, this module's tick, the native
+	// message timers), the input manager update 0x40219e and rendering stay outside it, so the window stays alive.
+	// A CALL-shape bridge over the test returns ZF=1 (skip) while held and retail's own test otherwise.
+	constexpr std::uint32_t world_gate_site = 0x46f0a9, world_gate_flag_at = 0x728, world_gate_flag_bit = 2;
+	inline constexpr std::array<unsigned char, 7> world_gate_original{0xf6,0x86,0x28,0x07,0x00,0x00,0x02};
+	// The hold screen: the native timed network message (0x60a600, scheduler 0x60b210: three slots of 16 bytes at
+	// +0x1c8 {text, priority, expiry, seconds}, current slot +0x1f8; drawn by the main-loop render path 0x4029f0 and
+	// the menu layer 0x59f7d7 through the getter 0x60a5d0; expired by 0x60a690 from the network message tick 0x60aa7e).
+	// The hold shows its text there and, when it ends, expires it through 0x60a690 if it is still the current one.
+	constexpr std::uint32_t message_clear = 0x60a690, message_slots_at = 0x1c8, message_current_at = 0x1f8, message_slot_bytes = 16,
+		message_slot_count = 3;
+	constexpr std::int32_t join_hold_priority = 6; // above the solo-segment notice (5)
 	// (1) The camera at frame 0. Every round's frame-0 camdump (11 admissions, ae11/ae13/ae14) had 49-74 dwords
 	// differing between the peers after the re-anchor - eye/target/history copies by 0.66 units or a few ULPs -
 	// because vt+0x74 (0x4458a0) takes the party target from the seat manager's vt+0x58 (0x48e120, which reads the
@@ -394,7 +413,10 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t entity_flags_at = 4, entity_flag_bytes = 16, entity_registered_at = 0x6c, entity_registered_bit = 1,
 		world_flag_update_slot = 0x3c, world_flag_members_slot = 0x40, world_flag_record_slot = 0x44, entity_active_flag = 16;
 	constexpr std::uint32_t visibility_cache_clear_slot = 0x38;
-	inline constexpr std::array<guard, 153> guards{{
+	inline constexpr std::array<guard, 156> guards{{
+		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "AQ: game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the second gate's getter call"},
+		{0x46f0b0,"0f8457050000e885ed01008b108bc8ff522884c00f8443050000", "AQ: game update: both world-section gates jump to 0x46f60d (the section's end)"},
+		{0x60a690,"568bf18b86f8010000c1e004c78430c8010000000000008b8ef8010000c1e104c78431cc01000000000000", "AQ: native network message expiry of the current slot (+0x1f8 index, +0x1c8 text, +0x1cc priority)"},
 		{0x464330,"8b4424046bc03c03c132c988883d08010088883f08010033c90558080100b2ff8850e48850e6890889480489480889480c89481089481489481889481cc20400", "AM/ZF: full grid query-cache clear: only invalid extents and zero bitmap, no calls"},
 		{0x686c8c,"30434600", "AM/ZF: grid vt+0x38 is cache clear, not reset/remove"},
 
