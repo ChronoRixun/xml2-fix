@@ -173,6 +173,53 @@ void run_lost_newcomer_fixture() {
     three();join_in_progress::epoch={};join_in_progress::area_load=false;machine.reset();
     std::cout<<"PASS AR-6 (session end): the host's admission and every PC's transport ledger are cleared unconditionally, the hold released\n";
 
+    // ---- AR-7 (p060fix/AR2). Every newcomer lost before the restart (live-060zk ZK-3b1/3b2/3b2r/3b3): the host's cohort sync
+    // ("cohort synchronized", the epoch's end) waits for the host's own first shared frame, as it does when a newcomer reaches
+    // the shared start; with the production observe_epoch after the restart entry, the zone's end and frame 0 ----
+    {
+        put(local,0x18,0);put(remote,0x18,1);three();admit(1);
+        join_in_progress::newcomer_lost_decided(1);lose_remote();
+        put(m,manager_wait,static_cast<unsigned char>(0));put(m,manager_sender,0u);
+        join_in_progress::guarded_advance(false,nullptr); // the seat is free: no newcomer is left (machine.holding() false)
+        assert(!machine.any() && !machine.holding());
+        join_in_progress::restart_frame0_seen=true;join_in_progress::host_sync_wait_since=77;join_in_progress::host_sync_wait_logged=true; // stale: the entry resets them
+        auto& e=join_in_progress::epoch;e.active=true;e.requested=true;e.started=false;
+        join_in_progress::existing_cohort_member=true;join_in_progress::deferred_start_task=0;join_in_progress::late_restart=false;
+        auto at7=observed_jip_logs.size();
+        join_in_progress::deferred_campaign_start(nullptr); // the production restart entry (host, no newcomer left)
+        HOLD_EXPECT(at7,"join in progress: the cohort restart goes on without 1 newcomer(s) lost before it (mask 0x2)");
+        assert(!join_in_progress::restart_frame0_seen && !join_in_progress::host_sync_wait_since && !join_in_progress::host_sync_wait_logged);
+        // the native campaign start and its zone load were observed; the pump's controls resume is consumed here (no native call)
+        e.start();e.observe(true,false);assert(e.resume_controls(true));
+        join_in_progress::existing_cohort_member=true;hold_loading=false;
+        // the zone's end: before AR2 the host synced here, ~70 ms before its frame 0; now its epoch stays until frame 0
+        at7=observed_jip_logs.size();
+        join_in_progress::observe_epoch();
+        assert(e.active && e.started);
+        HOLD_EXPECT(at7,"join in progress: no newcomer is left in this restart - this PC (host) keeps the cohort epoch until its first shared frame, as when a newcomer reaches the shared start (cap 10000 ms)");
+        assert(!hold_logged(at7,"cohort synchronized"));
+        join_in_progress::observe_epoch();join_in_progress::observe_epoch(); // every later pump before frame 0: still held, logged once
+        assert(e.active && !hold_logged(at7,"cohort synchronized"));
+        { unsigned kept=0;for(std::size_t i=at7;i<observed_jip_logs.size();++i) if(observed_jip_logs[i].find("keeps the cohort epoch until its first shared frame")!=std::string::npos) ++kept;assert(kept==1); }
+        // the first shared frame (the production frame gate sets the flag at its reseed); the next pump synchronizes, as with a newcomer
+        join_in_progress::restart_frame0_seen=true;
+        at7=observed_jip_logs.size();
+        join_in_progress::observe_epoch();
+        assert(!e.active);
+        HOLD_EXPECT(at7,"join in progress: cohort synchronized; checksum protection resumed");
+        // an existing GUEST with no newcomer left syncs at the zone's end as before (passing runs: before its frame 0)
+        put(local,0x18,2); // the fixture's local record is now a guest (host = the local record at index 0)
+        e.begin();e.start();e.observe(true,false);assert(e.resume_controls(true));
+        join_in_progress::restart_frame0_seen=false;join_in_progress::host_sync_wait_since=0;join_in_progress::host_sync_wait_logged=false;
+        at7=observed_jip_logs.size();
+        join_in_progress::observe_epoch();
+        assert(!e.active && !hold_logged(at7,"keeps the cohort epoch"));
+        HOLD_EXPECT(at7,"join in progress: cohort synchronized; checksum protection resumed");
+        put(local,0x18,0);
+        three();join_in_progress::epoch={};join_in_progress::area_load=false;machine.reset();join_in_progress::existing_cohort_member=false;
+        std::cout<<"PASS AR-7 (AR2, host, every newcomer lost before the restart): the production restart entry resets the rule, the zone's end keeps the host's epoch (logged once), its first shared frame lets the next pump synchronize; an existing guest syncs at the zone's end as before\n";
+    }
+
     // restore the shared fixture state for the blocks after this one
     put(s,0x26c,nodes[0]);put(s,0x278,2u);put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);put(nodes[1],node_next,static_cast<void*>(nullptr));
     join_in_progress::owed_start=&join_in_progress::start_image;join_in_progress::state=was_state;
