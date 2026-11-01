@@ -341,10 +341,10 @@ On an existing participant, the newcomer count comes from the mesh: each `new me
 **The cap's default: 6 s.** Owen's rule (10-31): the default is 6, rounded up only if the longest measured
 admission-to-ready time is above 6 s. Measured over every late admission in the live-060zd/ze/zf/zg host logs, from the
 image capture to every newcomer having the image (the host's `cohort start announced`):
-- 54 admissions where the joiner lived;
+- 56 admissions where the joiner lived (the evidence as of 2026-10-31 21:22, including live-060zg's ZG-2P-E2 and ZG-2PC-E1);
 - longest 5272 ms (ZE-4PE2p: 4 peers, probed, two-PC), next 5163 ms (ZF-3P-E2c);
-- one-PC 3463..4334 ms, two-PC 3842..5272 ms;
-- the three joiner-kill runs (ZD-JK, ZF-JK, ZF-JK-cont: 20199 ms) are the case the cap exists for.
+- one-PC 3463..4431 ms (9), two-PC 3842..5272 ms (47); 2 peers 3463..4431, 3 peers 3842..5163, 4 peers 4139..5272;
+- the two joiner-kill runs (ZD-JK, ZF-JK; ZF-JK-cont is the same log continued: 20199 ms) are the case the cap exists for.
 
 The default therefore stays 6. The measurement script and its table are in the p060fix-AQ work folder.
 
