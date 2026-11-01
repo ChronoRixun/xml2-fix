@@ -40,7 +40,19 @@ namespace game_version { void refuse_startup() { assert(false); } }
 namespace gameplay_agreement {
 bool register_rule(std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>,bool) { assert(false);return false; }
 }
-namespace gns_transport { bool requested() { return false; } bool installed() { return false; } }
+namespace gns_transport {
+bool requested() { return false; } bool installed() { return false; }
+unsigned fixture_boundary_announcements=0,fixture_boundary_services=0;
+std::uint16_t fixture_boundary_frame=0;
+std::uint8_t fixture_announced_mask=0;
+std::uint8_t fixture_boundary_mask=4;
+bool fixture_boundary_ready=true;
+void (*fixture_boundary_service)()=nullptr;
+void announce_join_boundary(std::uint16_t frame,std::uint8_t mask) { fixture_boundary_frame=frame;fixture_announced_mask=mask;++fixture_boundary_announcements; }
+bool poll_join_boundary(std::uint16_t,std::uint8_t& mask) { mask=fixture_boundary_mask;return fixture_boundary_ready; }
+void service_join_boundary() { ++fixture_boundary_services;if(fixture_boundary_service) fixture_boundary_service(); }
+void clear_join_boundaries() {}
+}
 namespace xml1_turrets { std::uint32_t fixture_hook = 0; unsigned fixture_epochs = 0; std::uint32_t installed_process_hook() { return fixture_hook; } void cohort_epoch(float) { ++fixture_epochs; } digest probe_digest(unsigned) { return {}; } }
 namespace actor_pools { std::vector<std::uint8_t> fixture_controller_reset; const std::vector<std::uint8_t>& installed_controller_reset() { return fixture_controller_reset; } }
 namespace e4_core { bool fixture_installed = false; bool installed() { return fixture_installed; } }

@@ -2,6 +2,7 @@
 #include "network_validation.hpp"
 #include "gns_transport_rules.hpp"
 #include "gameplay_capabilities.hpp"
+#include "online_removal_core.hpp"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -269,6 +270,32 @@ int main(int argc, char** argv)
 		const auto keepalive = parse(&ping, 1);
 		const std::uint8_t garbage = 0xee;
 		const auto invalid = parse(&garbage, 1);
+		// AQ3: the host's reliable area-boundary decision bypasses native gameplay dispatch during the load.
+		const std::uint8_t admission[]{10,0x34,0x12,0x0c,0xa3};
+		const auto boundary = parse(admission,sizeof admission);
+		check(admission[0]!=online_party_core::kind_report && admission[0]!=online_party_core::kind_table &&
+			admission[0]!=online_removal_core::link_kind && admission[0]!=16,
+			"AQ3: encoded admission cannot be intercepted by room party/removal/restore lanes");
+		check(boundary.valid && unsigned(boundary.k)==10 && boundary.frame==0x1234 && boundary.index==0x0c,
+			"AQ3: area-boundary admission carries the host frame and all newcomer seats");
+		const std::uint8_t bad_admission[]{10,0x34,0x12,0x01,0xa3};
+		check(!parse(admission,4).valid && !parse(bad_admission,sizeof bad_admission).valid,
+			"AQ3: truncated admission and a newcomer mask including the host are refused");
+		check(join_boundary_authorized(true,true,0) && !join_boundary_authorized(false,true,0) &&
+			!join_boundary_authorized(true,false,0) && !join_boundary_authorized(true,true,1) && !join_boundary_authorized(true,true,-1),
+			"AQ3: only a bound host's reliable admission decision is accepted");
+		for(const std::uint8_t seats : std::array<std::uint8_t,4>{0,2,6,14}) {
+			const auto wire=join_boundary(65535,seats);const auto p=parse(wire.data(),wire.size());
+			check(p.valid && p.frame==65535 && p.index==seats,"AQ3: ordinary load and 1-3 newcomer masks round-trip at frame wrap");
+		}
+		join_boundary_queue decisions;std::uint8_t seats=0xff;
+		decisions.push(65535,2);decisions.push(0,6);decisions.push(0,14);
+		check(!decisions.take(1,seats) && seats==0xff && decisions.take(65535,seats) && seats==2 &&
+			decisions.take(0,seats) && seats==14 && !decisions.take(0,seats),
+			"AQ3: decisions match the exact frame across wrap, duplicate frames update, and consumption is once");
+		for(unsigned i=0;i<20;++i) decisions.push(std::uint16_t(i),2);
+		check(decisions.decisions.size()==8 && !decisions.take(11,seats) && decisions.take(12,seats),
+			"AQ3: stale admission decisions are bounded to eight frames");
 		check(!tunnel_message_allowed(false, game) && !tunnel_message_allowed(false, keepalive) && !tunnel_message_allowed(false, invalid) &&
 		      tunnel_message_allowed(false, hello_message) && tunnel_message_allowed(false, ack),
 		      "unbound tunnel: only hello/hello_ack control messages are retained");

@@ -635,6 +635,12 @@ int main(int argc, char** argv)
 			}
 			{ join_hold m; m.configure(6); check(m.begin(role::member, 0, 0) && m.newcomers == 1 && m.poll(6000, -1, -1) == ev::cap, "AQ: a member whose host died is released by the cap (count 0 shows as one player)"); }
 			{ join_hold n; check(!n.begin(role::none, 1, 0) && !n.active(), "AQ: a newcomer (role none) never holds"); }
+			{ join_hold m; m.configure(6); check(m.arm(role::member, 1, 0) && m.poll(9999, -1, -1)==ev::none && m.poll(10000, -1, -1)==ev::cap,
+				"AQ3: an existing peer whose zone/restart never arrives is released within its cap plus the 4 s safety limit"); }
+			{ join_hold m; m.configure(6); check(m.arm(role::member,1,0) && m.open(9000) && m.poll(10000,-1,-1)==ev::cap,
+				"AQ3: opening a delayed member hold cannot renew the absolute admission safety deadline"); }
+			{ join_hold m; m.configure(6); check(m.arm(role::member,1,0) && !m.open(10000) && m.poll(10000,-1,-1)==ev::cap,
+				"AQ3: a member already past its admission deadline cannot reopen at the zone-load end"); }
 			{ join_hold off; off.configure(0); check(!off.enabled() && !off.begin(role::host, 1, 0) && off.poll(10000, 1, 0) == ev::none, "AQ: JoinHoldSeconds=0 never holds (today's path)"); }
 			{ join_hold big; big.configure(40); check(big.cap_ms == 15000, "AQ: JoinHoldSeconds above 15 is clamped to 15 s"); }
 			check(std::strcmp(join_hold_text(1), "A player is joining...") == 0 && std::strcmp(join_hold_text(3), "3 players are joining...") == 0 && std::strcmp(join_hold_text(0), "A player is joining...") == 0,

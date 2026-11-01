@@ -329,6 +329,11 @@ namespace join_in_progress_rules
 	// A CALL-shape bridge over the test returns ZF=1 (skip) while held and retail's own test otherwise.
 	constexpr std::uint32_t world_gate_site = 0x46f0a9, world_gate_flag_at = 0x728, world_gate_flag_bit = 2;
 	inline constexpr std::array<unsigned char, 7> world_gate_original{0xf6,0x86,0x28,0x07,0x00,0x00,0x02};
+	// AQ3: the main loop UNPAUSES the simulation clock BEFORE the update samples it at 0x46f079. Retain the native
+	// load pause while held. Replace this complete 12-byte call block; the next game getter is live.
+	constexpr std::uint32_t hold_clock_site = 0x402345, hold_stall_message_call = 0x4029f0, native_stall_message = 0x60a5d0;
+	inline constexpr std::array<unsigned char, 12> hold_clock_original{0xe8,0xc6,0x92,0x15,0x00,0x8b,0x10,0x8b,0xc8,0xff,0x52,0x20};
+	inline constexpr std::array<unsigned char, 5> hold_stall_message_original{0xe8,0xdb,0x7b,0x20,0x00};
 	// The hold screen: the native timed network message (0x60a600, scheduler 0x60b210: three slots of 16 bytes at
 	// +0x1c8 {text, priority, expiry, seconds}, current slot +0x1f8; drawn by the main-loop render path 0x4029f0 and
 	// the menu layer 0x59f7d7 through the getter 0x60a5d0; expired by 0x60a690 from the network message tick 0x60aa7e).
@@ -413,7 +418,9 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t entity_flags_at = 4, entity_flag_bytes = 16, entity_registered_at = 0x6c, entity_registered_bit = 1,
 		world_flag_update_slot = 0x3c, world_flag_members_slot = 0x40, world_flag_record_slot = 0x44, entity_active_flag = 16;
 	constexpr std::uint32_t visibility_cache_clear_slot = 0x38;
-	inline constexpr std::array<guard, 156> guards{{
+	inline constexpr std::array<guard, 158> guards{{
+		{0x402345,"e8c69215008b108bc8ff5220e88ab90600", "AQ3: main-loop simulation clock unpause before the game update"},
+		{0x4029f0,"e8db7b200085c07510e8024320008a480684c90f8447010000", "AQ3: native stall renders only with a network message or its forced-draw byte"},
 		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "AQ: game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the second gate's getter call"},
 		{0x46f0b0,"0f8457050000e885ed01008b108bc8ff522884c00f8443050000", "AQ: game update: both world-section gates jump to 0x46f60d (the section's end)"},
 		{0x60a690,"568bf18b86f8010000c1e004c78430c8010000000000008b8ef8010000c1e104c78431cc01000000000000", "AQ: native network message expiry of the current slot (+0x1f8 index, +0x1c8 text, +0x1cc priority)"},

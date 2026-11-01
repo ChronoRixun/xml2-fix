@@ -28,6 +28,11 @@
 #include <string>
 #include <vector>
 
+static_assert(std::uint8_t(gns_transport_core::kind::join_boundary) != online_party_core::kind_report &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != online_party_core::kind_table &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != online_removal_core::link_kind &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != 16, "admission controls must reach GNS past room party/removal/restore routing");
+
 #if XML2_FIX_GNS
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
@@ -72,6 +77,7 @@ namespace gns_transport
 			std::uint16_t sequence = 0; // the next native reliable sequence the GNS messages continue
 			gns_transport_core::outbox out;
 			gns_transport_core::inbox in;
+			gns_transport_core::join_boundary_queue join_boundaries;
 			DWORD opened = 0, bound_at = 0, hello_at = 0;
 			std::uint64_t sent = 0, received = 0, sent_bytes = 0, received_bytes = 0, deferred = 0, delivered = 0;
 			DWORD reported = 0, keepalive_at = 0, last_rx = 0, max_gap = 0;
@@ -573,6 +579,12 @@ namespace gns_transport
 				return;
 			}
 			if (l.tunnel && !l.bound) return; // nothing of the game's before the pair is bound
+			if (p.k == gns_transport_core::kind::join_boundary)
+			{
+				if (gns_transport_core::join_boundary_authorized(l.bound, (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0, participant_index(l)))
+					l.join_boundaries.push(p.frame, std::uint8_t(p.index));
+				return;
+			}
 			if (p.k == gns_transport_core::kind::keepalive)
 			{
 				// The adapter's own keepalive (every 100 ms from a running transport): the native last-receive time
@@ -1660,6 +1672,39 @@ namespace gns_transport
 		}
 	}
 
+	void announce_join_boundary(std::uint16_t frame, std::uint8_t newcomers)
+	{
+		if (!ready) return;
+		const auto wire = gns_transport_core::join_boundary(frame, newcomers);
+		for (auto& item : links)
+		{
+			auto& l = *item;
+			const int index = participant_index(l);
+			if (!l.closed && l.bound && index > 0 && index < 4 && !(newcomers & (1u << index)))
+				if (!send_now(l, wire, true))
+					logger::write("join hold: the admission decision for frame %u could not be sent to player %d; its boundary wait remains bounded", unsigned(frame), index);
+		}
+	}
+	bool poll_join_boundary(std::uint16_t frame, std::uint8_t& newcomers)
+	{
+		for (auto& item : links)
+			if (!item->closed && item->bound && participant_index(*item) == 0 && item->join_boundaries.take(frame, newcomers)) return true;
+		return false;
+	}
+	void service_join_boundary()
+	{
+		if (!ready || !manager_) return;
+		// No enter(), native parser/drain, vanished_links(), or JIP tick while the loader's stack is live. Ordinary
+		// gameplay is only queued by received(); the admission control is consumed directly on the proven host link.
+		sockets()->RunCallbacks();
+		online_room::tick();
+		receive(manager_);
+		flush();
+	}
+	void clear_join_boundaries()
+	{
+		for (auto& item : links) item->join_boundaries.decisions.clear();
+	}
 	void install(HMODULE game)
 	{
 		using namespace gns_transport_rules;
@@ -1848,6 +1893,10 @@ namespace gns_transport
 #else
 namespace gns_transport
 {
+	void announce_join_boundary(std::uint16_t, std::uint8_t) {}
+	bool poll_join_boundary(std::uint16_t, std::uint8_t&) { return false; }
+	void service_join_boundary() {}
+	void clear_join_boundaries() {}
 	bool party_snapshot(party_facts& out) { out = {}; return false; }
 	bool remove_member(unsigned) { return false; }
 	bool deliver_removal(unsigned) { return false; }

@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <iterator>
+#include <utility>
 #include <vector>
 
 namespace gns_transport_core
@@ -114,12 +116,42 @@ namespace gns_transport_core
 	constexpr bool fragment_opcode(std::uint8_t opcode) { return opcode == 0x12 || opcode == 0x13; }
 
 	// GNS payload framing: one kind byte, then for a game message the opcode and the body.
-	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6 };
+	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6, join_boundary = 10 };
 	constexpr std::uint32_t keepalive_ms = 100; // flush_link and unbound room tunnels use the same heartbeat
 	constexpr std::uint32_t hello_magic = 0x31534e47; // "GNS1"
 	constexpr std::size_t hello_size = 1 + 4 + 4 + 2;
 	// A stock 0x50a datagram carries at most a 0x505 reliable body (opcode, length and sequence excluded).
 	constexpr std::size_t max_game_body = 0x505, max_datagram_body = 1500;
+	// AQ3: a reliable control frame, separate from native gameplay dispatch. The host publishes a decision even
+	// when no newcomer is admitted (mask 0), so a guest can wait BEFORE loading and before that frame's world gate.
+	inline std::vector<std::uint8_t> join_boundary(std::uint16_t frame, std::uint8_t seats)
+	{
+		return {std::uint8_t(kind::join_boundary), std::uint8_t(frame), std::uint8_t(frame >> 8), seats, 0xa3};
+	}
+	inline bool join_boundary_authorized(bool bound, bool reliable, int sender_index)
+	{
+		return bound && reliable && sender_index == 0;
+	}
+	struct join_boundary_queue
+	{
+		std::deque<std::pair<std::uint16_t, std::uint8_t>> decisions;
+		void push(std::uint16_t frame, std::uint8_t seats)
+		{
+			for (auto& d : decisions) if (d.first == frame) { d.second = seats; return; }
+			if (decisions.size() == 8) decisions.pop_front();
+			decisions.emplace_back(frame, seats);
+		}
+		bool take(std::uint16_t frame, std::uint8_t& seats)
+		{
+			for (auto i = decisions.begin(); i != decisions.end(); ++i) if (i->first == frame)
+			{
+				seats = i->second;
+				decisions.erase(decisions.begin(), std::next(i));
+				return true;
+			}
+			return false;
+		}
+	};
 
 #define GNS_TRANSPORT_OPCODE_VALIDATOR 1
 	using opcode_length_validator = bool(*)(std::uint8_t opcode, std::size_t length);
@@ -255,6 +287,12 @@ namespace gns_transport_core
 		}
 		else if (p.k == kind::keepalive && size == 1)
 			p.valid = true;
+		else if (p.k == kind::join_boundary && size == 5)
+		{
+			p.frame = std::uint16_t(data[1] | (std::uint16_t(data[2]) << 8));
+			p.index = data[3]; // newcomer seat mask (0 means an ordinary area load)
+			p.valid = data[4] == 0xa3 && (p.index & ~0x0eu) == 0;
+		}
 		else if (p.k == kind::datagram && size >= datagram_header && size - datagram_header <= max_datagram_body)
 		{
 			std::memcpy(&p.port, data + 1, 2);
