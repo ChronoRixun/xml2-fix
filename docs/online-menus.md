@@ -1995,7 +1995,12 @@ reject late results. Failure of the lookup preserves the original refusal instea
 `session_started` is presentation context only. The diagnostic remains `join: room_not_joinable` and launcher status
 remains `room_closed` (contract v1.5). No gameplay rule, framing, capability marker or release identity changes. Older
 assets without the dedicated scene use the existing generic scene with Retry hidden. LC must be rebuilt with the companion
-scene for the specific copy. Private rooms cannot be distinguished through the public list; they retain the retry copy.
+scene for the specific copy. Private rooms cannot be distinguished through the public list; fix AN2 therefore keeps
+a started private room with DROP-IN off resolvable at the broker (while rule 26's started refusal is installed), so its
+code join reaches the host and shows the native notice `lc_notice_started` ("This session has started; ask the host to
+return to the lobby") through the tagged 0x1c refusal instead
+([online-rooms.md](online-rooms.md#started-private-rooms-with-drop-in-off-fix-an2)). A private room still refused by the
+broker (native posting, full, no installed refusal) keeps the retry copy.
 This remains an inference from this client's advertisement, not a broker-supplied refusal reason. Protocol 2 has no
 policy bit or host-advert timestamp: a host stalled beyond its normal presence interval can still leave stale metadata.
 The confirmation stays within the original deadline; if there is insufficient time, the retry copy wins.

@@ -57,6 +57,20 @@ int main()
 	check(b::current(m, "", level, s, true, 2).joinable, "started with drop-in (JoinInProgress) and a free seat: joinable");
 	check(!b::current(m, "", level, s, true, 4).joinable, "full (4 of 4): not joinable");
 	check(!b::current(base, "", menus, b::room_state{}, false, 4).joinable, "full before the start: not joinable");
+	// Fix AN2: the drop-in the room advertises. Public rooms follow the host's choice; a private room with the host's
+	// started refusal installed stays resolvable after the start, so the code join reaches that refusal.
+	check(!b::advertised_drop_in(true, false, true) && b::advertised_drop_in(true, true, true), "AN2: public room advertises the host's DROP-IN choice");
+	check(b::advertised_drop_in(false, false, true), "AN2: private room, DROP-IN off, host refusal installed: resolvable");
+	check(!b::advertised_drop_in(false, false, false) && !b::advertised_drop_in(true, false, false), "AN2: no installed host refusal: DROP-IN off stays unjoinable");
+	check(b::advertised_drop_in(false, true, true), "AN2: private room, DROP-IN on: joinable as before");
+	{
+		room_metadata priv_base = base; priv_base.public_room = false;
+		const bool priv = b::advertised_drop_in(false, false, true), pub = b::advertised_drop_in(true, false, true);
+		check(b::current(priv_base, "", level, s, priv, 2).joinable && b::current(priv_base, "", level, s, priv, 2).in_progress, "AN2: started private room, DROP-IN off: in progress and joinable at the broker");
+		check(!b::current(m, "", level, s, pub, 2).joinable, "AN2: started public room, DROP-IN off: not joinable (Browse row unchanged)");
+		check(!b::current(priv_base, "", level, s, priv, 4).joinable, "AN2: started private room, full: not joinable");
+		check(b::current(priv_base, "", menus, b::room_state{}, priv, 1).joinable && !b::current(priv_base, "", menus, b::room_state{}, priv, 4).joinable, "AN2: private lobby unchanged (free seat joinable, full not)");
+	}
 	auto between = b::current(m, "", b::game_view{"menu/main_back", "", "Logan", false, true}, s, true, 2);
 	check(between.zone == "nyc/alison/nyc1_1_3" && between.zone_name == "East Manhattan" && between.in_progress, "menus after the start keep the last level and in_progress (latched)");
 	auto dr = b::current(m, "", b::game_view{"danger/danger_room", "", "Logan", true, true}, s, true, 2);

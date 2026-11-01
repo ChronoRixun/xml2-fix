@@ -75,5 +75,9 @@ the room (plain UDP, no NAT traversal or relay). Connect by IP with any non-addr
 
 
 Fix AN keeps `room_not_joinable` mapped to `room_closed` for both transient and started/drop-in-off refusals. A fresh public
-listing may select the more specific in-game scene; that presentation detail adds no status field or error id. See
+listing may select the more specific in-game scene; that presentation detail adds no status field or error id.
+Fix AN2: a started private room with DROP-IN off is no longer refused by the broker (it stays resolvable while the host's
+started refusal is installed); that join resolves and then ends at the host's native refusal (in-game notice
+`lc_notice_started`), so the status file no longer shows `room_closed` for it - the same path as 060y's host refusal and any
+other host-side admission refusal. No status field or error id is added. See
 [the client decision rule](online-menus.md#code-refusal-after-the-session-started-fix-an).

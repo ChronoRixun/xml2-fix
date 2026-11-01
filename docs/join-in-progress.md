@@ -46,6 +46,7 @@ Transport = gns        ; required (rule 25); rooms (Host=broker / JoinCode) impl
 JoinInProgress = 1     ; every PC of the session must set it (rule 26 JoinInProgress)
 LateJoin = 0           ; safe default: admission only before lobby START
 ; LateJoin = 1         ; experimental shared restore; host setting / Host setup DROP-IN row
+JoinHoldSeconds = 6    ; p060fix/AQ: hold the host and existing peers while a newcomer gets the image (0..15, 0 = off)
 ```
 
 Without `Transport=gns` the key is refused by name in the log ("needs [Online] Transport=gns (rule 25 GnsTransport)")
@@ -274,6 +275,94 @@ bound/switched/native-send-pending; four-period owner snapshots include active,
 pending and native-send backlog. The earlier same-frame checksum variant still
 requires live component comparison; LateJoin=0 remains the release recommendation.
 
+## Join hold: "A player is joining..." (`[Online] JoinHoldSeconds`, p060fix/AQ)
+
+Owen 2026-10-31: hold the host instead of letting it play on and then replaying those seconds after the restart.
+
+**The problem.** The late admission's image is captured at the zone load (`start_image`). The host then kept simulating
+alone until its own cohort restart while the image streamed to the newcomer. The restart reloads every game byte from
+the image, so the host REPLAYED those seconds (deja vu). Any per-process state outside the image that changed in that
+window differed on the host alone. Example from live-060zg ZG-C-3Pp2: 4.36 s of game time, 493 draws and seven hits
+ran on the host only. AP's NPC power slots were one such case (npc-power-rule.md item 23); p060fix-AP section 3 lists
+the suspected others.
+
+**The hold.** Between the image capture and this PC's restart, the game update's world section is skipped. That
+section is 0x46f0ca..0x46f60d inside 0x46eef0, behind `test byte ptr [esi+0x728], 2` at 0x46f0a9. It contains:
+- the timed-event pump, so every actor update and AI think;
+- countdowns, physics and collision;
+- the camera update;
+- the dormant-entity update (0x46f2df).
+
+A CALL-shape bridge replaces the 7-byte test (call rel32 + 2 nops). With the hold off it runs retail's own test. With
+the hold on it returns ZF=1, the flags of the test with the bit clear, so the site's `je 0x46f60d` skips the section.
+Each skip is counted. This is the gate of the retired AE12 world hold, now used for a different window.
+
+What keeps running, so the window stays alive and never shows "not responding":
+- the main-loop iteration 0x401d70 with its message pump;
+- the scheduler 0x401f74: the network tasks, the native image sender, this module's tick, the native message timers;
+- the input manager update 0x40219e;
+- rendering, which draws the frozen scene.
+
+Who holds, and from when:
+- **The host**, from its image capture: `start_image` right after the native campaign start succeeded. A second
+  newcomer admitted at the same zone load rides the transfer and joins the open hold.
+- **Every existing participant**, from the late-restart 0x47: `campaign_notice` with the `"LJ"` marker and
+  `existing_cohort_member`. In the 060zg logs those peers already stopped there (the lobby guest's game time froze);
+  the hold makes it explicit and shows them the message.
+- **Never** the newcomer (it is loading the image), a lobby START (no marker), or `JoinHoldSeconds=0`. With 0 the
+  gate is not even written.
+
+How it ends:
+1. **This PC's restart begins.** `deferred_campaign_start` ends the hold first thing, before any native call. Log:
+   `join hold: N ms, M newcomer(s) ready - this PC's cohort restart begins (K world update(s) skipped while held;
+   frame F -> F, synchronized draws D -> D, game time T -> T)`. Equal draws mean no draw ran during the hold.
+   On the host, the newcomers are ready when no admitted seat is still `adding`/`streaming`, i.e. every image is in.
+   That moment is logged as `join hold: every newcomer is ready after N ms ...`. The native start then waits a fixed
+   1 s inside the image sender task (0x60814b: `0x60a920(1.0)`, a blocking network wait) before 0x5f3c20. The hold
+   covers that second too, bounded by `join_hold_restart_limit_ms` = 4000 (`... did not begin within 4000 ms`).
+2. **The cap.** A newcomer not ready `JoinHoldSeconds` after the hold opened ends it: `join hold: cap reached after N
+   ms (R of M newcomer(s) ready) - this PC simulates again until the restart, as without the hold; the newcomer is not
+   refused`. Nothing else changes: the seat, the transfer and the restart continue as before. An existing participant
+   cannot see the seats, so only its restart or its cap ends its hold. A member whose host died is released by its
+   cap, and the host-left path (5003) runs as before.
+3. **Every newcomer of the hold left** (seat freed): `join hold: ended after N ms - every newcomer of this hold left`.
+   A killed joiner's seat is only freed when the native removal runs, about 20 s later in ZD-JK/ZF-JK, so the cap
+   ends that hold first.
+4. **The session's end** (host Quit, back to the front end): `join hold: ended after N ms by the session's end`.
+
+**The screen.** The game's own timed network message (0x60a600) shows `A player is joining...`, or `2 players are
+joining...` / `3 players are joining...`. It is the same on-screen notice the game uses for `PLAYER_LAG1/2` and the
+solo-segment text. It has priority 6 (above the solo-segment notice) and a duration of cap + 4 s. The main-loop
+render path (0x4029f0) and the menu layer (0x59f7d7) draw it through 0x60a5d0. The hold expires it through the native
+0x60a690 when it ends. There is no logo, no art and no new LC asset.
+
+On an existing participant, the newcomer count comes from the mesh: each `new mesh participant` since its last restart.
+
+**The cap's default: 6 s.** Owen's rule (10-31): the default is 6, rounded up only if the longest measured
+admission-to-ready time is above 6 s. Measured over every late admission in the live-060zd/ze/zf/zg host logs, from the
+image capture to every newcomer having the image (the host's `cohort start announced`):
+- 56 admissions where the joiner lived (the evidence as of 2026-10-31 21:22, including live-060zg's ZG-2P-E2 and ZG-2PC-E1);
+- longest 5272 ms (ZE-4PE2p: 4 peers, probed, two-PC), next 5163 ms (ZF-3P-E2c);
+- one-PC 3463..4431 ms (9), two-PC 3842..5272 ms (47); 2 peers 3463..4431, 3 peers 3842..5163, 4 peers 4139..5272;
+- the two joiner-kill runs (ZD-JK, ZF-JK; ZF-JK-cont is the same log continued: 20199 ms) are the case the cap exists for.
+
+The default therefore stays 6. The measurement script and its table are in the p060fix-AQ work folder.
+
+Logs: `join hold: [Online] JoinHoldSeconds=6 - ...` at install (or `join hold: off ...`), `join hold: the game
+simulation is held on this PC (host|existing participant) from ...: N newcomer(s), cap C ms ...; frame F, synchronized
+draws D, game time T; ... shows "A player is joining..."`, then one of the end lines above. The value is a per-PC
+choice, not part of the gameplay agreement: a hold only skips frames that the restart replaces.
+
+Tests: `xml2_join_in_progress_test` (the `join_hold` state machine: 1 and 2 newcomers, ready before the cap, the cap
+across the tick wrap, every newcomer gone, the session's end, the restart limit, members with 1..3 newcomers, off,
+the clamp, the texts, the guards). `xml2_join_in_progress_boundary_test <retail> restart` covers:
+- the bridge entered by CALL exactly as installed;
+- the hold opened through the production entries (the host's capture; a member through the production
+  `campaign_notice`);
+- the production pump poll and the production `deferred_campaign_start`, whose stubbed native campaign start records
+  that the hold was already released and that no world step or draw ran between the capture and the restart;
+- the real retail 0x60a600 / 0x60a690 on a synthetic scheduler and clock.
+
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 
 The late admission already reloads EVERY peer from one campaign image: the host
@@ -390,8 +479,10 @@ frame and reports every term; `xml2_join_in_progress_boundary_test <retail exe>
 restart` runs the bridges and the real retail seed setter on the mapped image.
 Room listings now advertise a started room as joinable exactly when the host
 admits late joiners (`late_join_enabled()`), so Browse and the broker's
-`room_not_joinable` agree with the host's DROP-IN choice; a code join to a
-started room with DROP-IN off is refused before the tunnel. Fix AN asks for a fresh public listing on that refusal:
+`room_not_joinable` agree with the host's DROP-IN choice for PUBLIC rooms; a code join to a
+started public room with DROP-IN off is refused before the tunnel. Fix AN2: a private room (never listed) stays
+resolvable after the start while this refusal is installed, so its code join reaches `LateJoinPolicyV1` and shows
+"This session has started; ask the host to return to the lobby" ([online-rooms.md](online-rooms.md#started-private-rooms-with-drop-in-off-fix-an2)). Fix AN asks for a fresh public listing on that refusal:
 a matching started, unjoinable row with a known free seat shows "This session has started. Ask the host to return to the
 lobby." Private or inconclusive listings retain "Not taking players right now. Try again soon." The existing native
 refusal notice remains available after the tunnel; see [the decision rule](online-menus.md#code-refusal-after-the-session-started-fix-an).

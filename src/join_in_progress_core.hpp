@@ -348,6 +348,87 @@ namespace join_in_progress_core
 	// sender images every participant and the 0x26 broadcast restarts the cohort once every image is in); only a
 	// sender that is not this late restart's refuses the image.
 	inline bool image_rides_running_transfer(bool sender_running, bool late_restart) { return sender_running && late_restart; }
+
+	// p060fix/AQ: the join hold ([Online] JoinHoldSeconds, default 6, 0..15, 0 = off). From the host's image capture
+	// (and an existing participant's late-restart 0x47) until this PC's own cohort restart begins, the game update's
+	// world section is skipped, so no peer runs game frames the image does not contain (live-060zg ZG-C-3Pp2: the
+	// host simulated 4.36 s alone, 493 draws, seven hits, between the capture and the restart). The window stays alive
+	// (main loop, scheduler, network, rendering, the native network message "A player is joining..."). The cap bounds
+	// the wait for the newcomers' images only: once every newcomer is ready (the host saw every image arrive) the hold
+	// lasts to the restart, which the native start reaches after its fixed 1 s network wait (0x60814b: 0x60a920(1.0)),
+	// bounded by restart_limit_ms. At the cap, or when every newcomer left, the PC simulates as before the hold.
+	inline constexpr int join_hold_default_seconds = 6, join_hold_max_seconds = 15;
+	inline constexpr std::uint32_t join_hold_restart_limit_ms = 4000;
+	inline int join_hold_seconds(int configured)
+	{
+		return configured < 0 ? 0 : configured > join_hold_max_seconds ? join_hold_max_seconds : configured;
+	}
+	struct join_hold
+	{
+		enum class role : std::uint8_t { none, host, member };
+		// What a poll or a release reports; none = keep holding.
+		enum class event : std::uint8_t { none, ready, cap, restart_late, gone, restart, session };
+		role who = role::none;
+		std::uint32_t cap_ms = std::uint32_t(join_hold_default_seconds) * 1000u;
+		std::uint32_t since = 0, ready_at = 0, ended_ms = 0;
+		int newcomers = 0, ready = 0;
+		bool all_ready = false;
+		event last = event::none;
+		unsigned holds = 0;
+		bool active() const { return who != role::none; }
+		void configure(int seconds) { cap_ms = std::uint32_t(join_hold_seconds(seconds)) * 1000u; }
+		bool enabled() const { return cap_ms != 0; }
+		// Opens the hold; false when it is off, already open or the role is none (a newcomer never holds).
+		bool begin(role r, int count, std::uint32_t now)
+		{
+			if (!enabled() || active() || r == role::none) return false;
+			who = r; since = now; ready_at = 0; ended_ms = 0; newcomers = count < 1 ? 1 : count; ready = 0; all_ready = false;
+			last = event::none; ++holds;
+			return true;
+		}
+		void add_newcomer() { if (active()) ++newcomers; }
+		std::uint32_t elapsed(std::uint32_t now) const { return now - since; }
+		// One pump. waiting / done: the host's admitted newcomers before / with their image; a member passes -1 (it
+		// cannot see the seats; only the cap, its own restart and the session's end end its hold).
+		event poll(std::uint32_t now, int waiting, int done)
+		{
+			if (!active()) return event::none;
+			if (who == role::host && waiting >= 0)
+			{
+				ready = done;
+				if (waiting == 0 && done == 0) return close(event::gone, now);
+				if (waiting == 0 && !all_ready)
+				{
+					all_ready = true; ready_at = now;
+					if (done > newcomers) newcomers = done;
+					return event::ready;
+				}
+			}
+			if (!all_ready && elapsed(now) >= cap_ms) return close(event::cap, now);
+			if (all_ready && now - ready_at >= join_hold_restart_limit_ms) return close(event::restart_late, now);
+			return event::none;
+		}
+		// This PC's restart begins (deferred_campaign_start) or the session ended.
+		event release(event why, std::uint32_t now) { return active() ? close(why, now) : event::none; }
+		event close(event why, std::uint32_t now)
+		{
+			ended_ms = elapsed(now);
+			// The native start runs only once every image is in (the 0x26 / J completion), on every role.
+			if (why == event::restart) { all_ready = true; if (ready < newcomers) ready = newcomers; }
+			who = role::none; last = why;
+			return why;
+		}
+	};
+	// The on-screen text (the native timed network message stores the pointer, so these are static).
+	inline const char* join_hold_text(int newcomers)
+	{
+		switch (newcomers)
+		{
+		case 0: case 1: return "A player is joining...";
+		case 2: return "2 players are joining...";
+		default: return "3 players are joining...";
+		}
+	}
 	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
 	// count mod slots, free count = the slots not held in the bitmap words, one word per 32 slots), so every peer
 	// allocates the same next slots even when a warm host still holds one (probe round: slot 31 held, bits

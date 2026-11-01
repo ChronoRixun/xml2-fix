@@ -63,6 +63,10 @@ namespace join_in_progress
 		join_in_progress_core::machine machine; // the game's thread only (bridges, receive pump, load tick)
 		join_in_progress_core::cohort epoch;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
+		// p060fix/AQ (join_in_progress_hold.inl): the join hold - the world section skipped from the image capture to this PC's restart
+		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
+		void hold_open(join_in_progress_core::join_hold::role who, int newcomers, const char* where); void hold_add_newcomer();
+		void hold_end(join_in_progress_core::join_hold::event why); void hold_tick();
 
 		const std::uint32_t original_teardown = gamespy_thunk, add_resume_at = add_resume, frame_resume_at = frame_walk_resume,
 			frame_exit_at = frame_walk_exit, stream_resume_at = stream_walk_resume, stream_exit_at = stream_walk_exit,
@@ -226,6 +230,7 @@ namespace join_in_progress
 				if (join_in_progress_core::image_rides_running_transfer(true, late_restart))
 				{
 					logger::write("join in progress: player %d rides the running cohort transfer (one live campaign image serves every newcomer admitted at this zone load)", seat.index);
+					hold_add_newcomer(); // p060fix/AQ: the open hold now waits for this newcomer too
 					return true;
 				}
 				logger::write("join in progress: a campaign sender is already running; cohort restart refused");
@@ -269,6 +274,8 @@ namespace join_in_progress
 				return false;
 			}
 			logger::write("join in progress: player %d - live campaign image (%u bytes), native full-campaign transfer to the cohort", seat.index, unsigned(profile.payload));
+			// p060fix/AQ: the image holds the world as it is now; from here to this PC's restart nothing simulates.
+			hold_open(join_in_progress_core::join_hold::role::host, 1, "the image capture at the zone load");
 			return true;
 		}
 
@@ -298,6 +305,9 @@ namespace join_in_progress
 			if (machine.started) clear_frontend_callback(m);
 			logger::write("join in progress: full campaign image received; cohort checksum hold active (%s)",
 				late_restart ? "late-join restart of a running session: canonical restart on every peer" : "lobby START: the native start as it is");
+			// p060fix/AQ: an existing participant holds too (the newcomer loads the image; a lobby START never holds).
+			if (late_restart && existing_cohort_member)
+				hold_open(join_in_progress_core::join_hold::role::member, mesh_newcomers, "the late-restart 0x47 (the host captured the image)");
 		}
 
 		void __cdecl deferred_campaign_start(void*);
@@ -354,6 +364,9 @@ namespace join_in_progress
 			deferred_start_task = 0;
 			if (task) fn<task_remove_t>(task_remove)(fn<getter_t>(scheduler_getter)(), task);
 			if (!epoch.active || !epoch.requested || epoch.started) return;
+			// p060fix/AQ: the restart replaces the held world; the hold ends here on every role (first, before any native call).
+			hold_end(join_in_progress_core::join_hold::event::restart);
+			mesh_newcomers = 0;
 			deferred_start_running = true;
 			// Native time reset preserves the previous input frame's one-shot step. The next clock tick
 			// promotes it over the fixed 30 Hz step, before the fresh input streams can replace it. Clear
@@ -555,6 +568,7 @@ namespace join_in_progress
 		}
 #include "join_in_progress_residue.inl"
 #include "join_in_progress_audit.inl"
+#include "join_in_progress_hold.inl"
 
 		void __cdecl broadcast_notice(const void* message)
 		{
@@ -694,7 +708,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1118,6 +1132,7 @@ namespace join_in_progress
 					epoch.begin();
 					existing_cohort_member = true;
 					clear_frontend_callback(m);
+					++mesh_newcomers; // p060fix/AQ: the member's hold names how many are joining
 					logger::write("join in progress: new mesh participant; cohort checksum hold active");
 				}
 				const int index = index_of(record);
@@ -1696,6 +1711,14 @@ namespace join_in_progress
 		}
 		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
 		moved_canonical_enabled = ini::flag(L"Dev", L"LateJoinMovedCanonical", true);
+		{
+			// p060fix/AQ: [Online] JoinHoldSeconds (default 6 = the longest live admission-to-ready time, 5.27 s, under
+			// Owen's 6 s; 0..15; 0 = off: the host simulates while the newcomer loads, as before).
+			const int configured = ini::number(L"Online", L"JoinHoldSeconds", join_in_progress_core::join_hold_default_seconds);
+			hold.configure(configured);
+			if (configured != join_in_progress_core::join_hold_seconds(configured))
+				logger::write("join hold: [Online] JoinHoldSeconds=%d is outside 0..%d - %u used", configured, join_in_progress_core::join_hold_max_seconds, hold.cap_ms / 1000u);
+		}
 		if (!moved_canonical_enabled) logger::write("join in progress: [Dev] LateJoinMovedCanonical=0 - the party heroes' moved-check state and queued moved events stay as each PC left them at frame 0 (AE12 behaviour; A/B control only)");
 #ifndef NDEBUG
 		mesh_defer_ms = DWORD(ini::number(L"Dev", L"MeshDeferMs", 0));
@@ -1821,6 +1844,10 @@ namespace join_in_progress
 			writes.push_back({attach_override, bytes(attach_override_original), rel(0xe9, attach_override, reinterpret_cast<const void*>(&attach_override_bridge), attach_override_original.size())});
 			writes.push_back({party_bound_call, bytes(party_bound_original), rel(0xe8, party_bound_call, reinterpret_cast<const void*>(&party_bound_bridge), 5)});
 		}
+		// p060fix/AQ: the join hold's world-section gate (CALL replacement of the 7-byte bit test + two nops; the site's je
+		// reads the ZF the bridge returns). Not written at all with [Online] JoinHoldSeconds=0.
+		if (hold.enabled())
+			writes.push_back({world_gate_site, bytes(world_gate_original), rel(0xe8, world_gate_site, reinterpret_cast<const void*>(&world_gate_bridge), world_gate_original.size())});
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			if (composed_receiver) entity_transfer::observe_prepare(&campaign_notice);
@@ -1829,6 +1856,11 @@ namespace join_in_progress
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
 				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera made canonical at frame 0, dormant-entity respawn held to frame 0, timed-event queue in canonical order, party moved state and ground re-probed at frame 0, party-hero ground attach suppressed before it)" : "OFF ([Dev] LateJoinRestartReset=0)");
+			if (hold.enabled())
+				logger::write("join hold: [Online] JoinHoldSeconds=%u - from the host's image capture (an existing participant: the late-restart 0x47) until this PC's restart, the game update's world section (0x46f0a9) is skipped and the native network message shows \"A player is joining...\"; a newcomer not ready after %u s is not waited for (the PC simulates again as before)",
+					hold.cap_ms / 1000u, hold.cap_ms / 1000u);
+			else
+				logger::write("join hold: off ([Online] JoinHoldSeconds=0) - the host simulates while a newcomer loads (the world-section gate is not written)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");
@@ -1961,6 +1993,7 @@ namespace join_in_progress
 		if (state.load() == 1) spectate();
 		if (state.load() == 1) trace_words();
 		if (state.load() != 1) return;
+		hold_tick(); // p060fix/AQ: the join hold's cap, readiness and message, every pump on every role
 		if (deferred_start_running) return;
 		// Also clears started on a return to the front end, before another session can be admitted.
 		guarded_advance(false, nullptr);

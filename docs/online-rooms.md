@@ -161,7 +161,8 @@ Host = broker                       ; this PC opens a room when its online sessi
    the Play Online menus), `game_mode` `campaign` / `danger_room`, `zone` = the current zone's path (printable ASCII,
    at most 48; empty in the menus, the last level kept in the menus between levels), `zone_name` = that zone's
    zoneinfo savename (the name the game's save screen shows), `in_progress` = latched once a level of the online game
-   loads, `joinable` = a free seat and, after the start, `[Online] JoinInProgress`; `version_token` = exactly `[Online] GameVersion` (for 0.3.0, `LC33`), without a fingerprint suffix.
+   loads, `joinable` = a free seat and, after the start, the host's DROP-IN choice (`late_join_enabled`); a private room
+   with DROP-IN off also stays joinable after the start while rule 26's started refusal is installed (fix AN2, below); `version_token` = exactly `[Online] GameVersion` (for 0.3.0, `LC33`), without a fingerprint suffix.
    The browser compares that same token; admission still checks the full content fingerprint and rules.
    `Public`, `RoomName` are one-shot like `Host` (removed from the ini at start). The room opens before the name
    entry, so the first listing may carry the game's default name; changes go out as `presence` updates with only the
@@ -260,6 +261,33 @@ own membership and play. Intentional Leave drops queued datagrams, callbacks,
 room listener/roster and old-generation worker results before later attempts.
 Rules 25/26, their revisions/values, framing and release identities are unchanged.
 Any distinct future peer-visible contract still **needs a rule id**.
+
+### Started private rooms with DROP-IN off (fix AN2)
+
+What `joinable` does at the deployed broker (lc-online-broker, `rooms.py` `resolve` / SPEC 3.2-3.4): it is the
+host-controlled gate for NEW `resolve` calls only. False answers `room_not_joinable` before the joiner becomes a member,
+so the joiner never learns the host or reaches it; an existing member's re-resolve stays idempotent. It is also a flag on
+public `list_rooms` / HTTPS list rows (in-progress and non-joinable public rooms stay listed). It changes nothing else:
+`players` stays server-derived from membership, `max_players` is enforced separately (`room_full`, checked after the
+joinable gate), `in_progress` is informational, private rooms are never listed, and admission into the game stays the
+host's native admission (rule 26).
+
+So a private room, which no list shows, could only give the joiner the retry text ("Not taking players right now. Try
+again soon.") once DROP-IN off made it unjoinable - fix AN's list explanation cannot see it. Fix AN2 changes only the
+advertisement (`online_browser_core::advertised_drop_in`): after the start a **private** room advertises the drop-in
+used by `joinable()` as `late_join_enabled() || join_in_progress::installed()`. With rule 26 installed and DROP-IN off,
+the code join resolves, opens the room tunnel, discovers the host and asks for native admission; the host's
+`LateJoinPolicyV1` refusal (0x609970, before any participant is allocated; tagged 0x1c `LCLJ` body flushed before the
+disconnect, fixes AC/AF) answers it, and the joiner shows `lc_notice_started` on the Code screen and leaves the room
+(one refusal per attempt; a new attempt needs a new code entry). **Public** rooms keep following the host's choice, so
+their list row / Browse ("No joining once the game starts") stay truthful and fix AN explains their broker refusal.
+A free seat, native posting (`joinable=false` until actual Host activation), a full room and a build without the
+installed refusal keep `joinable=false` exactly as before; DROP-IN on is unchanged. The host log's listing update reads
+`... in progress, joinable, N of M players (private, DROP-IN off: the host refuses the join itself)`.
+
+While the refused joiner is resolved it is a broker member for a moment (its `peer_joined` / `peer_left` bracket the
+attempt; the host's status `players` and the broker's foreign-seat count include it until it leaves), exactly like any
+code join the host refuses in the lobby. It takes no game seat, gets no image, and never enters the lockstep.
 
 ### Relay-only route verification
 

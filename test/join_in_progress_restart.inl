@@ -161,6 +161,7 @@ __declspec(naked) void attach_probe(void* parent,void* child) {
 }
 #include "join_in_progress_audit.inl"
 #include "join_in_progress_visibility.inl"
+#include "join_in_progress_hold.inl"
 void run() {
     using namespace join_in_progress_rules;
     // Follow-up 12: every frame-0 epoch below now walks the party list (game vt+0x11c) and resolves its heroes; the
@@ -788,6 +789,7 @@ void run() {
     }
     run_audit_probe();
     run_visibility_pattern();
+    run_join_hold(); // p060fix/AQ: the join hold (last: it redirects the clock, scheduler and campaign-start natives)
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not; the camera\'s derived spans go back to the pristine image, the OnAttached override bridge answers ret 4 for a party hero in an armed late restart only, the frame-0 epoch re-probes the party heroes\' ground, and the party-binding tail bridge runs the cold moved pass on the bound party; initial and first-movement hero probe windows are bounded and rearm correctly\n";
 }
 // Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
