@@ -12,7 +12,8 @@ Each case writes an xml2-fix.ini next to the DLL, runs union_host.exe (DllMain a
   - ReceiveRounding=xml1 / DamageCap=xml1: their four sites (0x437a54, 0x437a75, 0x453bfd, 0x453c0c), one more
     agreement rule, nothing else changes;
   - with XML2_FIX_OFFWIRE_REF set to an older build's folder (dinput.dll), the same inis without the new keys write
-    the same XMen2.exe addresses in both builds except rule 16's revision-14 (items 19-22) sites (when NpcPowerRule=xml1 is set).
+    the same XMen2.exe addresses in both builds except rule 16's revision-14 (items 19-22) sites and the AI brain
+    allocation's three pop calls (p060fix/AP item 19) (when NpcPowerRule=xml1 is set).
 
 Environment: XML2_FIX_UNION (tools/union_host/prepare_union.py output), XML2_FIX_TEST_EXE (retail XMen2.exe, read
 only), XML2_FIX_UNION_HOST (default native-map/union/Release/union_host.exe), XML2_FIX_INI (the candidate's
@@ -42,6 +43,9 @@ BALANCE_SITES = {0x4b89f7: 6, 0x453b6e: 5, 0x453b67: 5, 0x5e0afa: 5, 0x453bc7: 5
 STAT_CALLS = (0x453b6e, 0x453b67, 0x5e0afa, 0x453bc7)  # strength, mind (hit, stats screen), might/rounding: DLL functions
 PARITY_SITES = {0x437a54: 6, 0x437a75: 6, 0x453bfd: 4, 0x453c0c: 4}
 RULE16_REV12 = {0x50fe63: 6, 0x5187c4: 6, 0x694f1e: 11, 0x511fb8: 4, 0x435b09: 5}
+# p060fix/AP (npc_power_rules.hpp item 19): with NpcPowerRule=xml1 the three AI brain free-ring pop calls
+# (call 0x522a10) call the rule block's allocation reset instead; the opcode stays E8, the rel32 changes.
+NPR_ALLOC_CALLS = {0x522e94: 5, 0x5230be: 5, 0x52314f: 5}
 
 
 def base_ini():
@@ -217,7 +221,7 @@ if REF:
         old = run("ref-" + tag, ref, dict(PORT_BALANCE), npc)
         new = run("new-" + tag, MINE, dict(PORT_BALANCE), npc)
         differ = set(old["writes"]) ^ set(new["writes"])
-        expected = {va + i for va, n in RULE16_REV12.items() for i in range(n)} if npc else set()
+        expected = {va + i for va, n in {**RULE16_REV12, **NPR_ALLOC_CALLS}.items() for i in range(n)} if npc else set()
         # the late-controller fix (no ini key, on in every build since 5c3b920) bridges the Advanced Options handler
         # 0x618390 at 0x61862A with jmp rel32 + nop; the beta 7 reference has no such site
         expected |= {LATE_PAD_BRIDGE + i for i in range(6)}
@@ -234,6 +238,10 @@ if REF:
             assert final(new, 0x50fe63, 6) == bytes([0xEB, 4, 0x90, 0x90, 0x90, 0x90]) and final(new, 0x5187c4, 6) == bytes([0xEB, 4, 0x90, 0x90, 0x90, 0x90])
             assert final(new, 0x694f1e, 11) == b"dvanced" + bytes(4) and final(new, 0x511fb8, 4) == bytes([0x89, 0x7C, 0x24, 0x68])
             assert final(new, 0x435b09, 5) == bytes([0xE9, 0x44, 0, 0, 0]) and final(old, 0x50fe63, 6) == retail(0x50fe63, 6)
+            for va in NPR_ALLOC_CALLS:
+                opcode, to = call_target(new, va)
+                assert opcode == 0xE8 and to != 0x522A10 and not (base <= to < base + size), (tag, hex(va), hex(to))
+                assert final(old, va, 5) == retail(va, 5), (tag, hex(va), 'the reference build keeps the retail pop call')
         report["vs_reference_" + tag] = {"addresses_old": len(old["writes"]), "addresses_new": len(new["writes"]), "differing": len(differ), "unexplained": 0}
 
 for folder in MADE:
