@@ -245,6 +245,26 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    attacker's current move has `energypersecond` and is the victim's remembered pain move, inside 1 s, or 3 s when
    both teams are 0x1d), stays: the port's data has 67 combo-text moves and 4 `energypersecond` moves and none with
    both, so it is noted here and not restored.
+23. **0x522e94, 0x5230be, 0x52314f (5 bytes each, p060fix/AP; rule 16 revision 14 unchanged).** A brain's side state
+   is born with the brain. The bridges keep four cells per AI slot in their own data page - the combo step deadline
+   (item 9) and the three reaction marks (items 11-13) - which in XML1 are fields of the brain itself. XMen2.exe hands
+   out a brain by popping its free ring (0x522a10, eax = the slot), and only these three calls do (the plain alloc
+   0x522e90 and the typed creation 0x523060; the image holds no other reference to 0x522a10). Before this, nothing
+   cleared a slot's cells for its next brain in the release configuration (`actor_ai::reset_controller_slot` is
+   called only by `ActorPools=124`'s W11 cave and E4's observer), so a brain inherited the previous occupant's marks.
+   That broke lockstep at every late join into combat (live-060zg item 2b, 3/3): the host keeps simulating after
+   the last shared frame while the campaign image transfers (ZG-C-3Pp2: host deferred start at frame 2726 with draw
+   count 5414 and game time 98.10 s, lobby guest at count 4921 and 93.74 s; the 493 host-only draws include seven
+   melee hits, `0x44f692` / `0x437ae5`). The cohort restart reloads every game byte from the image, but not this page:
+   the hits' marks survived onto the restarted brains, and at frame 682 the host's attack front (bridges + 0x562 =
+   item 13's draw at +0x82) spent two decisions where both guests made the native one (`0x519729`, `0x519ccb`,
+   `0x519d2a`); the guests agreed with each other on all 3013 post-epoch draws. Each call now calls a 57-byte bridge
+   (block + 2240) that pops the slot as before and zeroes its four cells, so every brain starts as a fresh process's
+   would, on every peer, whatever that process ran before (a late join's host-only frames, an earlier session, single
+   player). The JIP canonical restart also resets every free slot's cells when it rebuilds the brain ring
+   (join-in-progress.md, P2). At E4's stage 2 the pool's alloc path is E4's and its observer resets the slot; the
+   three calls are left alone there. `xml2_npc_combo_timing_test` runs the bridge and both fronts with a host's
+   residue and a guest's zeros: the same branch after the allocation, the 060zg divergence (two front draws) without it.
 
 Measured shape this restores (beta6-ai-rest REPORT 2a, quiet-measure gate table): XML1's power-decision calls per
 second in attack / power moves 23-29 / 35-39, XMen2.exe's 0.3-2.8; port power lateness on the still bench 2.5 s

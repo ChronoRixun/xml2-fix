@@ -299,7 +299,13 @@ void run() {
     // the 28 free slots in ascending order, read 0, write 28, free 28; the held slots stay out of it.
     put(pool,brain_ring_write,7);put(pool,brain_ring_read,11);put(pool,brain_ring_free,28);put(pool,brain_ring_bitmap,0x80000007u);
     for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*5+3)%32));
+    // p060fix/AP: the rebuild resets the consumers' per-slot state (the npc power rule's cells) of exactly the free slots.
+    static unsigned slot_resets[32]; for(auto& r:slot_resets) r=0;
+    const auto saved_reset=actor_ai::reset_controller_slot;
+    actor_ai::reset_controller_slot=[](std::uint32_t slot){ if(slot<32) ++slot_resets[slot]; };
     join_in_progress::canonical_brain_ring();
+    actor_ai::reset_controller_slot=saved_reset;
+    for(unsigned i=0;i<32;++i) assert(slot_resets[i]==((i<3||i==31)?0u:1u));
     assert(*reinterpret_cast<int*>(pool+brain_ring_write)==28 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==28);
     for(unsigned i=0;i<28;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i+3);
     assert(*reinterpret_cast<unsigned*>(pool+brain_ring_bitmap)==0x80000007u);

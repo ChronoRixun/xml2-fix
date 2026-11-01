@@ -47,8 +47,28 @@ __declspec(naked) void* clock_owner() {
     __asm { ret }
 }
 float random_now = 0;
+unsigned random_draws = 0; // p060fix/AP: draws taken through the bridges' 0x560190 stub
 __declspec(naked) float random_read(int) {
+    __asm { inc dword ptr [random_draws] }
     __asm { fld dword ptr [random_now] }
+    __asm { ret }
+}
+// p060fix/AP: the free-ring pop 0x522a10 as the allocation bridge sees it - thiscall, ecx = the pool, eax = the slot;
+// it leaves ecx/edx changed as the retail pop does (0x522a10 ends with ecx = the live count, edx = the pool).
+unsigned pop_slot = 0, pop_pool = 0;
+__declspec(naked) void fake_pop() {
+    __asm { mov pop_pool,ecx }
+    __asm { mov edx,ecx }
+    __asm { mov ecx,0x1234 }
+    __asm { mov eax,pop_slot }
+    __asm { ret }
+}
+unsigned alloc_ecx = 0, alloc_edx = 0;
+__declspec(naked) unsigned alloc_call(void*) {
+    __asm { mov ecx,[esp+4] }
+    __asm { call dword ptr [entry] }
+    __asm { mov alloc_ecx,ecx }
+    __asm { mov alloc_edx,edx }
     __asm { ret }
 }
 __declspec(naked) void power_call(void*) {
@@ -312,6 +332,8 @@ int main() {
     leave(l.hit_roll + 0x06, roll_stub);      // 1 = the combo-text path
     leave(l.hit_roll + 0x15, roll_stub + 8);  // 2 = the draw
     leave(l.hit_roll + 0x1f, roll_stub + 16); // 3 = the result (a hit without a draw)
+    // p060fix/AP: the allocation bridge pops through the stub.
+    leave(l.alloc_reset + 0x01, static_cast<address>(reinterpret_cast<std::uintptr_t>(&fake_pop)));
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
     if (!VirtualProtect(memory, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory, code_size)) return 2;
@@ -500,6 +522,70 @@ int main() {
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");
+    }
+    {
+        // p060fix/AP: a host and a guest reach the same brain decision whatever ran on the host alone before a cohort
+        // restart (live-060zg ZG-C-3Pp2: the host kept simulating after the last shared frame; its reaction marks
+        // survived the restart in the bridge's data page and its attack front spent two decisions at frame 682 where
+        // both guests made the native one). Each peer below is the same slot with the same brain/AI state; the host
+        // carries the residue of host-only hits, the guest a fresh process's zeros. The brain's allocation (the
+        // bridge called from 0x522e94 / 0x5230be / 0x52314f) must leave both on the native branch.
+        auto* react = reinterpret_cast<std::uint32_t*>(l.react);
+        auto* react_power = reinterpret_cast<std::uint32_t*>(l.react_power);
+        auto* react_attack = reinterpret_cast<std::uint32_t*>(l.react_attack);
+        auto* nexts = reinterpret_cast<float*>(l.next);
+        const unsigned s = 13; // a melee soldier's slot after the restart (jip think s10..s15)
+        auto* b = brains.data() + s * ai_stride;
+        field<void*>(b, 4) = ai.data();
+        field<void*>(ai.data(), 0x10) = actor.data();
+        field<std::int32_t>(actor.data(), 0x3d4) = -1;
+        clock_vtable[0x160 / 4] = reinterpret_cast<void*>(&clock_read);
+        field<float>(ai.data(), 0x288) = 0.6f; field<float>(ai.data(), 0x28c) = 1.2f; random_now = 0.5f;
+        struct outcome { unsigned draws; float next_attack, recheck; std::uint32_t marks[3]; float next; bool operator==(const outcome&) const = default; };
+        const auto peer = [&](bool host_residue, bool allocate) {
+            for (unsigned i = 0; i < ai_slots; ++i) { react[i] = react_power[i] = react_attack[i] = 0; nexts[i] = 0.0f; }
+            if (host_residue) { react[s] = react_power[s] = react_attack[s] = 1; nexts[s] = 97.5f; } // marked in the host-only frames
+            if (allocate) { entry = reinterpret_cast<void*>(l.alloc_reset); pop_slot = s; alloc_call(reinterpret_cast<void*>(0x78ba18)); }
+            // 22.7 s into the fight, the brain's first decisions: no combo, the next attack time 1.5 s overdue, the
+            // power re-check 0.4 s overdue.
+            b[0x2c] = 0; field<float>(ai.data(), 0x1c) = 21.2f; field<float>(ai.data(), 0x1cc) = 22.3f; clock_now = 22.7f;
+            random_draws = 0;
+            entry = reinterpret_cast<void*>(l.power_front); power_call(b);
+            entry = reinterpret_cast<void*>(l.attack_front); power_call(b);
+            return outcome{random_draws, field<float>(ai.data(), 0x1c), field<float>(ai.data(), 0x1cc), {react[s], react_power[s], react_attack[s]}, nexts[s]};
+        };
+        const auto guest = peer(false, true), host = peer(true, true), host_before = peer(true, false), guest_before = peer(false, false);
+        check(guest == host, "AP: host residue + allocation and a fresh guest + allocation give the same decision (draws, attack time, re-check, marks, combo deadline)");
+        check(host.draws == 0 && host.next_attack == 21.2f && host.recheck == 22.3f && host.marks[0] == 0 && host.marks[1] == 0 && host.marks[2] == 0 && host.next == 0.0f,
+              "AP: after the allocation both take the native branch (no front draw, the decision's own timers untouched, clean cells)");
+        check(guest_before == guest && !(host_before == guest_before) && host_before.draws == 2 && host_before.next_attack > 22.7f && host_before.recheck == 24.3f,
+              "AP control: without the allocation reset the host's residue spends two decisions (two front draws, as the host at frame 682) and re-arms its re-check - the 060zg divergence");
+        check(pop_pool == 0x78ba18u && alloc_ecx == 0x1234u && alloc_edx == 0x78ba18u, "AP: the allocation bridge passes the pool to the pop and keeps ecx/edx as the pop left them");
+        // The returned slot: eax comes back as the pop's.
+        entry = reinterpret_cast<void*>(l.alloc_reset); pop_slot = 7;
+        check(alloc_call(reinterpret_cast<void*>(0x78ba18)) == 7u, "AP: the allocation bridge returns the popped slot");
+        // Only the popped slot's cells change; a slot past the tables is left alone.
+        for (unsigned i = 0; i < ai_slots; ++i) { react[i] = react_power[i] = react_attack[i] = 1; nexts[i] = 5.0f; }
+        pop_slot = 9; alloc_call(nullptr);
+        bool only = true;
+        for (unsigned i = 0; i < ai_slots; ++i) only &= (i == 9) == (react[i] == 0 && react_power[i] == 0 && react_attack[i] == 0 && nexts[i] == 0.0f);
+        pop_slot = ai_slots; alloc_call(nullptr);
+        bool untouched = true;
+        for (unsigned i = 0; i < ai_slots; ++i) untouched &= (i == 9) || (react[i] == 1 && react_power[i] == 1 && react_attack[i] == 1 && nexts[i] == 5.0f);
+        check(only && untouched, "AP: the allocation zeroes the popped slot's four cells only; a slot past the tables writes nothing");
+        // The bytes: a 57-byte bridge after the test stubs, the three retail pop calls, the writes.
+        check(alloc_reset_bridge(l).size() == alloc_reset_size && l.base + 2200 <= l.alloc_reset && l.alloc_reset + alloc_reset_size <= l.base + code_size
+              && l.power_lock + power_lock_size <= l.alloc_reset, "AP: the allocation bridge's length and span");
+        bool calls = true;
+        for (const auto& [site, at] : alloc_calls) {
+            const auto retail = alloc_retail_call(*site); std::int32_t rel = 0; std::memcpy(&rel, retail.data() + 1, 4);
+            const auto write = alloc_reset_call(l, at); std::int32_t to = 0; std::memcpy(&to, write.data() + 1, 4);
+            calls &= retail.size() == 5 && retail[0] == 0xe8 && at + 5 + static_cast<address>(rel) == brain_pop_va && site->va + site->hex.size() / 2 == at + 5
+                     && write.size() == 5 && write[0] == 0xe8 && at + 5 + static_cast<address>(to) == l.alloc_reset;
+        }
+        std::int32_t pop_rel = 0; const auto bridge = alloc_reset_bridge(layout_at(l.base)); std::memcpy(&pop_rel, bridge.data() + 1, 4);
+        check(calls && l.alloc_reset + 5 + static_cast<address>(pop_rel) == brain_pop_va, "AP: 0x522e94 / 0x5230be / 0x52314f call 0x522a10 in retail and the bridge after the write; the bridge calls 0x522a10");
+        for (unsigned i = 0; i < ai_slots; ++i) { react[i] = react_power[i] = react_attack[i] = 0; nexts[i] = 0.0f; }
     }
     {
         // Revision 10, XML1's block rule. The plain rules: XMen2.exe rolls everything but combo text; XML1 never rolls a

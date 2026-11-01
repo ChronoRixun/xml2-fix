@@ -18,6 +18,9 @@ struct last_sample_t {
     std::array<std::array<std::uint32_t, 6>, 4> transform{};
 } last_sample;
 std::uint16_t last_mismatch_frame = 0; bool last_mismatch_logged = false;
+// p060fix/AP: [Dev] LockstepChecksumAlways=1 (probe only): the producer sample at every native period of ANY session,
+// lobby STARTs included (the host never runs a cohort start there, so nothing armed a window). Release default off.
+bool checksum_always = false;
 bool checksum_log_every_period = false; // AE15: with [Dev] LateJoinProbe=1 the producer sample (no owner lines, no draw flush) is logged at EVERY period, so a late drop is bracketed on both peers
 void arm_checksums() {
     // Follow-up 14 (review S6): the probe's 30-period budget applies to a late restart's epoch only; a lobby START keeps the four.
@@ -49,6 +52,13 @@ void __cdecl checksum_camera_observe(const std::uint32_t* regs) {
     checksum_camera_readable = checksum_read(regs[7], checksum_camera.data(), sizeof checksum_camera);
 }
 void __cdecl checksum_produced(const std::uint32_t* regs) {
+    if (checksum_always && !checksum_window.armed) {
+        // A window of no captured periods in the current epoch (0 before any cohort start): only the every-period sample
+        // lines, no owner/head lines, no budget; a later cohort start arms its own window (a new epoch) as before.
+        checksum_window.rearm(GetTickCount()); checksum_window.limit = 0;
+        logger::write("jip checksum: epoch=%u [Dev] LockstepChecksumAlways=1 - every native period of this session is sampled from frame %u (observation only)",
+            checksum_window.epoch, unsigned(regs[1] & 0xffff));
+    }
     const bool in_window = checksum_window.capture(GetTickCount());
     const bool logging = in_window || (checksum_log_every_period && checksum_window.armed);
     if (in_window) ++checksum_window.produced; // charge the budget even if a diagnostic read faults

@@ -110,6 +110,13 @@ machine (`xml2_join_in_progress_test`).
 
 ## Bounded checksum observations
 
+`[Dev] LockstepChecksumAlways=1` (p060fix/AP, probe only, release default off) logs the native lockstep checksum's
+producer sample (`jip checksum produced` / `jip checksum hero`) at EVERY native period of every session, lobby STARTs
+included: the host of a lobby START never runs a cohort start, so before this nothing armed a window there. It arms
+an observation window of no captured periods (epoch 0 until a cohort start; a cohort start arms its own window, a new
+epoch, as before) at the first produced sample; the `jip checksum MISMATCH` line was already logged in every session.
+Use it with `LateJoinProbe=1` on every peer to bracket a plain co-op combat desync.
+
 Every full-campaign cohort start arms four native checksum periods, with a
 180-second expiry. Initial saved-campaign START can also produce this control
 sample. `jip checksum hero/produced/owner/head` logs report the inputs used by
@@ -358,6 +365,11 @@ The fix:
    0x522f74, checked by the unit test). Held bits, free/live counts (E4's
    reservation accounting reads them) and the brain/world generations are
    untouched; another stage/count pairing is left as it is and logged.
+   p060fix/AP: the rebuild also resets every FREE slot's consumer state through `actor_ai::reset_controller_slot`
+   (the npc power rule's combo deadline and reaction marks, npc-power-rule.md item 23), on every peer alike: the
+   host runs frames alone after the last shared one while the image transfers (live-060zg ZG-C-3Pp2: 493 host-only
+   draws, seven hits), and their marks must not reach the restarted brains. The log line ends `N free slot(s)'
+   consumer state reset`.
 8. **Probe (P3, `[Dev] LateJoinProbe=1`, off by default).** `jip snapshot:
    where=...` lines at every milestone (deferred start, mode-2 load, zone load
    entry/epoch, zone start/epoch, zone started, frame 0 (+epoch), frame N samples)

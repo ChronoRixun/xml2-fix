@@ -11085,6 +11085,15 @@ namespace
 			CHECK(first_mismatch(image) == s);
 			byte ^= 1;
 		}
+		// p060fix/AP: the three free-ring pop calls are retail, and a changed byte in any of them refuses.
+		CHECK(first_alloc_mismatch(image) == nullptr);
+		for (const auto& [s, at] : alloc_calls)
+		{
+			auto& byte = image[at + 1 - image_base];
+			byte ^= 1;
+			CHECK(first_alloc_mismatch(image) == s);
+			byte ^= 1;
+		}
 		// The picker call's target is the picker, the re-check's operand the 0.3.
 		std::int32_t r = 0;
 		std::memcpy(&r, image + (picker_call_va + 1 - image_base), 4);
