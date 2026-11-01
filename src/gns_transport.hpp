@@ -10,6 +10,13 @@ namespace gns_transport
 	void install(HMODULE game);
 	bool requested();
 	bool installed();
+	// AQ3, game thread only: admission decision at the synchronous area boundary. Existing guests wait for the
+	// host's reliable same-frame control before loading; servicing this wait receives/queues game packets but never
+	// dispatches native game handlers or steps the world. The initial load and cohort restart do not use this wait.
+	void announce_join_boundary(std::uint16_t frame, std::uint8_t newcomers);
+	bool poll_join_boundary(std::uint16_t frame, std::uint8_t& newcomers);
+	void service_join_boundary();
+	void clear_join_boundaries();
 	// Menu-thread pump after the room worker loaded the authenticated identity.
 	void room_ui_tick();
 	bool room_can_start();

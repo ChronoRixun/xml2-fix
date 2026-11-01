@@ -53,12 +53,13 @@ bool hold_gate_skips(unsigned char flag_byte) {
     return (hold_flags&0x40u)!=0;
 }
 unsigned hold_world_steps=0;
+void __fastcall hold_advance_clock(void*,void*);
 // One main-loop iteration's game update: the world section runs only when the gate does not skip.
 bool hold_iteration() {
+    join_in_progress::hold_game_clock(); // the pre-world simulation-clock call omitted by AQ2's model
     if(hold_gate_skips(0x02)) return false; // bit 1 of game+0x728 set: retail would run the section
     ++hold_world_steps;
     ++*reinterpret_cast<unsigned*>(join_in_progress_rules::rng_count);
-    *reinterpret_cast<unsigned*>(join_in_progress_rules::game_static+join_in_progress_rules::game_time_at)+=0x10;
     return true;
 }
 // Synthetic clock (0x55b610 getter, vt+0x28 = seconds) and scheduler (0x60b210 getter) for the deferred start's natives.
@@ -125,12 +126,101 @@ void hold_check_panel(const char* text) {
     for(LONG y=r.top;y<r.bottom;++y) for(LONG x=r.left;x<r.right;++x) if((bb.pixel(x,y)&0xffffffu)==0xffffffu) ++white;
     assert(white>50); // the text's fully covered pixels
 }
+// AQ3 regressions exercise the native call blocks that AQ2's gate-only model omitted.
+// Breaks caught: ignoring admission before 0x47; advancing the clock outside the world gate;
+// and the native stall's null-message branch suppressing Present (hence the overlay).
+unsigned hold_clock_advances=0,hold_stall_presents=0;
+void __fastcall hold_advance_clock(void*,void*) { ++hold_clock_advances;*reinterpret_cast<unsigned*>(join_in_progress_rules::game_static+join_in_progress_rules::game_time_at)+=0x10; }
+void* __cdecl hold_net_state() { return hold_scheduler; } // +6 stays clear: no retail forced redraw
+void __fastcall hold_stall_present(void*,void*) { ++hold_stall_presents;assert(hold_frame()>1000);hold_check_panel(join_in_progress::hold_message); }
+unsigned hold_stall_frame() {
+    redirect(0x606d00,hold_net_state);redirect(0x402a09,hold_stall_present);redirect(0x402b50,noop);
+    redirect(0x4029f0,join_in_progress::hold_stall_message);*reinterpret_cast<unsigned char*>(0x4029f0)=0xe8;
+    const auto before=hold_stall_presents;
+    reinterpret_cast<void(__thiscall*)(void*)>(0x4029f0)(hold_scheduler);
+    return hold_stall_presents-before;
+}
+void hold_boundary_second() { hold_ms+=1000; }
+void hold_boundary_delayed() { hold_ms+=10;gns_transport::fixture_boundary_ready=true; }
+void hold_boundary_very_delayed() { hold_ms+=9000;gns_transport::fixture_boundary_ready=true; }
+alignas(8) unsigned char hold_retail_clock[0x40]{};
+void* __cdecl hold_retail_clock_get() { return hold_retail_clock; }
+float hold_retail_time() { return reinterpret_cast<float(__thiscall*)(void*)>(0x55b590)(hold_retail_clock); }
+void run_hold_native_clock(bool hooked,unsigned step=33333) {
+    // Real 55b240 ticks raw time; real 55b3d0 pauses at the load request; 55b410 unpauses/compensates;
+    // real 55b590 returns effective game time. No fabricated clock behavior can make this proof pass.
+    unsigned clock_vt[0x40]{};clock_vt[0x20/4]=0x55b410;
+    std::memset(hold_retail_clock,0,sizeof hold_retail_clock);put(hold_retail_clock,0,clock_vt);
+    put(hold_retail_clock,0x30,std::uint64_t(step));put(hold_retail_clock,0x38,std::uint64_t(100000000));
+    redirect(join_in_progress_rules::clock_getter,hold_retail_clock_get);
+    *reinterpret_cast<unsigned char*>(0x402351)=0xc3;
+    if(hooked) { redirect(0x402345,join_in_progress::hold_game_clock);*reinterpret_cast<unsigned char*>(0x402345)=0xe8;std::memset(reinterpret_cast<void*>(0x40234a),0x90,7); }
+    auto tick=reinterpret_cast<void(__thiscall*)(void*)>(0x55b240);
+    auto pause_clock=reinterpret_cast<void(__thiscall*)(void*)>(0x55b3d0);
+    auto unpause_block=reinterpret_cast<void(__cdecl*)()>(0x402345);
+    const auto first=hold_retail_time();tick(hold_retail_clock);unpause_block();assert(hold_retail_time()>first);
+    pause_clock(hold_retail_clock); // both native LoadZone/LoadMap requests do this before the area boundary
+    const float opening=hold_retail_time();
+    auto* game_time=reinterpret_cast<unsigned*>(join_in_progress_rules::game_static+join_in_progress_rules::game_time_at);
+    std::memcpy(game_time,&opening,4);
+    join_in_progress::hold_arm(2);
+    const auto raw=*reinterpret_cast<std::uint64_t*>(hold_retail_clock+0x38);
+    for(unsigned i=0;i<40;++i) {
+        tick(hold_retail_clock);unpause_block();
+        const float sampled=hold_retail_time();std::memcpy(game_time,&sampled,4);
+        assert(!hold_iteration());
+    }
+    assert(*reinterpret_cast<std::uint64_t*>(hold_retail_clock+0x38)==raw+40*step);
+    assert(hold_retail_time()==opening && hold_retail_clock[0x20]==1); // RED on retail unpause, GREEN on production bridge
+    join_in_progress::hold_open_armed();
+    auto* input_frame=reinterpret_cast<unsigned short*>(join_in_progress_rules::native_frame);
+    ++*input_frame; // 0x606ada publishes the NEXT buffered input frame, without any world step
+    const auto proof_at=observed_jip_logs.size();join_in_progress::hold_capture();
+    HOLD_EXPECT(proof_at,"no simulation step between the zone load and the capture");
+    HOLD_EXPECT(proof_at,"is transport bookkeeping (0x606ada), not a world update");
+    join_in_progress::hold_end(join_in_progress_core::join_hold::event::session);
+    unpause_block();assert(hold_retail_clock[0x20]==0 && hold_retail_time()==opening);
+    tick(hold_retail_clock);assert(hold_retail_time()>opening && hold_retail_time()<opening+float(step)/1000000.f+0.00002f);
+    redirect(join_in_progress_rules::clock_getter,hold_clock_get);
+    std::cout<<"PASS AQ3 native clock (step "<<step<<"): raw ticks continue, effective game time stays fixed through 40 real native ticks while the load pause remains set; release compensates elapsed raw time and resumes by one step\n";
+}
+void run_aq3_regression(const char* mode) {
+    using namespace join_in_progress_rules;
+    using H=join_in_progress_core::join_hold;
+    join_in_progress::hold_end(H::event::session);join_in_progress::epoch={};
+    join_in_progress::hold.configure(6);
+    join_in_progress::machine.reset();join_in_progress::machine.started=true;
+    put(local,record_flags,1u);put(local,0x18,1);put(remote,0x18,2);
+    put(s,0x26c,nodes[0]);put(s,0x278,2u);put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);put(nodes[1],node_next,static_cast<void*>(nullptr));
+    *reinterpret_cast<unsigned short*>(native_frame)=900;
+    if(std::strcmp(mode,"notice")==0) {
+        join_in_progress::hold_playing=true;
+        gns_transport::fixture_boundary_mask=4;
+        hold_loading=true;join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+        assert(join_in_progress::hold.active() && join_in_progress::hold.armed && join_in_progress::hold.who==H::role::member);
+        assert(hold_iterations(3)==0); // before any 0x47, at the host's admission frame
+    } else if(std::strcmp(mode,"clock")==0 || std::strcmp(mode,"clock-retail")==0) {
+        run_hold_native_clock(std::strcmp(mode,"clock")==0);
+    } else {
+        assert(std::strcmp(mode,"stall")==0);
+        join_in_progress::hold_open(H::role::member,1,"fixture");
+        redirect(0x4029f0,join_in_progress::hold_stall_message);
+        *reinterpret_cast<unsigned char*>(0x4029f0)=0xe8;
+        redirect(0x606d00,hold_net_state);redirect(0x402a09,hold_stall_present);redirect(0x402b50,noop);
+        // Actual retail conditional branch from its message query to the render path.
+        reinterpret_cast<void(__thiscall*)(void*)>(0x4029f0)(hold_scheduler);
+        assert(hold_stall_presents==1); // Present must run, so the existing guest gets the panel
+    }
+    std::cout<<"PASS AQ3 regression "<<mode<<"\n";
+}
 void run_join_hold() {
     using namespace join_in_progress_rules;
     using join_in_progress_core::join_hold;
     using join_in_progress_core::stage;
     auto& machine=join_in_progress::machine;
+    join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};
     redirect(clock_getter,hold_clock_get);hold_clock_vt[0x28/4]=unsigned(reinterpret_cast<std::uintptr_t>(&hold_clock_seconds));
+    hold_clock_vt[0x20/4]=unsigned(reinterpret_cast<std::uintptr_t>(&hold_advance_clock));
     redirect(scheduler_getter,hold_scheduler_get);
     redirect(clock_reset_step,noop);redirect(network_setup,noop_one);redirect(pause_getter,pause_get);redirect(pause_set,noop_one);redirect(clear_flags,noop_one);
     redirect(zones_getter,zones);redirect(campaign_begin,hold_campaign_begin);
@@ -152,6 +242,7 @@ void run_join_hold() {
     hold_device=fake_d3d8::make_device(640,360,d3d8::format_x8r8g8b8);
     auto* draws=reinterpret_cast<unsigned*>(rng_count);auto* frame=reinterpret_cast<unsigned short*>(native_frame);
     auto* game_time=reinterpret_cast<unsigned*>(game_static+game_time_at);
+    if(const char* regression=std::getenv("XML2_HOLD_REGRESSION")) { run_aq3_regression(regression);return; }
     // Hold off: the bridge is retail's own test for every bit pattern (the section runs exactly when bit 1 is set).
     join_in_progress::world_hold=0;join_in_progress::world_hold_skips=0;
     assert(hold_gate_skips(0x00) && !hold_gate_skips(0x02) && hold_gate_skips(0xfd) && !hold_gate_skips(0xff) && join_in_progress::world_hold_skips==0);
@@ -167,8 +258,11 @@ void run_join_hold() {
     *draws=3533;*game_time=0x427b8a2b;hold_world_steps=0;
     // the exit: the zone loader reaches the synchronous area-load boundary (0x484def) - the production bridge admits
     auto at=observed_jip_logs.size();
+    join_in_progress::hold_playing=true;
+    const auto announced=gns_transport::fixture_boundary_announcements;
     hold_loading=true;
     join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+    assert(gns_transport::fixture_boundary_announcements==announced+1 && gns_transport::fixture_boundary_frame==1890 && gns_transport::fixture_announced_mask==2);
     HOLD_EXPECT(at,"join in progress: zone load - adding pending player 1");
     HOLD_EXPECT(at,"join hold: armed on this PC (host) at the admission of player 1 (the native add at the area-load boundary, before the zone loads): no world update runs on this PC from here; the hold opens when this zone load ends (frame 1890, synchronized draws 3533");
     assert(hold_adds==1 && machine.seats[0].at==stage::adding && join_in_progress::world_hold==1 && join_in_progress::hold.active() && join_in_progress::hold.armed);
@@ -341,6 +435,82 @@ void run_join_hold() {
     join_in_progress::epoch={};machine.reset();join_in_progress::existing_cohort_member=false;
     std::cout<<"PASS join hold (existing participants, 1-3 newcomers = 3 and 4 peers): the production late-restart 0x47 opens the hold with the count from the mesh and logs +0 draws since this PC's zone load; the message is drawn; only the restart or the cap ends it; the newcomer and a lobby START never hold\n";
 
+    // ---- 6b. AQ3: existing guests arm at the host's admission decision, BEFORE their synchronous zone load ----
+    put(local,0x18,1);put(remote,0x18,0); // this PC is the existing guest; host is the remote record
+    for(int joining=1;joining<=2;++joining) {
+        join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};
+        machine.reset();machine.started=true;join_in_progress::hold_playing=true;
+        *frame=joining==1 ? 65535 : 0;*draws=3533;*game_time=0x427b8a2b;hold_world_steps=0;
+        gns_transport::fixture_boundary_mask=joining==1 ? 4 : 12;
+        gns_transport::fixture_boundary_ready=false;gns_transport::fixture_boundary_service=&hold_boundary_delayed;
+        at=observed_jip_logs.size();hold_loading=true;
+        join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+        assert(join_in_progress::hold.armed && join_in_progress::hold.who==join_hold::role::member && join_in_progress::hold.newcomers==joining);
+        assert(hold_iterations(2)==0 && hold_world_steps==0 && *game_time==0x427b8a2b && hold_frame()==0);
+        HOLD_EXPECT(at,"reliable host admission notice accepted at this PC's area boundary");
+        HOLD_EXPECT(at,"waited 10 ms"); // the production wait serviced GNS while no world/clock step ran
+        *draws=3698;hold_loading=false;join_in_progress::hold_tick();
+        const auto began=join_in_progress::hold.since,holds=join_in_progress::hold.holds;
+        assert(hold_stall_frame()==1);HOLD_EXPECT(at,"join hold: message shown");
+        assert(hold_ticks(12,100)==0 && *draws==3698 && *game_time==0x427b8a2b);
+        join_in_progress::mesh_newcomers=joining;
+        const auto marker=join_in_progress_core::prepare_stamp(true);std::memcpy(body+join_in_progress_core::prepare_marker_at,&marker,2);
+        join_in_progress::campaign_notice(event); // old implementation armed here, after the missing history
+        assert(join_in_progress::hold.since==began && join_in_progress::hold.holds==holds && join_in_progress::hold.newcomers==joining);
+        for(unsigned i=0;i<8;++i) { assert(hold_ticks(1,100)==0 && hold_stall_frame()==1); }
+        assert(*draws==3698 && *game_time==0x427b8a2b && hold_world_steps==0);
+        hold_deferred_start(true);
+        assert(!hold_at_begin && hold_draws_at_begin==3698 && hold_time_at_begin==0x427b8a2b && hold_steps_at_begin==0 && hold_stall_frame()==0);
+    }
+    gns_transport::fixture_boundary_service=nullptr;
+    std::cout<<"PASS AQ3 existing-peer admission (1-2 newcomers, frame 65535 and 0): the delayed host decision arms before loading; no world or clock step through the restart; the late 0x47 preserves count/deadline; actual retail stall branch presents the panel every held frame and stops at restart\n";
+
+    // An ordinary boundary does no simulation skipping; initial and restart loads never wait for a decision.
+    join_in_progress::epoch={};machine.started=true;join_in_progress::hold_playing=true;
+    gns_transport::fixture_boundary_mask=0;hold_loading=true;join_in_progress::area_barrier_bridge(s,nullptr,5.f);hold_loading=false;
+    assert(!join_in_progress::hold.active() && hold_iteration());
+    const auto services=gns_transport::fixture_boundary_services;
+    gns_transport::fixture_boundary_ready=false;join_in_progress::hold_playing=false;
+    join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+    join_in_progress::hold_playing=true;join_in_progress::epoch.started=true;
+    join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+    assert(gns_transport::fixture_boundary_services==services && !join_in_progress::world_hold);
+    join_in_progress::epoch={};join_in_progress::hold_end(join_hold::event::session);
+    std::cout<<"PASS AQ3 ordinary/initial/restart loads: ordinary decision skips no world step; first and cohort-restart loads never enter the admission wait\n";
+
+    // Missing decision / missing restart: at most cap + 4 s, even if the zone never finishes. A late 0x47 cannot renew it.
+    machine.started=true;join_in_progress::hold_playing=true;hold_loading=true;
+    gns_transport::fixture_boundary_service=&hold_boundary_second;
+    auto before_wait=hold_ms;at=observed_jip_logs.size();
+    join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+    assert(hold_ms-before_wait==10000 && !join_in_progress::world_hold);
+    HOLD_EXPECT(at,"within 10000 ms (cap + safety); boundary wait released");
+    join_in_progress::campaign_notice(event);assert(!join_in_progress::hold.active());
+    join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};
+    machine.started=true;join_in_progress::hold_playing=true;gns_transport::fixture_boundary_ready=true;gns_transport::fixture_boundary_mask=4;
+    join_in_progress::area_barrier_bridge(s,nullptr,5.f);assert(join_in_progress::hold.armed);
+    assert(hold_ticks(99,100)==0 && join_in_progress::world_hold);
+    assert(hold_ticks(1,100)==0 && !join_in_progress::world_hold);
+    join_in_progress::campaign_notice(event);assert(!join_in_progress::hold.active());
+    hold_loading=false;gns_transport::fixture_boundary_service=nullptr;
+    // A positive decision delayed 9 s, followed by a 2 s load: the 10 s absolute bound already expired.
+    join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};
+    machine.started=true;join_in_progress::hold_playing=true;hold_loading=true;
+    gns_transport::fixture_boundary_ready=false;gns_transport::fixture_boundary_service=&hold_boundary_very_delayed;
+    before_wait=hold_ms;join_in_progress::area_barrier_bridge(s,nullptr,5.f);
+    assert(hold_ms-before_wait==9000 && join_in_progress::hold.armed);
+    hold_ms+=2000;hold_loading=false;at=observed_jip_logs.size();join_in_progress::hold_tick();
+    assert(!join_in_progress::hold.active() && !join_in_progress::world_hold && !hold_logged(at,"the game simulation is held"));
+    join_in_progress::campaign_notice(event);assert(!join_in_progress::hold.active());
+    gns_transport::fixture_boundary_service=nullptr;
+    // Disabled guest bypasses the wait, independently of a default-enabled host.
+    join_in_progress::hold.configure(0);join_in_progress::epoch={};join_in_progress::hold_playing=true;
+    const auto off_services=gns_transport::fixture_boundary_services;gns_transport::fixture_boundary_ready=false;
+    join_in_progress::area_barrier_bridge(s,nullptr,5.f);assert(gns_transport::fixture_boundary_services==off_services);
+    join_in_progress::hold.configure(6);gns_transport::fixture_boundary_ready=true;
+    join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};machine.reset();put(local,0x18,0);put(remote,0x18,1);
+    std::cout<<"PASS AQ3 missing decision/restart: GNS-only boundary service and armed holds release at cap + 4000 ms; a 9 s decision wait plus 2 s load cannot open/renew an expired hold; late 0x47 never renews; a disabled guest bypasses the wait\n";
+
     // ---- 7. The overlay's other paths: 16-bit back buffer (blend), multisampled (clear, viewport restored), refusals ----
     hold_overlay::release();
     {
@@ -395,11 +565,14 @@ void run_join_hold() {
     // ---- 8. [Online] JoinHoldSeconds=0: off (today's path) ----
     join_in_progress::hold.configure(0);
     machine.reset();machine.started=true;assert(machine.defer_add(remote,1,false,hold_ms));
+    join_in_progress::hold_playing=true;const auto off_announced=gns_transport::fixture_boundary_announcements;
     *draws=500;hold_loading=true;join_in_progress::area_barrier_bridge(s,nullptr,5.f);hold_loading=false;
+    assert(gns_transport::fixture_boundary_announcements==off_announced+1 && gns_transport::fixture_announced_mask==0); // an enabled guest never waits on an off host
     assert(!join_in_progress::hold.active() && !join_in_progress::world_hold && hold_ticks(5,100)==5 && *draws==505 && hold_frame()==0);
     join_in_progress::hold.configure(99);assert(join_in_progress::hold.cap_ms==15000);
     join_in_progress::hold.configure(6);machine.reset();join_in_progress::area_load=false;join_in_progress::epoch={};
     std::cout<<"PASS join hold (JoinHoldSeconds=0): the admission arms nothing, nothing is held or drawn; the range is clamped to 0..15\n";
+    run_hold_native_clock(true,33333);run_hold_native_clock(true,16667);
     join_in_progress::hold_clock=&GetTickCount;
     join_in_progress::hold_zone_loading=&join_in_progress::zone_load_pending;
 }

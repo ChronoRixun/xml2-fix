@@ -379,7 +379,7 @@ namespace join_in_progress_core
 		enum class event : std::uint8_t { none, ready, cap, restart_late, gone, restart, session };
 		role who = role::none;
 		std::uint32_t cap_ms = std::uint32_t(join_hold_default_seconds) * 1000u;
-		std::uint32_t since = 0, ready_at = 0, ended_ms = 0, armed_ms = 0;
+		std::uint32_t since = 0, admitted_at = 0, ready_at = 0, ended_ms = 0, armed_ms = 0;
 		int newcomers = 0, ready = 0;
 		bool all_ready = false;
 		bool armed = false; // AQ2: held since the admission, clock not started (the zone load has not ended yet)
@@ -392,7 +392,7 @@ namespace join_in_progress_core
 		bool begin(role r, int count, std::uint32_t now)
 		{
 			if (!enabled() || active() || r == role::none) return false;
-			who = r; since = now; ready_at = 0; ended_ms = 0; armed_ms = 0; newcomers = count < 1 ? 1 : count; ready = 0; all_ready = false;
+			who = r; admitted_at = since = now; ready_at = 0; ended_ms = 0; armed_ms = 0; newcomers = count < 1 ? 1 : count; ready = 0; all_ready = false;
 			armed = false; last = event::none; ++holds;
 			return true;
 		}
@@ -406,17 +406,19 @@ namespace join_in_progress_core
 		// AQ2: the zone load ended: the hold's clock (cap, elapsed, the logged hold time) starts now. False when not armed.
 		bool open(std::uint32_t now)
 		{
-			if (!active() || !armed) return false;
+			if (!active() || !armed || member_expired(now)) return false;
 			armed = false; armed_ms = now - since; since = now;
 			return true;
 		}
 		void add_newcomer() { if (active()) ++newcomers; }
+		bool member_expired(std::uint32_t now) const { return who == role::member && now - admitted_at >= cap_ms + join_hold_restart_limit_ms; }
 		std::uint32_t elapsed(std::uint32_t now) const { return now - since; }
 		// One pump. waiting / done: the host's admitted newcomers before / with their image; a member passes -1 (it
 		// cannot see the seats; only the cap, its own restart and the session's end end its hold).
 		event poll(std::uint32_t now, int waiting, int done)
 		{
 			if (!active()) return event::none;
+			if (member_expired(now)) return close(event::cap, now); // open() must never renew the admission safety deadline
 			if (who == role::host && waiting >= 0)
 			{
 				ready = done;
@@ -428,7 +430,7 @@ namespace join_in_progress_core
 					return event::ready;
 				}
 			}
-			if (armed) return elapsed(now) >= join_hold_armed_limit_ms ? close(event::cap, now) : event::none;
+			if (armed) return elapsed(now) >= (who == role::member ? cap_ms + join_hold_restart_limit_ms : join_hold_armed_limit_ms) ? close(event::cap, now) : event::none;
 			if (!all_ready && elapsed(now) >= cap_ms) return close(event::cap, now);
 			if (all_ready && now - ready_at >= join_hold_restart_limit_ms) return close(event::restart_late, now);
 			return event::none;

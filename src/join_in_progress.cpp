@@ -65,9 +65,9 @@ namespace join_in_progress
 		join_in_progress_core::machine machine; // the game's thread only (bridges, receive pump, load tick)
 		join_in_progress_core::cohort epoch;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
-		// p060fix/AQ (join_in_progress_hold.inl): the join hold - the world section skipped from the admission at the zone
-		// load (host; AQ2) / the late-restart 0x47 (an existing participant) to this PC's restart
+		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
+		extern bool hold_playing, hold_member_notified;
 		void hold_open(join_in_progress_core::join_hold::role who, int newcomers, const char* where); void hold_add_newcomer();
 		void hold_arm(int index); void hold_capture();
 		void hold_end(join_in_progress_core::join_hold::event why); void hold_tick();
@@ -310,7 +310,7 @@ namespace join_in_progress
 			logger::write("join in progress: full campaign image received; cohort checksum hold active (%s)",
 				late_restart ? "late-join restart of a running session: canonical restart on every peer" : "lobby START: the native start as it is");
 			// p060fix/AQ: an existing participant holds too (the newcomer loads the image; a lobby START never holds).
-			if (late_restart && existing_cohort_member)
+			if (late_restart && existing_cohort_member && !hold_member_notified)
 				hold_open(join_in_progress_core::join_hold::role::member, mesh_newcomers, "the late-restart 0x47 (the host captured the image)");
 		}
 
@@ -488,6 +488,7 @@ namespace join_in_progress
 		}
 		void __cdecl frame_gate_reseed()
 		{
+			hold_playing = true; // AQ3: a running cohort, after initial/restart loading; its next area boundary exchanges decisions
 			probe_frame_camera(); // probe only; every gated frame
 			if (!restart.armed) return;
 			__try
@@ -1068,6 +1069,7 @@ namespace join_in_progress
 		void __fastcall area_barrier_bridge(void* s, void*, float timeout)
 		{
 			zone_was_loading = true; // p060fix/AQ2: a zone load runs (synchronously: no pump until it ends); the first pump after it records its end
+			hold_area_boundary(s); // AQ3: the host's admission decision reaches every old peer BEFORE loading or a world gate
 			bool waiting = false;
 			for (const auto& seat : machine.seats) waiting |= seat.at == stage::pending;
 			if (waiting && host(s))
@@ -1855,6 +1857,8 @@ namespace join_in_progress
 		if (hold.enabled())
 		{
 			writes.push_back({world_gate_site, bytes(world_gate_original), rel(0xe8, world_gate_site, reinterpret_cast<const void*>(&world_gate_bridge), world_gate_original.size())});
+			writes.push_back({hold_clock_site, bytes(hold_clock_original), rel(0xe8, hold_clock_site, reinterpret_cast<const void*>(&hold_game_clock), hold_clock_original.size())});
+			writes.push_back({hold_stall_message_call, bytes(hold_stall_message_original), rel(0xe8, hold_stall_message_call, reinterpret_cast<const void*>(&hold_stall_message), hold_stall_message_original.size())});
 			// p060fix/AQ2: the hold's message is drawn by the fix before every Present (display::install follows).
 			display::set_overlay(&hold_overlay_draw);
 		}
@@ -1867,7 +1871,7 @@ namespace join_in_progress
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
 				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera made canonical at frame 0, dormant-entity respawn held to frame 0, timed-event queue in canonical order, party moved state and ground re-probed at frame 0, party-hero ground attach suppressed before it)" : "OFF ([Dev] LateJoinRestartReset=0)");
 			if (hold.enabled())
-				logger::write("join hold: [Online] JoinHoldSeconds=%u - from the host's admission of a newcomer at the zone load (an existing participant: the late-restart 0x47) until this PC's restart, the game update's world section (0x46f0a9) is skipped and the fix draws \"A player is joining...\" over the frame before every Present; a newcomer not ready %u s after the zone load ended is not waited for (the PC simulates again as before)",
+				logger::write("join hold: [Online] JoinHoldSeconds=%u - from the reliable host admission decision at every existing peer's same-frame area boundary until this PC's restart, the world section (0x46f0a9) is skipped and the native clock unpause (0x402345) is deferred (effective game time held, raw/network clock live); the native stall render (0x4029f0) stays live and the fix draws \"A player is joining...\" over the frame before every Present; a newcomer not ready %u s after the zone load ended is not waited for (the PC simulates again as before)",
 					hold.cap_ms / 1000u, hold.cap_ms / 1000u);
 			else
 				logger::write("join hold: off ([Online] JoinHoldSeconds=0) - the host simulates while a newcomer loads (the world-section gate is not written)");

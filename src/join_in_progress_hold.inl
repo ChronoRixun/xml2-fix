@@ -1,19 +1,15 @@
-// ---- p060fix/AQ: the join hold ([Online] JoinHoldSeconds; rules: world_gate_*; core: join_hold) ---------------------
-// p060fix/AQ2: on the host the hold is ARMED at the admission - the native add at the synchronous area-load boundary
-// (area_barrier_bridge -> advance -> run_add, inside the zone loader 0x484ce0 before the zone loads) - so no game
-// update after that zone load runs its world section on the host, and it OPENS (clock, cap, line, message) at the
-// first pump after that zone load, before the image capture (live-060zi ZI-1bp: the host ran ~30 world updates,
-// +55 draws, +1.0 s game time, alone between its zone-load end and the capture). An existing participant holds from
-// the late-restart 0x47 (campaign_notice) as before: its world does not run in that window (ZI-1bp: draws 3698 at its
-// zone-load end and at its 0x47; no world update reached its gate while held); every hold opening logs this PC's
-// draws / game time since its own zone-load end to keep measuring it. Until this PC's own cohort restart begins
-// (deferred_campaign_start) the game update's world section is skipped. The main loop keeps running: the scheduler
-// (network, image transfer, this module's tick), the input manager update and rendering; the fix draws "A player is
-// joining..." itself into the back buffer before every Present (hold_overlay.cpp via display::set_overlay) on the
-// host and the existing participants (a newcomer never holds: it is loading the image). Ends: this PC's restart (the
-// normal end), the cap while a newcomer is not ready (the PC then simulates as before the hold: today's path), every
-// newcomer gone, the session's end, and a restart that does not begin within join_hold_restart_limit_ms of every
-// newcomer being ready.
+// ---- p060fix/AQ3: shared admission hold ([Online] JoinHoldSeconds, default 10, 0..15, 0 = off) -------------------
+// Before the native add/load at 0x484def, the host sends a reliable GNS boundary decision (native frame + newcomer
+// seat mask). Every existing guest waits for the same-frame decision at its own area boundary, servicing GNS only:
+// gameplay packets queue without native dispatch or a world step. This is necessary because native 0x1f is sent
+// only AFTER the load (live ZJ-2a: queued 16.064, sent 17.505, guest received 17.567 after its load ended 17.525).
+// Positive decisions arm the same world-section hold on all old peers before loading. Initial/restart loads never
+// wait; ordinary decisions skip no world section. The cap/message open at the first pump after loading. The world
+// gate 0x46f0a9 is skipped and 0x402345 retains the loader's clock pause until restart, cap, gone, or session end.
+// A native stalled guest renders only with a nonnull message at 0x4029f0: hold_stall_message selects that render
+// path, and the existing Present overlay draws the panel. No extra render loop or game handler runs in the boundary
+// wait. The newcomer never holds. A late 0x47 cannot renew an admission hold after its cap. Missing decisions and
+// member armed holds are bounded by cap + 4000 ms; host armed loads retain their 30000 ms safety bound.
 volatile std::uint8_t world_hold = 0;   // read by the bridge on the game thread; written on the game thread only
 unsigned world_hold_skips = 0;          // game updates whose world section was skipped on this PC in the current hold
 join_in_progress_core::join_hold hold;  // [Online] JoinHoldSeconds (configure at install)
@@ -26,6 +22,26 @@ struct hold_point { std::uint16_t frame = 0; std::uint32_t draws = 0, game_time 
 hold_point hold_armed_at{}, hold_opened{}, zone_loaded_at{};
 unsigned hold_skips_armed = 0;          // world updates skipped between the admission and the zone-load end (host)
 bool zone_was_loading = false;          // this PC's zone-load edge (every role), for the measurement
+bool hold_playing = false, hold_member_notified = false;
+unsigned hold_clock_skips = 0, hold_armed_limit = join_in_progress_core::join_hold_armed_limit_ms;
+
+// AQ3: LoadZone/LoadMap pause the clock (55b3d0, vt+1c). 402345..402350 unpauses it (55b410, vt+20), BEFORE
+// 46f079 samples effective time into game+3e8. Retain the load pause while held: raw ticks (55b240, vt+14) and
+// real/network time stay live, but 55b590 (vt+34) reads the saved effective time. Retail unpause later compensates
+// the raw ticks accrued while paused; there is no time jump on release.
+void __cdecl hold_game_clock()
+{
+	if (world_hold) { ++hold_clock_skips; return; }
+	void* clock = fn<getter_t>(clock_getter)();
+	fn<init_t>(at<std::uint32_t>(at<void*>(clock, 0), 0x20))(clock);
+}
+// AQ3: 0x402920's stalled loop calls this at 0x4029f0. A null result skips ALL rendering via 0x402b50, explaining
+// the guest's zero Presents. A held message selects retail's existing render path; Present draws the fix's panel.
+const char* __fastcall hold_stall_message(void* scheduler, void*)
+{
+	if (const char* text = hold_message) return text;
+	return fn<const char*(__thiscall*)(void*)>(native_stall_message)(scheduler);
+}
 
 // In place of `test byte ptr [esi+0x728], 2` at 0x46f0a9 (7 bytes: call rel32 + 2 nops; the site's `je 0x46f60d`
 // follows and reads ZF only - the instruction after the je is a call, so CF/OF/SF/PF/AF are dead), entered by CALL
@@ -123,7 +139,7 @@ void hold_open(join_in_progress_core::join_hold::role who, int newcomers, const 
 // AQ2: the host at the admission of a newcomer (run_add, inside the zone loader before the zone loads): the world
 // section is skipped from here; the hold opens at the first pump after this zone load (hold_tick). A second newcomer
 // admitted at the same zone load joins the armed hold.
-void hold_arm(int index)
+void hold_arm_on(join_in_progress_core::join_hold::role who, int index)
 {
 	if (hold.active())
 	{
@@ -132,12 +148,49 @@ void hold_arm(int index)
 		hold_show();
 		return;
 	}
-	if (!hold.arm(join_in_progress_core::join_hold::role::host, 1, hold_clock())) return;
+	if (!hold.arm(who, 1, hold_clock())) return;
 	world_hold_skips = 0;
+	hold_clock_skips = 0;
+	hold_armed_limit = who == join_in_progress_core::join_hold::role::member ? hold.cap_ms + join_in_progress_core::join_hold_restart_limit_ms : join_in_progress_core::join_hold_armed_limit_ms;
 	world_hold = 1;
 	hold_armed_at = hold_now();
-	logger::write("join hold: armed on this PC (host) at the admission of player %d (the native add at the area-load boundary, before the zone loads): no world update runs on this PC from here; the hold opens when this zone load ends (frame %u, synchronized draws %u, game time %08x)",
-		index, unsigned(hold_armed_at.frame), hold_armed_at.draws, hold_armed_at.game_time);
+	logger::write("join hold: armed on this PC (%s) at the admission of player %d (the native add at the area-load boundary, before the zone loads): no world update runs on this PC from here; the hold opens when this zone load ends (frame %u, synchronized draws %u, game time %08x)",
+		hold_role_name(who), index, unsigned(hold_armed_at.frame), hold_armed_at.draws, hold_armed_at.game_time);
+}
+void hold_arm(int index) { hold_arm_on(join_in_progress_core::join_hold::role::host, index); }
+
+void hold_area_boundary(void* s)
+{
+	if (!hold_playing || !machine.started || epoch.started) return;
+	const auto frame = probe_at<std::uint16_t>(native_frame);
+	std::uint8_t newcomers = 0;
+	if (host(s))
+	{
+		if (hold.enabled()) for (const auto& seat : machine.seats)
+			if (seat.at == stage::pending && seat.index > 0 && seat.index < 4 && listed(s, seat.record)) newcomers |= std::uint8_t(1u << seat.index);
+		// Unlike native 0x1f, this leaves immediately, before disk loading and outside the native parser's queue.
+		gns_transport::announce_join_boundary(frame, newcomers);
+		if (newcomers) logger::write("join hold: reliable admission notice sent before the zone load (frame %u, newcomer seats 0x%x); every existing participant waits for this decision at its own same-frame area boundary", unsigned(frame), unsigned(newcomers));
+		return;
+	}
+	if (!hold.enabled()) return; // a disabled guest does not wait; a disabled host still published mask 0 above
+	const auto began = hold_clock();
+	hold_member_notified = true; // even a missing decision must not create a fresh deadline on a later 0x47
+	const unsigned limit = hold.cap_ms + join_in_progress_core::join_hold_restart_limit_ms;
+	while (!gns_transport::poll_join_boundary(frame, newcomers))
+	{
+		gns_transport::service_join_boundary(); // receives the control; queues game packets without dispatching them
+		if (hold_clock() - began >= limit)
+		{
+			logger::write("join hold: no host admission decision for frame %u within %u ms (cap + safety); boundary wait released; native host-loss handling remains live", unsigned(frame), limit);
+			return;
+		}
+		Sleep(1);
+	}
+	if (!newcomers) return; // ordinary zone load: no world section skipped, no hold, no panel
+	for (int index = 1; index < 4; ++index) if (newcomers & (1u << index)) hold_arm_on(join_in_progress_core::join_hold::role::member, index);
+	if (hold.armed) hold.admitted_at = hold.since = began; // one absolute member deadline across wait/load/open
+	logger::write("join hold: reliable host admission notice accepted at this PC's area boundary (frame %u, newcomer seats 0x%x, waited %u ms); no world step before this PC's restart", unsigned(frame), unsigned(newcomers), unsigned(hold_clock() - began));
 }
 void hold_add_newcomer()
 {
@@ -164,10 +217,13 @@ void hold_capture()
 	if (!hold.active() || hold.who != join_in_progress_core::join_hold::role::host) return;
 	if (hold.armed) hold_open_armed();
 	const auto p = hold_now();
-	const bool same = p.frame == hold_opened.frame && p.draws == hold_opened.draws && p.game_time == hold_opened.game_time;
+	// The input scheduler copies its NEXT buffered input frame into network+0x1c at 0x606ada, even with no world
+	// update. That bookkeeping can move +1 while held; it is not a simulation step. Draws and world time must stay.
+	const bool same = p.draws == hold_opened.draws && p.game_time == hold_opened.game_time;
 	logger::write("join hold: image captured while held, %u ms after the opening (%u world update(s) skipped since the admission); frame %u -> %u, synchronized draws %u -> %u, game time %08x -> %08x - %s",
 		hold.elapsed(hold_clock()), world_hold_skips, unsigned(hold_opened.frame), unsigned(p.frame), hold_opened.draws, p.draws, hold_opened.game_time, p.game_time,
 		same ? "no simulation step between the zone load and the capture" : "the draws or the game time MOVED between the opening and the capture");
+	logger::write("join hold: capture clock proof - %u native unpause(s) deferred (effective game time held; raw/network clock live); native input frame %u -> %u is transport bookkeeping (0x606ada), not a world update", hold_clock_skips, unsigned(hold_opened.frame), unsigned(p.frame));
 }
 // After the core closed the hold (poll or release): the bridge is retail's test again, the message goes, one line.
 void hold_closed(join_in_progress_core::join_hold::event why, bool armed)
@@ -189,7 +245,7 @@ void hold_closed(join_in_progress_core::join_hold::event why, bool armed)
 		break;
 	case ev::cap:
 		if (armed)
-			logger::write("join hold: ended after %u ms - the zone load that admitted the newcomer did not end within %u ms; this PC simulates again (%s)", ms, join_in_progress_core::join_hold_armed_limit_ms, tail);
+			logger::write("join hold: ended after %u ms - the zone load that admitted the newcomer did not end within %u ms; this PC simulates again (%s)", ms, hold_armed_limit, tail);
 		else
 			logger::write("join hold: cap reached after %u ms (%d of %d newcomer(s) ready) - this PC simulates again until the restart, as without the hold; the newcomer is not refused (%s)",
 				ms, ready, hold.newcomers, tail);
@@ -214,7 +270,12 @@ void hold_end(join_in_progress_core::join_hold::event why)
 {
 	const bool armed = hold.armed;
 	if (hold.release(why, hold_clock()) != join_in_progress_core::join_hold::event::none) hold_closed(why, armed);
-	if (why == join_in_progress_core::join_hold::event::restart || why == join_in_progress_core::join_hold::event::session) zone_loaded_at = {};
+	if (why == join_in_progress_core::join_hold::event::restart || why == join_in_progress_core::join_hold::event::session)
+	{
+		zone_loaded_at = {};
+		hold_playing = hold_member_notified = false;
+		gns_transport::clear_join_boundaries();
+	}
 }
 // Every pump (tick), on every role: the zone-load edge; the host opens an armed hold once the zone load ended and
 // counts its admitted seats; a member only has the cap.
