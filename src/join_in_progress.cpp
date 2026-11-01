@@ -66,6 +66,10 @@ namespace join_in_progress
 		join_in_progress_core::cohort epoch;
 		join_in_progress_core::admission_losses admission; // p060fix/AR: the host's admission and its newcomers lost before the restart
 		void owed_restart_tick();
+		// p060fix/AR: this PC's restart restored the image (the mode-2 load returned) / its restored zone runs again; the
+		// no-removal window ends at the latter. Cleared at every restart entry and at the session's end.
+		bool restart_restored = false, restart_zone_back = false;
+		DWORD restart_entry_wait = 0;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -366,6 +370,16 @@ namespace join_in_progress
 		void __cdecl deferred_campaign_start(void*)
 		{
 			if (epoch.active && epoch.requested && zone_load_pending()) return;
+			// p060fix/AR (review P2): every host decision is carried out before this restart begins; the task stays
+			// scheduled while one cannot be yet (bounded: after 3 s the restart goes on and says so).
+			if (epoch.active && epoch.requested && !epoch.started && !gns_transport::newcomer_decisions_carried("this PC's restart entry"))
+			{
+				const DWORD now = GetTickCount();
+				if (!restart_entry_wait) restart_entry_wait = now | 1;
+				if (now - restart_entry_wait < 3000) return;
+				logger::write("join in progress: a host removal decision could not be carried out within 3000 ms - the restart goes on (the restarted epoch's cut frame removes it)");
+			}
+			restart_entry_wait = 0;
 			const auto task = deferred_start_task;
 			deferred_start_task = 0;
 			if (task) fn<task_remove_t>(task_remove)(fn<getter_t>(scheduler_getter)(), task);
@@ -373,6 +387,7 @@ namespace join_in_progress
 			// p060fix/AR: a newcomer the host decided lost is gone from this PC's session before anything of the restart
 			// runs (every peer restarts with the same participants), and no own-timeout removal is pending for one.
 			gns_transport::newcomers_restart_entry("this PC's restart entry");
+			restart_restored = restart_zone_back = false;
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
 				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
 			admission.clear();
@@ -427,6 +442,7 @@ namespace join_in_progress
 				}
 			}
 			fn<native_load_t>(at<std::uint32_t>(at<void*>(game, 0), 0x20c))(game, buffer, full);
+			if (epoch.active && epoch.started) restart_restored = true; // p060fix/AR
 		}
 
 		// ---- canonical cohort restart (join_in_progress_rules.hpp "Canonical cohort restart") ---------------------------
@@ -607,6 +623,7 @@ namespace join_in_progress
 			const bool start_menu = menu && std::strcmp(reinterpret_cast<const char*>(menu) + 0xc, "start") == 0;
 			const bool loading = zone_load_pending() || start_menu || (pause && at<std::uint8_t>(pause, 0x6c));
 			if (!loading && late_restart && epoch.started && epoch.saw_loading && !probe_zone_started) { probe_zone_started = true; probe_milestone("zone started", 3); }
+			if (!loading && epoch.started && restart_restored && !restart_zone_back) restart_zone_back = true; // p060fix/AR: the window ends
 			if (existing_cohort_member && epoch.resume_controls(!loading))
 			{
 				// Existing-world teardown disables controllers after network setup enabled them. The first input
@@ -723,7 +740,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (admission.announced || admission.lost) { admission.clear(); gns_transport::newcomers_restart_entry("the session's end", true); } hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_wait = 0; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -779,6 +796,7 @@ namespace join_in_progress
 				{
 					logger::write("join in progress: every newcomer of this admission was lost and no other participant remains - no restart needed; the host plays on");
 					admission.clear();
+					gns_transport::newcomers_restart_entry("the admission's end (no restart)", true);
 					return;
 				}
 				if (!join_in_progress_core::owed_restart_due(admission.lost, restart_begun(), sender, left, others, zone_load_pending(),
@@ -2094,5 +2112,5 @@ namespace join_in_progress
 	void newcomer_lost_decided(int index) { if (installed()) admission.decided(index, GetTickCount()); }
 	bool restart_begun() { return installed() && join_in_progress_core::restart_removal_held(epoch.active, epoch.announced, epoch.requested, epoch.started); }
 	bool restart_started() { return installed() && epoch.active && epoch.started; }
-	bool restart_removal_held() { return installed() && join_in_progress_core::removal_window(epoch.active, epoch.announced, epoch.requested, epoch.started, epoch.saw_loading); }
+	bool restart_removal_held() { return installed() && join_in_progress_core::removal_window(epoch.active, epoch.announced, epoch.requested, epoch.started, restart_zone_back); }
 }

@@ -94,9 +94,10 @@ void run_lost_newcomer_fixture() {
     put(s,0x26c,nodes[0]);put(s,0x278,2u);put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);put(nodes[1],node_next,static_cast<void*>(nullptr));
     admit(1);join_in_progress::newcomer_lost_decided(1);put(nodes[0],node_next,static_cast<void*>(nullptr));put(s,0x278,1u);
     join_in_progress::guarded_advance(false,nullptr);
-    lost_owed_starts=0;at=observed_jip_logs.size();join_in_progress::owed_restart_tick();
+    lost_owed_starts=0;at=observed_jip_logs.size();const auto ends_before=gns_transport::fixture_session_entries;join_in_progress::owed_restart_tick();
     assert(lost_owed_starts==0 && !join_in_progress::admission.lost);
     HOLD_EXPECT(at,"no other participant remains - no restart needed; the host plays on");
+    assert(gns_transport::fixture_session_entries==ends_before+1); // the admission's end reaches the transport (its decision record reset: review P1)
     at=observed_jip_logs.size();assert(hold_ticks(1,100)==0);HOLD_EXPECT(at,"every newcomer of this hold left (seat freed); the session plays on");
     assert(!join_in_progress::world_hold && hold_ticks(2,100)==2);
     std::cout<<"PASS AR-4 (host + lost newcomer only): no restart owed, the hold ends as before and the host plays on\n";
@@ -115,19 +116,61 @@ void run_lost_newcomer_fixture() {
     join_in_progress::epoch.begin();assert(!join_in_progress::restart_removal_held());
     join_in_progress::epoch.request();assert(join_in_progress::restart_removal_held() && !join_in_progress::restart_started());
     join_in_progress::epoch.start();assert(join_in_progress::restart_removal_held() && join_in_progress::restart_started());
-    join_in_progress::epoch.observe(true,false);assert(!join_in_progress::restart_removal_held() && join_in_progress::restart_begun()); // its restart load seen: the agreed frame 0 may remove
+    join_in_progress::epoch.observe(true,false);assert(join_in_progress::restart_removal_held()); // its load seen, the zone not back: still held
+    join_in_progress::restart_restored=join_in_progress::restart_zone_back=true;assert(!join_in_progress::restart_removal_held() && join_in_progress::restart_begun()); // the agreed frame 0 may remove
     assert(join_in_progress::epoch.observe(false,false) && !join_in_progress::restart_removal_held() && !join_in_progress::restart_begun());
+    join_in_progress::restart_restored=join_in_progress::restart_zone_back=false;
     gns_transport::fixture_boundary_mask=4;
     std::cout<<"PASS AR-5 (existing guest): the accepted admission mask reaches the transport's ledger, its restart entry runs before the hold ends, the no-removal window spans its 0x26 .. restored zone\n";
 
-    // ---- AR-6. The session's end clears the admission and the transport's ledger ----
+    // ---- AR-5b. A host decision this PC cannot carry out yet holds its restart entry (bounded), never skipped ----
+    {
+        const auto polls=gns_transport::fixture_carry_polls,begins=hold_begins;
+        gns_transport::fixture_carry_refusals=2;
+        auto& e=join_in_progress::epoch;
+        e.active=true;e.requested=true;e.started=false;join_in_progress::existing_cohort_member=true;join_in_progress::late_restart=false;
+        join_in_progress::deferred_start_task=0;
+        join_in_progress::deferred_campaign_start(nullptr); // refused: the task stays, nothing of the restart ran
+        assert(hold_begins==begins && !e.started && e.requested && gns_transport::fixture_carry_polls==polls+1);
+        join_in_progress::deferred_campaign_start(nullptr); // refused again
+        assert(hold_begins==begins && gns_transport::fixture_carry_polls==polls+2);
+        join_in_progress::deferred_campaign_start(nullptr); // carried out: the restart begins
+        assert(hold_begins==begins+1 && gns_transport::fixture_carry_polls==polls+3);
+        e={};join_in_progress::existing_cohort_member=false;
+        // a decision that can never be carried out: after 3 s the restart goes on and says so
+        gns_transport::fixture_carry_refusals=-1;
+        e.active=true;e.requested=true;e.started=false;join_in_progress::existing_cohort_member=true;
+        join_in_progress::deferred_campaign_start(nullptr);assert(hold_begins==begins+1);
+        join_in_progress::restart_entry_wait=(GetTickCount()-3001)|1;at=observed_jip_logs.size();
+        join_in_progress::deferred_campaign_start(nullptr);assert(hold_begins==begins+2);
+        HOLD_EXPECT(at,"a host removal decision could not be carried out within 3000 ms - the restart goes on");
+        gns_transport::fixture_carry_refusals=0;e={};join_in_progress::existing_cohort_member=false;
+    }
+    // the no-removal window: from the 0x26 until the restored zone runs again (the mode-2 load returned, then no load)
+    {
+        auto& e=join_in_progress::epoch;
+        e={};e.begin();e.request();assert(join_in_progress::restart_removal_held());
+        e.start();join_in_progress::restart_restored=false;join_in_progress::restart_zone_back=false;
+        assert(join_in_progress::restart_removal_held()); // inside its native start (ZJ-7j: after resetgame, before the mode-2 load)
+        join_in_progress::restart_restored=true;assert(join_in_progress::restart_removal_held()); // restored, the zone still loading
+        join_in_progress::restart_zone_back=true;assert(!join_in_progress::restart_removal_held() && join_in_progress::restart_begun()); // the agreed frame 0 may remove
+        join_in_progress::restart_restored=join_in_progress::restart_zone_back=false;e={};
+    }
+    std::cout<<"PASS AR-5b (restart entry): a host decision not yet carried out holds the production deferred start (the task stays, no native start), it begins once carried out, and after 3 s it goes on with a log; the no-removal window spans the 0x26 .. the restored zone running again\n";
+
+    // ---- AR-6. The session's end clears the admission and the transport's ledger (host and existing guest) ----
     put(local,0x18,0);put(remote,0x18,1);three();admit(1);join_in_progress::newcomer_lost_decided(1);
+    gns_transport::fixture_admitted=0x02;
     const auto session_entries=gns_transport::fixture_session_entries;
     put(s,0x26c,static_cast<void*>(nullptr));
     assert(!join_in_progress::guarded_advance(false,nullptr));
-    assert(gns_transport::fixture_session_entries==session_entries+1 && !join_in_progress::admission.lost && !join_in_progress::admission.announced && !join_in_progress::world_hold);
+    assert(gns_transport::fixture_session_entries==session_entries+1 && gns_transport::fixture_admitted==0 && !join_in_progress::admission.lost && !join_in_progress::admission.announced && !join_in_progress::world_hold);
+    // an existing guest's ledger (no host admission state at all) is cleared at its session's end too (review P3)
+    gns_transport::fixture_admitted=0x0c;
+    assert(!join_in_progress::guarded_advance(false,nullptr));
+    assert(gns_transport::fixture_session_entries==session_entries+2 && gns_transport::fixture_admitted==0);
     three();join_in_progress::epoch={};join_in_progress::area_load=false;machine.reset();
-    std::cout<<"PASS AR-6 (session end): the admission and the transport's ledger are cleared, the hold released\n";
+    std::cout<<"PASS AR-6 (session end): the host's admission and every PC's transport ledger are cleared unconditionally, the hold released\n";
 
     // restore the shared fixture state for the blocks after this one
     put(s,0x26c,nodes[0]);put(s,0x278,2u);put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);put(nodes[1],node_next,static_cast<void*>(nullptr));

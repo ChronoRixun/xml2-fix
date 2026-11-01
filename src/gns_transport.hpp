@@ -23,6 +23,7 @@ namespace gns_transport
 	// timeout before its restart, and carries out the host's decision at once or at its restart entry at the latest.
 	void note_admission_newcomers(std::uint8_t mask);
 	void newcomers_restart_entry(const char* where, bool session_ended = false);
+	bool newcomer_decisions_carried(const char* where); // a non-host PC: every host decision carried out (else its restart waits)
 	// Menu-thread pump after the room worker loaded the authenticated identity.
 	void room_ui_tick();
 	bool room_can_start();

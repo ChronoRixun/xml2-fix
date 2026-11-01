@@ -190,6 +190,23 @@ namespace gns_transport_core
 		// This PC's restart begins (or its session ends): the decisions still to carry out, then a fresh ledger.
 		std::uint8_t restart_entry() { const auto left = decided; admitted = decided = applied = 0; return left; }
 	};
+	// The host's decisions sent in the admission in progress (review P1: never a stale bit from an earlier admission).
+	// A bit counts only while the admission still lists that index as one of its newcomers; otherwise it is dropped
+	// and the removal is classified afresh. reset(): every end of an admission (restart entry, no-restart, session end).
+	struct host_decisions
+	{
+		std::uint8_t sent = 0;
+		bool already(int index, bool admission_lists_it)
+		{
+			const auto b = newcomer_ledger::bit(index);
+			if (!(sent & b)) return false;
+			if (admission_lists_it) return true;
+			sent &= std::uint8_t(~b); // an earlier admission's decision: not this one
+			return false;
+		}
+		void record(int index) { sent |= newcomer_ledger::bit(index); }
+		void reset() { sent = 0; }
+	};
 	// The host's classification of a participant's removal (p060fix/AR): a newcomer of the admission in progress lost
 	// before the restart was announced (0x26 not broadcast, no restart begun) is removed at once after the decision went
 	// out; anything else keeps the ordinary paths (agreed cut frame, native watchdog, native leave).

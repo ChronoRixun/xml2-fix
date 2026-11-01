@@ -169,8 +169,10 @@ namespace lost_newcomer_model
 		else { p.epoch.request(); restart_entry(w, p); }
 		return true;
 	}
-	// Frame 0 of the restarted epoch: every peer's gate needs every listed participant's frame-0 input; a lost one is
-	// removed by the agreed cut frame (frame 0) only after the restored zone runs (restart_removal_held clears).
+	// Frame 0 of the restarted epoch, MODELLED (not the production cut-frame code): every peer's gate needs every
+	// listed participant's frame-0 input, so a participant lost after the 0x26 is removed by the existing agreed cut
+	// frame at frame 0 on every peer once its restored zone runs. What the model checks here is that nobody removed it
+	// earlier, inside its restart, and that every peer entered its restart with the same list.
 	void frame0(world& w, int lost)
 	{
 		for (auto& p : w.peers)
@@ -182,7 +184,7 @@ namespace lost_newcomer_model
 		}
 	}
 	struct outcome { bool same_entry = true, same_frame0 = true, all_entered = true, holds_released = true, none_inside = true, second_in = true, old_peers_waited = true; std::uint8_t entry = 0; };
-	outcome run(int existing, int newcomers, point at, unsigned order, bool host_dies = false)
+	outcome run(int existing, int newcomers, point at, unsigned order, bool host_dies = false, bool both = false)
 	{
 		world w = admit(existing, newcomers);
 		const int lost = existing + 1;            // the first newcomer is the one lost
@@ -196,13 +198,15 @@ namespace lost_newcomer_model
 		if (at == point::after_start) { host_sender(w); for (auto& p : w.peers) if (!p.host) while (guest_message(w, p)) {} restart_entry(w, w.host()); }
 		// the loss
 		w.peers[std::size_t(lost)].alive = false;
+		if (both) w.peers[std::size_t(lost + 1)].alive = false; // both newcomers lost at once
 		w.now += 300;
 		if (host_dies) w.host().alive = false;
 		for (auto& p : w.peers) if (!p.host) p.lost_seen = (order >> 1) & 1;   // a guest may see the link end before the host's decision
-		for (auto& p : w.peers) own_timeout(w, p, lost);                       // and its own 8.5 s timeout may fire early
+		for (auto& p : w.peers) { own_timeout(w, p, lost); if (both) own_timeout(w, p, lost + 1); } // its own 8.5 s timeout may fire early
 		if (!host_dies)
 		{
 			host_loss(w, lost);
+			if (both) host_loss(w, lost + 1);
 			if (!after_image)
 			{
 				bool adding = false;
@@ -218,15 +222,18 @@ namespace lost_newcomer_model
 					if (p.host || !p.alive) continue;
 					if ((order >> 2) & 1) carry(w, p, false);             // a transport tick before its next message
 					own_timeout(w, p, lost);
+					if (both) own_timeout(w, p, lost + 1);
 					guest_message(w, p);
 				}
 			}
 			if (w.announced && !w.host().entered) restart_entry(w, w.host());
 			frame0(w, lost);
+			if (both) frame0(w, lost + 1);
 		}
 		else
 		{
-			// the host is lost too: no decision and no 0x26 ever arrive; every guest's session ends (host-left)
+			// the host is lost too: no decision and no 0x26 ever arrive; every guest's session ends (host-left, the existing
+			// native path - modelled). Checked: no old peer removed the newcomer by its own timeout meanwhile.
 			for (auto& p : w.peers) if (!p.host && p.alive) { own_timeout(w, p, lost); p.ended = true; p.held = false; }
 		}
 		outcome o;
@@ -265,8 +272,8 @@ namespace lost_newcomer_model
 						++orders;
 					}
 					char what[256];
-					std::snprintf(what, sizeof what, "AR model: %d existing guest(s) + %d newcomer(s), one lost %s - every peer restarts with the same participants (the lost one %s), the same frame-0 set, every hold released%s (8 delivery orders)",
-						existing, newcomers, point_name(at), at == point::after_start ? "removed at the agreed frame 0" : "removed before every restart entry", newcomers == 2 ? ", the second newcomer reaches the shared start" : "");
+					std::snprintf(what, sizeof what, "AR model: %d existing guest(s) + %d newcomer(s), one lost %s - every peer enters its restart with the same participants (the lost one %s), nobody removes inside a restart, every hold released%s (8 delivery orders)",
+						existing, newcomers, point_name(at), at == point::after_start ? "still listed: the modelled agreed frame 0 removes it" : "removed before every restart entry", newcomers == 2 ? ", the second newcomer enters and is listed at frame 0" : "");
 					check(ok, what);
 					++scenarios;
 				}
@@ -278,9 +285,22 @@ namespace lost_newcomer_model
 				bool ok = true;
 				for (unsigned order = 0; order < 8; ++order) { const auto o = run(existing, newcomers, point::transfer, order, true); ok = ok && o.holds_released && o.old_peers_waited; }
 				char what[200];
-				std::snprintf(what, sizeof what, "AR model: host lost with the newcomer (%d existing, %d newcomer(s)) - no guest removes it by its own timeout, every session ends at host-left with no hold left", existing, newcomers);
+				std::snprintf(what, sizeof what, "AR model: host lost with the newcomer (%d existing, %d newcomer(s)) - no old peer removes it by its own timeout while it waits for a decision that never comes (the session end is the native host-left path)", existing, newcomers);
 				check(ok, what);
 			}
+		// both newcomers of one admission lost at once (1 old guest + 2 newcomers): the restart still follows, without either
+		for (const auto at : {point::before_image, point::transfer, point::after_ready})
+		{
+			bool ok = true;
+			for (unsigned order = 0; order < 8; ++order)
+			{
+				const auto o = run(1, 2, at, order, false, true);
+				ok = ok && o.same_entry && o.same_frame0 && o.all_entered && o.holds_released && o.none_inside && !(o.entry & 0x0c);
+			}
+			char what[220];
+			std::snprintf(what, sizeof what, "AR model: both newcomers lost at once %s (1 old guest) - host and guest enter the restart with the same participants, neither newcomer listed, holds released (8 delivery orders)", point_name(at));
+			check(ok, what);
+		}
 		char done[160];
 		std::snprintf(done, sizeof done, "AR model: %u loss scenarios x 8 delivery orders = %u runs", scenarios, orders);
 		check(scenarios == 15 && orders == 120, done);

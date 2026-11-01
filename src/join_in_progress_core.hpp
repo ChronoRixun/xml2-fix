@@ -309,14 +309,14 @@ namespace join_in_progress_core
 	};
 	// The restart has begun on this PC: its 0x26 was broadcast (host) or handled, or its native campaign start entered.
 	inline bool restart_removal_held(bool active, bool announced, bool requested, bool started) { return active && (announced || requested || started); }
-	// Every peer refrains from removing a lost participant inside its own restart: from the restart's 0x26 until the
-	// restart's own zone load has been seen (the restored world; the transport also needs the zone running). Live ZJ-7j:
-	// the guest's timeout removal landed after resetgame, before the mode-2 load. After the load the restarted frame 0
-	// waits for the lost participant on every peer and the agreed cut frame removes it there (never held to the cohort
-	// sync: a host seat waiting at `starting` for a dead newcomer would hold that sync for its 120 s load limit).
-	inline bool removal_window(bool active, bool announced, bool requested, bool started, bool saw_loading)
+	// Every peer refrains from removing a lost participant inside its own restart: from the restart's 0x26 until its
+	// restored zone runs again (the mode-2 load returned and the pump next sees no load). Live ZJ-7j: the guest's
+	// timeout removal landed after resetgame, before the mode-2 load. Afterwards the restarted frame 0 waits for the
+	// lost participant on every peer and the agreed cut frame removes it there (never held to the cohort sync: a host
+	// seat waiting at `starting` for a dead newcomer would hold that sync for its 120 s load limit).
+	inline bool removal_window(bool active, bool announced, bool requested, bool started, bool zone_back)
 	{
-		return restart_removal_held(active, announced, requested, started) && !(started && saw_loading);
+		return restart_removal_held(active, announced, requested, started) && !(started && zone_back);
 	}
 	// Once the host announced a positive admission (every old peer holds for it), a cohort restart follows whatever
 	// happens to the newcomers: the held worlds are only made equal again by the one image. When every newcomer of the

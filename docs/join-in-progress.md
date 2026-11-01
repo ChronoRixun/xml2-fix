@@ -489,14 +489,21 @@ One host decision, one rule for every peer:
 - **Every other peer carries it out before its restart.** It records the admission's newcomers (the accepted boundary
   mask, its mesh newcomers, the decisions), never removes one by its own agreement or timeout before its restart,
   removes a decided one at once when its zone runs, and at the latest at its restart entry (`deferred_campaign_start`,
-  before the hold ends and before the native campaign start).
+  before the hold ends and before the native campaign start). A decision it cannot carry out yet keeps the deferred
+  start scheduled (nothing of the restart runs) for up to 3 s, then the restart goes on with a log line; a fault inside
+  the native removal is logged and never retried. The host's record of sent decisions belongs to the admission: it is
+  reset at every end of one (restart entry, no-restart, session end), and a bit for an index the admission no longer
+  lists is dropped, so a reused index is classified afresh. Every PC clears its ledger at its session's end.
 - **The restart always follows a positive admission.** If every newcomer was lost before its image (no transfer runs)
   and an old peer remains, the host still captures one image for the existing participants (the owed restart); the
   host stays held with the old peers until it begins. With nobody else left the host plays on as before.
-- **Nobody removes anyone inside a restart.** From the restart's 0x26 (host: its broadcast) until its own restart load
-  was seen, removals wait; then the restarted frame 0 waits for a participant lost after the 0x26 on every peer and the
-  agreed cut frame removes it there (the existing in-epoch path; AJ2 makes its hero canonical). A loss noticed before
-  the restart and not decided by the host starts its agreement afresh at the restart entry.
+- **Nobody removes anyone inside a restart.** From the restart's 0x26 (host: its broadcast) until its restored zone runs
+  again (the mode-2 load returned and the next pump sees no load), the cut-frame removal and the native watchdog's 20 s
+  fallback wait (the watchdog's own removal during a zone load still runs natively, as before, so no load barrier can
+  wait on a lost participant). Then the restarted frame 0 waits for a participant lost after the 0x26 on every peer and
+  the agreed cut frame removes it there (the existing in-epoch path; AJ2 makes its hero canonical). The window never
+  waits for the cohort sync (a host seat waiting at `starting` for a dead newcomer would hold that for 120 s). A loss
+  noticed before the restart and not decided by the host starts its agreement afresh at the restart entry.
 
 So every peer begins its restart with the same participants, at the same epoch frame 0; the hold releases at the
 restart on every peer (or at its cap, as before). A second newcomer of the same admission rides on (the sender
@@ -508,9 +515,12 @@ outside the ordering.
 
 Tests: `xml2_join_in_progress_test` (wire, ledger, classification, admission accounting, restart window, owed-restart
 rule, and a message-level cohort model: 1-2 existing guests x 1-2 newcomers x five loss points x 8 delivery orders, all
-peers equal at the restart entry and at frame 0, every hold released, the second newcomer in; the host lost too; a
-060zj control and a sensitivity check). `xml2_join_in_progress_boundary_test restart` blocks AR-1..AR-6 run the
-production admission, advance, hold, owed restart, restart entry and session end.
+peers equal at the restart entry, nobody removing inside a restart, every hold released, the second newcomer in; both
+newcomers lost at once; the host lost too; a 060zj control and a sensitivity check showing the checks fail when a guest
+ignores the decision or times out by itself). The model's frame 0 and host-left are modelled, not production code.
+`xml2_join_in_progress_boundary_test restart` blocks AR-1..AR-6 run the production admission, advance, hold, owed
+restart, restart entry (its bounded wait), the restart window and session end; the transport half (the decision on
+the wire, carrying it out, the queued resend) has no fixture and is checked live.
 
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 

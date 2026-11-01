@@ -1094,17 +1094,17 @@ namespace gns_transport
 		// applies in the restarted epoch, and no peer removes anyone inside its restart (restart entry .. restored zone).
 		bool session_hosted_here();
 		gns_transport_core::newcomer_ledger newcomers_here; // a non-host PC: the admission's newcomers and the host's decisions
-		std::uint8_t host_decided = 0;                      // the host: decisions sent in this admission
+		gns_transport_core::host_decisions host_decided;    // the host: decisions sent in this admission
 		void declare_gone(link& l, const char* why);
 		bool host_newcomer_decision(int index, const char* why)
 		{
 			if (index < 1 || index > 3 || !session_hosted_here()) return false;
-			const auto b = gns_transport_core::newcomer_ledger::bit(index);
-			if (host_decided & b) return true;
-			if (gns_transport_core::classify_newcomer_loss(true, join_in_progress::admission_newcomer(index), join_in_progress::restart_begun()) !=
+			const bool newcomer = join_in_progress::admission_newcomer(index);
+			if (host_decided.already(index, newcomer)) return true;
+			if (gns_transport_core::classify_newcomer_loss(true, newcomer, join_in_progress::restart_begun()) !=
 				gns_transport_core::newcomer_loss::before_restart) return false;
-			host_decided |= b;
-			const auto remaining = std::uint8_t(join_in_progress::admission_remaining(index) & ~host_decided);
+			host_decided.record(index);
+			const auto remaining = std::uint8_t(join_in_progress::admission_remaining(index) & ~host_decided.sent);
 			const auto wire = gns_transport_core::newcomer_lost(std::uint8_t(index), remaining);
 			int to = 0, send_failures = 0;
 			for (auto& item : links)
@@ -1121,7 +1121,7 @@ namespace gns_transport
 		}
 		// A non-host PC carries out one host decision: the participant's native removal as the host's notice 0x2b would
 		// (0x612c40 with 0x1107). removed / absent (already gone, e.g. by the native 0x2b) / later (no running zone yet).
-		enum class carry { removed, absent, later };
+		enum class carry { removed, absent, later, fault };
 		carry remove_index_now(int index)
 		{
 			__try
@@ -1143,28 +1143,31 @@ namespace gns_transport
 				}
 				return carry::absent;
 			}
-			__except (EXCEPTION_EXECUTE_HANDLER) { own_removal = false; return carry::later; }
+			__except (EXCEPTION_EXECUTE_HANDLER) { own_removal = false; return carry::fault; }
 		}
-		void carry_decisions(const char* where, bool last_chance)
+		// True when no host decision is left to carry out here.
+		bool carry_decisions(const char* where, bool last_chance)
 		{
-			if (!newcomers_here.decided) return;
-			if (!last_chance && join_in_progress::restart_started()) return; // inside the restart: only its entry carries them out
+			if (!newcomers_here.decided) return true;
+			if (!last_chance && join_in_progress::restart_started()) return false; // inside the restart: only its entry carries them out
 			for (int index = 1; index <= 3; ++index)
 			{
 				if (!newcomers_here.must_remove(index)) continue;
-				link* l = nullptr;
-				for (auto& item : links) if (!item->vanished && (participant_index(*item) == index || (item->gone_at && item->lost_index == index))) { l = item.get(); break; }
+				const std::uint8_t* peer = nullptr; // the link is found again after the native call (it may end links)
+				for (auto& item : links) if (!item->vanished && (participant_index(*item) == index || (item->gone_at && item->lost_index == index))) { peer = item->peer; break; }
 				const auto r = remove_index_now(index);
 				if (r == carry::later)
 				{
-					if (last_chance) logger::write("online: participant %d - the host's removal decision could NOT be carried out at %s (no running zone); the restarted epoch's cut frame removes it", index, where);
+					if (last_chance) logger::write_once("ar-carry-later", "online: participant %d - the host's removal decision cannot be carried out yet at %s (no running zone); this PC's restart waits for it", index, where);
 					continue;
 				}
 				newcomers_here.removed(index);
-				if (l) { l->vanished = true; if (!l->gone_at) l->gone_at = GetTickCount() | 1; l->lost_index = index; }
-				logger::write("online: participant %d %s by the host's decision at %s (lockstep frame %u), before this PC's restart - every peer restarts without it",
+				if (link* l = peer ? by_peer(peer) : nullptr) { l->vanished = true; if (!l->gone_at) l->gone_at = GetTickCount() | 1; l->lost_index = index; }
+				if (r == carry::fault) logger::write("online: participant %d - a FAULT inside the native removal carrying out the host's decision at %s; not retried", index, where);
+				else logger::write("online: participant %d %s by the host's decision at %s (lockstep frame %u), before this PC's restart - every peer restarts without it",
 					index, r == carry::removed ? "removed" : "already gone", where, unsigned(*reinterpret_cast<const std::uint16_t*>(lockstep_frame)));
 			}
+			return !newcomers_here.decided;
 		}
 		void newcomer_decision_received(link& from, const gns_transport_core::parsed& p)
 		{
@@ -1358,6 +1361,11 @@ namespace gns_transport
 			link* l = by_peer(peer);
 			if (!l || !l->bound || l->vanished) return false;
 			const auto now = GetTickCount();
+			if (l->gone_at && now - l->gone_at > native_fallback_ms && join_in_progress::restart_removal_held())
+			{
+				logger::write_once("ar-fallback-held", "online: participant %d (%s) - the native removal's 20 s fallback waits until this PC's restarted zone runs (no removal inside the cohort restart)", index, text(l->address, l->port).c_str());
+				return true;
+			}
 			if (l->gone_at && now - l->gone_at > native_fallback_ms)
 			{
 				logger::write_once("native-fallback", "online: participant %d (%s) still not handed over %lu ms after its loss - the native removal runs", index, text(l->address, l->port).c_str(), static_cast<unsigned long>(native_fallback_ms));
@@ -1868,13 +1876,19 @@ namespace gns_transport
 		if (!ready || session_hosted_here()) return;
 		newcomers_here.admit(mask);
 	}
+	bool newcomer_decisions_carried(const char* where)
+	{
+		if (!ready || session_hosted_here()) return true;
+		return carry_decisions(where, true);
+	}
 	void newcomers_restart_entry(const char* where, bool session_ended)
 	{
 		if (!ready) return;
 		if (!session_ended && !session_hosted_here()) carry_decisions(where, true);
 		const auto left = newcomers_here.restart_entry();
-		if (left) logger::write("online: %u host removal decision(s) (mask 0x%x) still open at %s", unsigned(((left >> 1) & 1) + ((left >> 2) & 1) + ((left >> 3) & 1)), unsigned(left), where);
-		host_decided = 0;
+		if (left) logger::write("online: %u host removal decision(s) (mask 0x%x) still open at %s - NOT carried out", unsigned(((left >> 1) & 1) + ((left >> 2) & 1) + ((left >> 3) & 1)), unsigned(left), where);
+		host_decided.reset();
+		for (auto& item : links) item->controls.clear();
 		if (session_ended) return;
 		// A loss this PC noticed before its restart and still holds (not an admission decision): its agreement starts
 		// afresh in the restarted epoch, where frame 0 waits for it on every peer.
@@ -2076,6 +2090,7 @@ namespace gns_transport
 	void clear_join_boundaries() {}
 	void note_admission_newcomers(std::uint8_t) {}
 	void newcomers_restart_entry(const char*, bool) {}
+	bool newcomer_decisions_carried(const char*) { return true; }
 	bool party_snapshot(party_facts& out) { out = {}; return false; }
 	bool remove_member(unsigned) { return false; }
 	bool deliver_removal(unsigned) { return false; }

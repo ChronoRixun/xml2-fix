@@ -103,7 +103,16 @@ namespace
 			"AR window: the restart has begun from its 0x26 (host: its broadcast) or its native start until the cohort epoch ends");
 		check(removal_window(true, false, true, false, false) && removal_window(true, false, false, true, false) && !removal_window(true, false, false, true, true) &&
 			!removal_window(true, false, false, false, false) && !removal_window(false, true, true, true, false) && removal_window(true, true, false, false, true),
-			"AR window: no removal from the restart's 0x26 until its own restart load was seen (then the agreed frame 0); a load seen before the start does not open it");
+			"AR window: no removal from the restart's 0x26 until its restored zone runs again (then the agreed frame 0); a zone seen before the start does not open it");
+		{
+			host_decisions d;
+			check(!d.already(2, true), "AR host decisions: nothing sent yet");
+			d.record(2);
+			check(d.already(2, true) && d.already(2, true), "AR host decisions: one decision per newcomer in the admission (its later native removal does not send again)");
+			check(!d.already(2, false) && !d.already(2, true), "AR host decisions (review P1): a bit from an admission that no longer lists the index is dropped - a reused index is classified afresh");
+			d.record(3); d.reset();
+			check(!d.already(3, true) && d.sent == 0, "AR host decisions: reset at every end of an admission (restart entry, no-restart, session end)");
+		}
 		check(owed_restart_due(0x02, false, false, false, true, false, false, 0, 0) && !owed_restart_due(0, false, false, false, true, false, false, 0, 0) &&
 			!owed_restart_due(0x02, true, false, false, true, false, false, 0, 0) && !owed_restart_due(0x02, false, true, false, true, false, false, 0, 0) &&
 			!owed_restart_due(0x02, false, false, true, true, false, false, 0, 0) && !owed_restart_due(0x02, false, false, false, false, false, false, 0, 0) &&

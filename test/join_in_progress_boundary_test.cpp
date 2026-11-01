@@ -53,9 +53,10 @@ bool poll_join_boundary(std::uint16_t,std::uint8_t& mask) { mask=fixture_boundar
 void service_join_boundary() { ++fixture_boundary_services;if(fixture_boundary_service) fixture_boundary_service(); }
 void clear_join_boundaries() {}
 // p060fix/AR: the transport half of a lost newcomer (its decisions and the restart entry) is recorded for the fixture.
-unsigned fixture_restart_entries=0,fixture_session_entries=0;std::uint8_t fixture_admitted=0;
+unsigned fixture_restart_entries=0,fixture_session_entries=0,fixture_carry_polls=0;std::uint8_t fixture_admitted=0;int fixture_carry_refusals=0;
 void note_admission_newcomers(std::uint8_t mask) { fixture_admitted|=mask; }
-void newcomers_restart_entry(const char*,bool session_ended) { ++(session_ended ? fixture_session_entries : fixture_restart_entries); if(!session_ended) fixture_admitted=0; }
+void newcomers_restart_entry(const char*,bool session_ended) { ++(session_ended ? fixture_session_entries : fixture_restart_entries); fixture_admitted=0; }
+bool newcomer_decisions_carried(const char*) { ++fixture_carry_polls; if(fixture_carry_refusals>0) { --fixture_carry_refusals;return false; } return fixture_carry_refusals==0; }
 }
 namespace xml1_turrets { std::uint32_t fixture_hook = 0; unsigned fixture_epochs = 0; std::uint32_t installed_process_hook() { return fixture_hook; } void cohort_epoch(float) { ++fixture_epochs; } digest probe_digest(unsigned) { return {}; } }
 namespace actor_pools { std::vector<std::uint8_t> fixture_controller_reset; const std::vector<std::uint8_t>& installed_controller_reset() { return fixture_controller_reset; } }
