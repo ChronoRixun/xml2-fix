@@ -1888,8 +1888,7 @@ namespace gns_transport
 		const auto left = newcomers_here.restart_entry();
 		if (left) logger::write("online: %u host removal decision(s) (mask 0x%x) still open at %s - NOT carried out", unsigned(((left >> 1) & 1) + ((left >> 2) & 1) + ((left >> 3) & 1)), unsigned(left), where);
 		host_decided.reset();
-		for (auto& item : links) item->controls.clear();
-		if (session_ended) return;
+		if (session_ended) { for (auto& item : links) item->controls.clear(); return; } // queued decisions only die with the session
 		// A loss this PC noticed before its restart and still holds (not an admission decision): its agreement starts
 		// afresh in the restarted epoch, where frame 0 waits for it on every peer.
 		const auto now = GetTickCount() | 1;

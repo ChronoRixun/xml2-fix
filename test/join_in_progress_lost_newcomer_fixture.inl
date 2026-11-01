@@ -141,7 +141,8 @@ void run_lost_newcomer_fixture() {
         gns_transport::fixture_carry_refusals=-1;
         e.active=true;e.requested=true;e.started=false;join_in_progress::existing_cohort_member=true;
         join_in_progress::deferred_campaign_start(nullptr);assert(hold_begins==begins+1);
-        join_in_progress::restart_entry_wait=(GetTickCount()-3001)|1;at=observed_jip_logs.size();
+        assert(join_in_progress::restart_entry_waiting && GetTickCount()-join_in_progress::restart_entry_wait<3000); // armed at the first refusal, never expired at once
+        join_in_progress::restart_entry_wait=GetTickCount()-3001;at=observed_jip_logs.size();
         join_in_progress::deferred_campaign_start(nullptr);assert(hold_begins==begins+2);
         HOLD_EXPECT(at,"a host removal decision could not be carried out within 3000 ms - the restart goes on");
         gns_transport::fixture_carry_refusals=0;e={};join_in_progress::existing_cohort_member=false;

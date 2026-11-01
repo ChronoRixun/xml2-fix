@@ -69,7 +69,7 @@ namespace join_in_progress
 		// p060fix/AR: this PC's restart restored the image (the mode-2 load returned) / its restored zone runs again; the
 		// no-removal window ends at the latter. Cleared at every restart entry and at the session's end.
 		bool restart_restored = false, restart_zone_back = false;
-		DWORD restart_entry_wait = 0;
+		DWORD restart_entry_wait = 0; bool restart_entry_waiting = false;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -375,11 +375,11 @@ namespace join_in_progress
 			if (epoch.active && epoch.requested && !epoch.started && !gns_transport::newcomer_decisions_carried("this PC's restart entry"))
 			{
 				const DWORD now = GetTickCount();
-				if (!restart_entry_wait) restart_entry_wait = now | 1;
+				if (!restart_entry_waiting) { restart_entry_waiting = true; restart_entry_wait = now; }
 				if (now - restart_entry_wait < 3000) return;
 				logger::write("join in progress: a host removal decision could not be carried out within 3000 ms - the restart goes on (the restarted epoch's cut frame removes it)");
 			}
-			restart_entry_wait = 0;
+			restart_entry_waiting = false;
 			const auto task = deferred_start_task;
 			deferred_start_task = 0;
 			if (task) fn<task_remove_t>(task_remove)(fn<getter_t>(scheduler_getter)(), task);
@@ -740,7 +740,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_wait = 0; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
