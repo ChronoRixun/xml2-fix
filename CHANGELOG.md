@@ -36,11 +36,18 @@ X-Men Legends II's own online menus and joins only in the lobby, and the control
 - **Friends can join a game that has already started.** The newcomer waits on Joined Game while the others keep
   playing; at the host's next area load everyone, the host included, reloads that area together and the newcomer
   takes a free hero. That one load takes a little longer. Nobody appears in the middle of an area.
-- Joining a game in progress now works with three and four players: a second or third friend joins a running game
-  the same way, and two friends who are waiting at the same time both come in at the same exit.
-- It is on by default. The host's **DROP-IN** setting turns it off for one room; a friend who tries to join a started
-  game then sees "This session has started; ask the host to return to the lobby". A player who set `LateJoin=0` in
-  `xml2-fix.ini` keeps that choice through a rebuild or repair.
+- Joining a game in progress works with two, three and four players, at any exit and in areas with enemies: a
+  second or third friend joins a running game the same way, and two friends who are waiting at the same time both
+  come in at the same exit.
+- When a friend joins, the host and the other players wait up to 10 seconds on an "A player is joining..." message
+  instead of replaying a moment of play. The wait is `[Online] JoinHoldSeconds` in `xml2-fix.ini` (default 10, 0..15;
+  `0` turns it off); each PC uses its own value. If a join takes longer than the wait, play continues and the
+  friend comes in moments later.
+- If a friend's game drops while they are joining, the others are no longer left stuck: the game carries on without
+  that friend, who can join again by code.
+- Joining a game in progress is on by default. The host's **DROP-IN** setting turns it off for one room; a friend
+  who enters the code of a game that has started then is told that the session has started and to ask the host to
+  return to the lobby. A player who set `LateJoin=0` in `xml2-fix.ini` keeps that choice through a rebuild or repair.
 - In testing, admissions on one PC and on two PCs at home held through movement by both players and the walked exits
   that followed, with every PC staying in step.
 
@@ -91,9 +98,10 @@ with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The 
 
 **Known limitations**
 
-- Co-op was tested on one PC and on two PCs at home. Not verified yet: play through the relay (for networks where a
-  direct connection fails; relay connection failures are still being investigated), four players on separate PCs,
-  and sessions longer than about ten minutes.
+- Co-op was tested on one PC and on two PCs at home, with two, three and four players, including fights. Not
+  verified yet: playing through the relay (networks where a direct connection fails; relay connection failures are
+  still being investigated), four players on four separate PCs, long sessions, and joins over slow connections (if a
+  join takes longer than the wait, play continues and the friend comes in moments later).
 - If the host leaves or loses the connection, the session ends; there is no host takeover or automatic reconnect yet
   (planned for 0.8). If a healthy host drops out unexpectedly, please keep `xml2-fix.log` from every PC: the cause is
   not known yet.
@@ -115,7 +123,7 @@ with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The 
 - Join a game in progress on two PCs, then play through two more areas together; turn DROP-IN off and check the
   refusal; leave and rejoin; remove a player from Party.
 - Every way the host can leave (Quit, dead hero, crash, lost connection) and the host-left buttons.
-- A relayed connection, three or four players on separate PCs, and a long session.
+- A relayed connection, four players on four separate PCs, a long session, and joining over a slow connection.
 - A real 0.5 campaign: load, play, save, quit and reload; shops and rewards; telekinesis and flying pickup.
 - The original online menus with `--online-menus off`, and a mismatched build or setting being refused with a clear
   message.
