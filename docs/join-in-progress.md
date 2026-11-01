@@ -46,7 +46,7 @@ Transport = gns        ; required (rule 25); rooms (Host=broker / JoinCode) impl
 JoinInProgress = 1     ; every PC of the session must set it (rule 26 JoinInProgress)
 LateJoin = 0           ; safe default: admission only before lobby START
 ; LateJoin = 1         ; experimental shared restore; host setting / Host setup DROP-IN row
-JoinHoldSeconds = 6    ; p060fix/AQ: hold the host and existing peers while a newcomer gets the image (0..15, 0 = off)
+JoinHoldSeconds = 10   ; p060fix/AQ/AQ2: hold the host (from the zone load that admits a newcomer) and existing peers while it gets the image (0..15, 0 = off)
 ```
 
 Without `Transport=gns` the key is refused by name in the log ("needs [Online] Transport=gns (rule 25 GnsTransport)")
@@ -275,19 +275,23 @@ bound/switched/native-send-pending; four-period owner snapshots include active,
 pending and native-send backlog. The earlier same-frame checksum variant still
 requires live component comparison; LateJoin=0 remains the release recommendation.
 
-## Join hold: "A player is joining..." (`[Online] JoinHoldSeconds`, p060fix/AQ)
+## Join hold: "A player is joining..." (`[Online] JoinHoldSeconds`, p060fix/AQ + AQ2)
 
 Owen 2026-10-31: hold the host instead of letting it play on and then replaying those seconds after the restart.
 
-**The problem.** The late admission's image is captured at the zone load (`start_image`). The host then kept simulating
-alone until its own cohort restart while the image streamed to the newcomer. The restart reloads every game byte from
-the image, so the host REPLAYED those seconds (deja vu). Any per-process state outside the image that changed in that
-window differed on the host alone. Example from live-060zg ZG-C-3Pp2: 4.36 s of game time, 493 draws and seven hits
-ran on the host only. AP's NPC power slots were one such case (npc-power-rule.md item 23); p060fix-AP section 3 lists
-the suspected others.
+**The problem.** A late admission's image is captured at the zone load (`start_image`). Before AQ the host kept
+simulating alone until its own cohort restart while the image streamed to the newcomer. The restart reloads every
+game byte from the image, so the host REPLAYED those seconds (deja vu), and any per-process state outside the image
+that changed in that window differed on the host alone. Example from live-060zg ZG-C-3Pp2: 4.36 s of game time, 493
+draws and seven hits ran on the host only. AP's NPC power slots were one such case (npc-power-rule.md item 23).
 
-**The hold.** Between the image capture and this PC's restart, the game update's world section is skipped. That
-section is 0x46f0ca..0x46f60d inside 0x46eef0, behind `test byte ptr [esi+0x728], 2` at 0x46f0a9. It contains:
+AQ held from the image capture. live-060zi (ZI-1b, ZI-1bp) showed a second, earlier host-only window: between the end
+of the zone load that admitted the newcomer and the capture (the native add's wait while the mesh connects), the host
+ran its world alone: ZI-1bp +55 synchronized draws and +1.0 s game time at the same native frame 1913 (host 3753 vs
+lobby guest 3698 at the hold opening; both were 3698 at the zone load's end); ZI-1b +25 draws, +1.11 s. AQ2 closes it.
+
+**The hold.** The game update's world section is skipped. That section is 0x46f0ca..0x46f60d inside 0x46eef0, behind
+`test byte ptr [esi+0x728], 2` at 0x46f0a9. It contains:
 - the timed-event pump, so every actor update and AI think;
 - countdowns, physics and collision;
 - the camera update;
@@ -295,22 +299,37 @@ section is 0x46f0ca..0x46f60d inside 0x46eef0, behind `test byte ptr [esi+0x728]
 
 A CALL-shape bridge replaces the 7-byte test (call rel32 + 2 nops). With the hold off it runs retail's own test. With
 the hold on it returns ZF=1, the flags of the test with the bit clear, so the site's `je 0x46f60d` skips the section.
-Each skip is counted. This is the gate of the retired AE12 world hold, now used for a different window.
+Each skip is counted. The game update has one caller, the main-loop iteration (0x40235a, game vt+0x16c; the two other
+vt+0x16c call sites, 0x5a7f13 and 0x5abd3c, are three-argument methods of other classes).
 
 What keeps running, so the window stays alive and never shows "not responding":
 - the main-loop iteration 0x401d70 with its message pump;
-- the scheduler 0x401f74: the network tasks, the native image sender, this module's tick, the native message timers;
+- the scheduler 0x401f74: the network tasks, the native image sender, this module's tick;
 - the input manager update 0x40219e;
-- rendering, which draws the frozen scene.
+- rendering, which draws the frozen scene, and Present, where the fix draws the message (below).
 
 Who holds, and from when:
-- **The host**, from its image capture: `start_image` right after the native campaign start succeeded. A second
-  newcomer admitted at the same zone load rides the transfer and joins the open hold.
+- **The host: armed at the admission, open at the zone load's end (AQ2).** The admission is the native add `run_add`
+  at the synchronous area-load boundary (0x484def `call 0x611910` inside the zone loader 0x484ce0, after its
+  `test byte ptr [ebp+0x220], 2` pending-load check and before the load): `area_barrier_bridge` -> `guarded_advance` ->
+  `advance` -> `run_add` -> `hold_arm`. From that call the world section is skipped on the host. The load itself is
+  synchronous (no pump runs during it: the 0x1f the add queued at 03.621 in ZI-1bp left from the pump task at
+  04.987), its spawn draws happen in the loader on every peer alike, and every game update after it is held. The hold
+  OPENS at the first pump after that zone load (`hold_tick`: the zone flag is clear): its clock, cap, opening line
+  and message start there, so the zone load (disk time, 0.86..2.30 s measured) is not charged to the cap. While armed
+  the cap does not apply; `join_hold_armed_limit_ms` = 30000 bounds a zone load that never ends, and every newcomer
+  gone (its add given up, or it left) ends the armed hold at the next pump. A second newcomer admitted at the same zone
+  load joins the armed hold at its own native add (`player N joins the hold`); its image rides the first one's
+  transfer as before. The capture (`start_image`) then logs the proof line `join hold: image captured while held, N
+  ms after the opening (K world update(s) skipped since the admission); frame F -> F, synchronized draws D -> D, game
+  time T -> T - no simulation step between the zone load and the capture`.
 - **Every existing participant**, from the late-restart 0x47: `campaign_notice` with the `"LJ"` marker and
-  `existing_cohort_member`. In the 060zg logs those peers already stopped there (the lobby guest's game time froze);
-  the hold makes it explicit and shows them the message.
+  `existing_cohort_member`, as in AQ. Its world does not run between its zone load and the 0x47 (ZI-1bp: draws 3698
+  at its zone-load end and at the 0x47; during AQ's hold no game update even reached its gate: `0 world update(s)
+  skipped`). Every opening line now carries `since this PC's zone load ended: frame F0 -> F, synchronized draws D0 -> D
+  (+n), game time T0 -> T` on every role, so a live log keeps measuring that window.
 - **Never** the newcomer (it is loading the image), a lobby START (no marker), or `JoinHoldSeconds=0`. With 0 the
-  gate is not even written.
+  gate is not even written and the admission arms nothing.
 
 How it ends:
 1. **This PC's restart begins.** `deferred_campaign_start` ends the hold first thing, before any native call. Log:
@@ -320,48 +339,96 @@ How it ends:
    That moment is logged as `join hold: every newcomer is ready after N ms ...`. The native start then waits a fixed
    1 s inside the image sender task (0x60814b: `0x60a920(1.0)`, a blocking network wait) before 0x5f3c20. The hold
    covers that second too, bounded by `join_hold_restart_limit_ms` = 4000 (`... did not begin within 4000 ms`).
-2. **The cap.** A newcomer not ready `JoinHoldSeconds` after the hold opened ends it: `join hold: cap reached after N
-   ms (R of M newcomer(s) ready) - this PC simulates again until the restart, as without the hold; the newcomer is not
-   refused`. Nothing else changes: the seat, the transfer and the restart continue as before. An existing participant
-   cannot see the seats, so only its restart or its cap ends its hold. A member whose host died is released by its
-   cap, and the host-left path (5003) runs as before.
+2. **The cap.** A newcomer not ready `JoinHoldSeconds` after the hold OPENED (the zone load's end on the host) ends
+   it: `join hold: cap reached after N ms (R of M newcomer(s) ready) - this PC simulates again until the restart, as
+   without the hold; the newcomer is not refused`. Nothing else changes: the seat, the transfer and the restart
+   continue as before. An existing participant cannot see the seats, so only its restart or its cap ends its hold. A
+   member whose host died is released by its cap, and the host-left path (5003) runs as before.
 3. **Every newcomer of the hold left** (seat freed): `join hold: ended after N ms - every newcomer of this hold left`.
    A killed joiner's seat is only freed when the native removal runs, about 20 s later in ZD-JK/ZF-JK, so the cap
    ends that hold first.
 4. **The session's end** (host Quit, back to the front end): `join hold: ended after N ms by the session's end`.
+5. **A zone load that never ends** (armed only): `join hold: ended after 30000 ms - the zone load that admitted the
+   newcomer did not end within 30000 ms; this PC simulates again`.
 
-**The screen.** The game's own timed network message (0x60a600) shows `A player is joining...`, or `2 players are
-joining...` / `3 players are joining...`. It is the same on-screen notice the game uses for `PLAYER_LAG1/2` and the
-solo-segment text. It has priority 6 (above the solo-segment notice) and a duration of cap + 4 s. The main-loop
-render path (0x4029f0) and the menu layer (0x59f7d7) draw it through 0x60a5d0. The hold expires it through the native
-0x60a690 when it ends. There is no logo, no art and no new LC asset.
+**The screen (AQ2).** The fix draws the text itself, on the host and every existing participant: `A player is
+joining...`, or `2 players are joining...` / `3 players are joining...`. AQ used the game's timed network message
+(0x60a600); it never showed in a hold (live-060zi: 4 + 12 captures on host and lobby guest, frozen scene and HUD, no
+text, no failure line). Its getter 0x60a5d0 is read by the main-loop stall screen 0x402920 (entered only when
+0x606880(3) reports a stall, 0x4021b7) and by the menu layer 0x59f7d7, which only moves a panel by it; so it needs a
+path the hold does not reach. Now:
+- `display::set_overlay` (registered at install when the hold is on, before `display::install`, so Present is hooked
+  in every display mode) calls `hold_overlay_draw` before every Present, ahead of the test pipe's screenshot hook.
+- `hold_overlay::draw` (src/hold_overlay.cpp) renders the text once per text and back-buffer size with GDI (Arial
+  bold, 1/24 of the back-buffer height, antialiased) into a panel: dark blue (0x101830, ~80% opaque), a thin blue
+  border (0x5a8cd8), white text, centred horizontally at 30% of the height.
+- **Blend path** (normal): CopyRects the panel's rectangle from the back buffer into a system-memory surface of the
+  same format, blend on the CPU, CopyRects it back. Formats X8R8G8B8, A8R8G8B8, R5G6B5, X1R5G5B5, A1R5G5B5. No render
+  state is touched.
+- **Clear path** (a multisampled back buffer, another format, or a refused CopyRects): `Clear` over the panel, its
+  border and the text's pixel runs (opaque), with the full-back-buffer viewport set and the engine's restored; only
+  when the current render target is the back buffer.
+- Logs: `join hold: message shown ("A player is joining...", blend path, panel WxH at X,Y)` at the first drawn frame
+  of each hold; `join hold: message removed` when the hold ends (the next frame is drawn without it);
+  `join hold: the on-screen message could not be drawn (<step>: <hresult>) - the hold itself goes on` once per hold.
+- While armed (inside the zone load) nothing is drawn; the load screen shows. The newcomer draws nothing.
 
 On an existing participant, the newcomer count comes from the mesh: each `new mesh participant` since its last restart.
 
-**The cap's default: 6 s.** Owen's rule (10-31): the default is 6, rounded up only if the longest measured
-admission-to-ready time is above 6 s. Measured over every late admission in the live-060zd/ze/zf/zg host logs, from the
-image capture to every newcomer having the image (the host's `cohort start announced`):
-- 56 admissions where the joiner lived (the evidence as of 2026-10-31 21:22, including live-060zg's ZG-2P-E2 and ZG-2PC-E1);
-- longest 5272 ms (ZE-4PE2p: 4 peers, probed, two-PC), next 5163 ms (ZF-3P-E2c);
-- one-PC 3463..4431 ms (9), two-PC 3842..5272 ms (47); 2 peers 3463..4431, 3 peers 3842..5163, 4 peers 4139..5272;
-- the two joiner-kill runs (ZD-JK, ZF-JK; ZF-JK-cont is the same log continued: 20199 ms) are the case the cap exists for.
+**The cap's default: 10 s (Owen, 2026-11-01).** Owen: "should likely be 10 for a default just to be safe" - a join
+over the internet can be slower than the LAN evidence. `[Online] JoinHoldSeconds` stays 0..15, 0 = off. With the AQ2
+opening the cap covers the zone load's end -> every newcomer ready (the host's `cohort start announced`), measured over
+every late admission in the live-060zd..zi host logs (p060fix-AQ2 scripts/measure_aq2.py; the zone load's end is the
+host's `world back faces: zone` line after the admission, which the first pump follows within ~0.1 s, so these are
+slight overestimates):
+- 67 admissions where the joiner lived (2 duplicate logs and 2 runs without a zone-load line left out); the two
+  joiner-kill runs (ZD-JK, ZF-JK) are the cap's case;
+- the added window (zone-load end -> capture): 22..59 ms with 2 peers (no mesh to connect), 1.10..1.40 s with 3-4
+  peers (median 1.14 s);
+- longest open -> ready 6395 ms (live-060ze ZE-4PE2p: 1123 ms + 5272 ms), then 6353 (ZF-3P-E2c), 6151 (ZG-4P-E2):
+  3.6 s under the 10 s default (AQ's 6 s would have been 0.40 s short);
+- an existing participant's window (its 0x47 -> its own restart) is shorter: at most 5277 ms (ZE-4PE2p) over 64
+  member windows in the peer logs (scripts/measure_members_aq2.py), 4.7 s under 10 s.
 
-The default therefore stays 6. The measurement script and its table are in the p060fix-AQ work folder.
+Expected host hold time (the opening -> the restart, i.e. what the opening and end lines will show). The cap applies to
+open -> ready; the margin column is 10 s minus the longest open -> ready of the row:
 
-Logs: `join hold: [Online] JoinHoldSeconds=6 - ...` at install (or `join hold: off ...`), `join hold: the game
-simulation is held on this PC (host|existing participant) from ...: N newcomer(s), cap C ms ...; frame F, synchronized
-draws D, game time T; ... shows "A player is joining..."`, then one of the end lines above. The value is a per-PC
-choice, not part of the gameplay agreement: a hold only skips frames that the restart replaces.
+| Peers after the join | Newcomers | PCs | Runs | Added window min/med/max ms | Open -> ready min/med/max ms | Hold (open -> restart) min/med/max ms | Margin vs 10 s |
+|---|---|---|---|---|---|---|---|
+| 2 | 1 | one-PC | 9 | 22 / 27 / 59 | 3458 / 4328 / 4457 | 4464 / 5349 / 5463 | 5.54 s |
+| 2 | 1 | two-PC | 3 | 28 / 29 / 59 | 4202 / 4225 / 4312 | 5215 / 5238 / 5324 | 5.69 s |
+| 3 | 1 | two-PC | 32 | 62 / 1135 / 1232 | 3646 / 5309 / 6353 | 4652 / 6336 / 7370 | 3.65 s |
+| 3 | 2 | two-PC | 4 | 1100 / 1233 / 1395 | 5430 / 5483 / 5594 | 6441 / 6503 / 6623 | 4.41 s |
+| 4 | 1 | two-PC | 12 | 1105 / 1184 / 1239 | 4915 / 5721 / 6395 | 5932 / 6725 / 7407 | 3.61 s |
+| 4 | 2 | two-PC | 6 | 1110 / 1150 / 1356 | 5529 / 5813 / 5947 | 6530 / 6817 / 6953 | 4.05 s |
+
+Logs: `join hold: [Online] JoinHoldSeconds=10 - ...` at install (or `join hold: off ...`); on the host `join hold:
+armed on this PC (host) at the admission of player N ...`, then `join hold: the game simulation is held on this PC
+(host) from the end of the zone load that admitted the newcomer (armed N ms earlier at the admission; K world
+update(s) skipped since): ...`, `join hold: image captured while held ...`; on a member `join hold: the game
+simulation is held on this PC (existing participant) from the late-restart 0x47 ...`; then `message shown`, one of
+the end lines above and `message removed`. The value is a per-PC choice, not part of the gameplay agreement: a hold
+only skips frames that the restart replaces.
 
 Tests: `xml2_join_in_progress_test` (the `join_hold` state machine: 1 and 2 newcomers, ready before the cap, the cap
 across the tick wrap, every newcomer gone, the session's end, the restart limit, members with 1..3 newcomers, off,
-the clamp, the texts, the guards). `xml2_join_in_progress_boundary_test <retail> restart` covers:
+the clamp, the texts, the guards; AQ2: armed -> open, no cap while armed, the cap from the opening, the armed limit,
+gone while armed, two newcomers at one zone load, the default 10). `xml2_join_in_progress_boundary_test <retail>
+restart` covers:
 - the bridge entered by CALL exactly as installed;
-- the hold opened through the production entries (the host's capture; a member through the production
-  `campaign_notice`);
+- the host's hold armed through the PRODUCTION admission (`area_barrier_bridge` -> `run_add`, natives stubbed) and
+  opened by the production pump poll at the zone load's end, with every main-loop iteration from the admission to the
+  shared start checked to run no world step, draw nothing and advance no game time (including the frames between the
+  load's end and the first pump - the window the host ran alone in live-060zi), and the capture's proof line;
+- a member through the production `campaign_notice`, with its `+0` since its zone load;
 - the production pump poll and the production `deferred_campaign_start`, whose stubbed native campaign start records
-  that the hold was already released and that no world step or draw ran between the capture and the restart;
-- the real retail 0x60a600 / 0x60a690 on a synthetic scheduler and clock.
+  that the hold was already released and that no world step or draw ran since the admission;
+- the production overlay (`display::set_overlay`'s hook) on a CPU fake Direct3D 8 device (test/fake_d3d8.hpp): drawn
+  on every held frame and logged once, gone after the restart, the cap, a joiner leaving and the session's end; a
+  16-bit back buffer, a multisampled one (the clear path, viewport restored), a render target that is not the back
+  buffer (logged once) and a refused CopyRects.
+`xml2_test` draws the message with `hold_overlay::draw` on a real windowed Direct3D 8 device (blend and clear paths)
+and reads it back with the test pipe's capture.
 
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 

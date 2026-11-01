@@ -70,6 +70,7 @@
 #include "conversations_rules.hpp"
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
+#include "hold_overlay.hpp"
 #include "frame_rate_rules.hpp"
 #include "game_version_rules.hpp"
 #include "iat_hook.hpp"
@@ -878,6 +879,7 @@ namespace
 	}
 
 	void check_d3d8_capture(void* d3d);
+	void check_hold_overlay_device(void* d3d);
 	void check_windowed_presents(void* d3d, const d3d8::display_mode& desktop);
 
 	// A file offset for a virtual address of a PE image, or nothing.
@@ -4450,6 +4452,7 @@ namespace
 		CHECK(std::ranges::any_of(fullscreen, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
 		CHECK(std::ranges::all_of(borderless, [](const auto& m) { return resolution_rules::fits(m.width, m.height); }));
 		check_d3d8_capture(d3d);
+		check_hold_overlay_device(d3d);
 		check_windowed_presents(d3d, desktop);
 		static_cast<IUnknown*>(d3d)->Release();
 	}
@@ -5192,6 +5195,79 @@ namespace
 		CHECK(!frame_capture::save({}, png_path).empty()); // nothing captured
 		std::printf("  info  wrote %s and .bmp\n", png_path.string().c_str());
 
+		static_cast<IUnknown*>(device)->Release();
+		DestroyWindow(hwnd);
+		UnregisterClassW(wc.lpszClassName, wc.hInstance);
+	}
+
+	// p060fix/AQ2: the join hold's message drawn by the production hold_overlay::draw onto a REAL Direct3D 8 back buffer
+	// (a windowed device of our own, never shown), read back with the test pipe's own capture: the blend path and the
+	// clear path, and nothing drawn without text.
+	void check_hold_overlay_device(void* d3d)
+	{
+		std::printf("Direct3D 8 join-hold message (hold_overlay: blend and clear paths on a real device)\n");
+		WNDCLASSW wc{};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"xml2_test_hold_overlay";
+		RegisterClassW(&wc);
+		const HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"xml2_test", WS_OVERLAPPEDWINDOW, 0, 0, 640, 360, nullptr, nullptr, wc.hInstance, nullptr);
+		CHECK(hwnd != nullptr);
+		d3d8::present_parameters pp{640, 360, d3d8::format_x8r8g8b8, 1, d3d8::multisample_none, d3d8::swap_discard, hwnd, TRUE, FALSE, 0, 0, 0, d3d8::present_interval_default};
+		void* device = nullptr;
+		const HRESULT created = d3d8::method<d3d8::create_device_t>(d3d, d3d8::d3d_slot::create_device)(d3d, 0, d3d8::device_type_hal, hwnd, 0x20 /* software vertex processing */, &pp, &device);
+		if (FAILED(created) || !device)
+		{
+			std::printf("  skip  no Direct3D 8 device here (%08lX)\n", created);
+			DestroyWindow(hwnd);
+			UnregisterClassW(wc.lpszClassName, wc.hInstance);
+			return;
+		}
+		const auto clear = d3d8::method<d3d8::clear_t>(device, d3d8::device_slot::clear);
+		const char* text = "A player is joining...";
+		const auto panel = hold_overlay::render(text, 640, 360);
+		const auto r = hold_overlay::place(panel, 640, 360);
+		CHECK(panel.width > 100 && panel.height > 20 && r.right <= 640 && r.bottom <= 360);
+		for (const bool force_clear : {false, true})
+		{
+			CHECK(SUCCEEDED(clear(device, 0, nullptr, d3d8::clear_target, 0xFF204060, 1.0f, 0)));
+			const auto o = hold_overlay::draw(device, text, force_clear);
+			if (o.drawn == hold_overlay::path::none) std::printf("  info  draw failed at %s (%08lX)\n", o.step ? o.step : "?", static_cast<unsigned long>(o.result));
+			CHECK(o.drawn == (force_clear ? hold_overlay::path::clear : hold_overlay::path::blend));
+			frame_capture::frame picture;
+			CHECK(frame_capture::read_back_buffer(device, picture).empty());
+			if (picture.bgrx.size() != 640u * 360u * 4u) continue;
+			auto px = [&](LONG x, LONG y) { const auto* p = picture.bgrx.data() + (std::size_t(y) * 640 + std::size_t(x)) * 4; return std::uint32_t(p[2]) << 16 | std::uint32_t(p[1]) << 8 | p[0]; };
+			CHECK(px(r.left, r.top) == 0x5a8cd8 && px(r.right - 1, r.bottom - 1) == 0x5a8cd8);       // the border
+			CHECK(px(r.left - 1, r.top) == 0x204060 && px(0, 0) == 0x204060 && px(639, 359) == 0x204060); // the scene outside
+			unsigned white = 0, inside = 0;
+			for (LONG y = r.top; y < r.bottom; ++y)
+				for (LONG x = r.left; x < r.right; ++x) { ++inside; white += px(x, y) == 0xffffff; }
+			CHECK(white > 100);
+			const LONG b = LONG(panel.border) + 1;
+			const auto bg = px(r.left + b, r.top + b);
+			// the panel: dark blue over the scene (blend: ~80% 0x101830 over 0x204060), opaque 0x101830 (clear)
+			if (force_clear) CHECK(bg == 0x101830);
+			else CHECK(bg == (hold_overlay::blend(0xff204060u, (205u << 24) | 0x101830u) & 0xffffffu));
+			std::printf("  info  %s path: panel %ldx%ld at %ld,%ld, %u of %u panel pixels are text-white\n", force_clear ? "clear" : "blend", r.right - r.left, r.bottom - r.top, r.left, r.top, white, inside);
+			if (!force_clear)
+			{
+				const auto png_path = std::filesystem::temp_directory_path() / "xml2_test_hold_overlay.png";
+				CHECK(frame_capture::save(picture, png_path).empty());
+				std::printf("  info  wrote %s\n", png_path.string().c_str());
+			}
+		}
+		// no text: nothing drawn, the frame stays the scene
+		CHECK(SUCCEEDED(clear(device, 0, nullptr, d3d8::clear_target, 0xFF204060, 1.0f, 0)));
+		CHECK(hold_overlay::draw(device, nullptr).drawn == hold_overlay::path::none && hold_overlay::draw(device, "").drawn == hold_overlay::path::none);
+		frame_capture::frame picture;
+		CHECK(frame_capture::read_back_buffer(device, picture).empty());
+		if (picture.bgrx.size() == 640u * 360u * 4u)
+		{
+			const auto* p = picture.bgrx.data() + (std::size_t(r.top) * 640 + std::size_t(r.left)) * 4;
+			CHECK(p[0] == 0x60 && p[1] == 0x40 && p[2] == 0x20);
+		}
+		hold_overlay::release();
 		static_cast<IUnknown*>(device)->Release();
 		DestroyWindow(hwnd);
 		UnregisterClassW(wc.lpszClassName, wc.hInstance);
@@ -12399,6 +12475,24 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--hold-overlay-rules") == 0)
+	{
+		// p060fix/AQ2: the join hold's message on a real Direct3D 8 device of our own (a window that is never shown).
+		wchar_t folder[MAX_PATH]{};
+		GetSystemDirectoryW(folder, MAX_PATH);
+		const auto d3d8_dll = LoadLibraryW((std::wstring(folder) + L"\\d3d8.dll").c_str());
+		const auto create = d3d8_dll ? reinterpret_cast<d3d8::direct3d_create8_t>(GetProcAddress(d3d8_dll, "Direct3DCreate8")) : nullptr;
+		void* d3d = create ? create(d3d8::sdk_version) : nullptr;
+		if (d3d)
+		{
+			check_hold_overlay_device(d3d);
+			static_cast<IUnknown*>(d3d)->Release();
+		}
+		else
+			std::printf("  skip  Direct3D 8 isn't available here\n");
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--xtraction-shop-rules") == 0)
 	{
 		check_xtract_rules();

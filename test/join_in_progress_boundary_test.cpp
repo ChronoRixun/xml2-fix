@@ -1,5 +1,6 @@
 // Production bridge with synthetic native services; maps the owned PE, never launches it.
 #include "../src/join_in_progress.cpp"
+#include "fake_d3d8.hpp" // p060fix/AQ2: the hold overlay on a CPU fake device (join_in_progress_hold.inl)
 #include "actor_pools_plan.hpp" // p060fix/AI: the production W11 relocation plan, installed first in the `actorpools` mode
 #include "entity_world.hpp"
 #include "entity_grid.hpp"
@@ -46,6 +47,7 @@ namespace e4_core { bool fixture_installed = false; bool installed() { return fi
 namespace pad_prompts { unsigned device_switches() { return 0; } }
 namespace entity_capacity { entity_capacity_layout::descriptor fixture_descriptor; std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { return fixture_descriptor; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
+namespace display { void (*fixture_overlay)(void*) = nullptr; void set_overlay(void (*draw)(void*)) { fixture_overlay = draw; } } // p060fix/AQ2: the hold's message hook
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }
 bool flag(const wchar_t*,const wchar_t*,bool n) { return n; }
