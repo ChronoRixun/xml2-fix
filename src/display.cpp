@@ -48,6 +48,7 @@ namespace display
 		bool geometry_hooked = false;
 		bool paused = false; // RunInBackground=0: Present reports the device lost while unfocused
 		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
+		void (*overlay_hook)(void*) = nullptr;   // p060fix/AQ2: the join hold's on-screen message, drawn before the screenshot hook
 		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
 		const char* no_activate = nullptr;       // why the window is shown without taking the focus, if it is
 		HWND window = nullptr;
@@ -414,6 +415,10 @@ namespace display
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
 			script_pools::sample(); // guarded D0 snapshot on the game's render thread
+			if (overlay_hook)
+			{
+				overlay_hook(self); // onto the finished frame, so the test pipe's screenshot below shows it too
+			}
 			if (frame_hook)
 			{
 				frame_hook(self); // the back buffer holds the finished frame
@@ -577,9 +582,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
+			if (can_pause || frame_hook || overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : overlay_hook ? "the join hold's on-screen message" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
@@ -1289,6 +1294,13 @@ namespace display
 		frame_hook = hook;
 	}
 
+	void set_overlay(void (*draw)(void* device))
+	{
+		std::lock_guard lock(mutex);
+		overlay_hook = draw;
+		if (draw && device) hook_present("the join hold's on-screen message");
+	}
+
 	void disable_multisampling(const char* why)
 	{
 		no_multisampling = why;
@@ -1466,7 +1478,7 @@ namespace display
 			// the device to start the frame limiter live, but every hook passes the engine's calls
 			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
-			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
+			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{overlay_hook != nullptr, "the join hold's on-screen message"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
 			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{

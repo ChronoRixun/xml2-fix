@@ -349,7 +349,7 @@ namespace join_in_progress_core
 	// sender that is not this late restart's refuses the image.
 	inline bool image_rides_running_transfer(bool sender_running, bool late_restart) { return sender_running && late_restart; }
 
-	// p060fix/AQ: the join hold ([Online] JoinHoldSeconds, default 6, 0..15, 0 = off). From the host's image capture
+	// p060fix/AQ: the join hold ([Online] JoinHoldSeconds, default 10 since AQ2, 0..15, 0 = off). From the host's image capture
 	// (and an existing participant's late-restart 0x47) until this PC's own cohort restart begins, the game update's
 	// world section is skipped, so no peer runs game frames the image does not contain (live-060zg ZG-C-3Pp2: the
 	// host simulated 4.36 s alone, 493 draws, seven hits, between the capture and the restart). The window stays alive
@@ -357,8 +357,17 @@ namespace join_in_progress_core
 	// the wait for the newcomers' images only: once every newcomer is ready (the host saw every image arrive) the hold
 	// lasts to the restart, which the native start reaches after its fixed 1 s network wait (0x60814b: 0x60a920(1.0)),
 	// bounded by restart_limit_ms. At the cap, or when every newcomer left, the PC simulates as before the hold.
-	inline constexpr int join_hold_default_seconds = 6, join_hold_max_seconds = 15;
-	inline constexpr std::uint32_t join_hold_restart_limit_ms = 4000;
+	// p060fix/AQ2: on the host the hold is ARMED at the admission (the native add at the synchronous area-load boundary,
+	// before the zone loads) - the world section is skipped from then on - and OPENS (its clock, line and message) at
+	// the first pump after that zone load: live-060zi ZI-1bp, the host ran ~30 world updates (+55 draws, +1.0 s game
+	// time) alone between its zone-load end and the image capture. While armed the cap does not apply (the zone load
+	// is disk time, not the newcomer's); armed_limit_ms bounds it, and every newcomer gone ends it as usual.
+	// The default: 10 s (Owen, 2026-11-01 01:25: "should likely be 10 for a default just to be safe" - internet joins
+	// can be slower than the LAN evidence). Measured with the AQ2 opening over the live-060zd..zi host logs, the longest
+	// zone-load-end -> every-newcomer-ready time is 6.40 s (live-060ze ZE-4PE2p: 1.12 s zone-load end -> capture +
+	// 5.27 s capture -> ready): 3.6 s of margin; AQ's 6 would have been 0.40 s short.
+	inline constexpr int join_hold_default_seconds = 10, join_hold_max_seconds = 15;
+	inline constexpr std::uint32_t join_hold_restart_limit_ms = 4000, join_hold_armed_limit_ms = 30000;
 	inline int join_hold_seconds(int configured)
 	{
 		return configured < 0 ? 0 : configured > join_hold_max_seconds ? join_hold_max_seconds : configured;
@@ -370,9 +379,10 @@ namespace join_in_progress_core
 		enum class event : std::uint8_t { none, ready, cap, restart_late, gone, restart, session };
 		role who = role::none;
 		std::uint32_t cap_ms = std::uint32_t(join_hold_default_seconds) * 1000u;
-		std::uint32_t since = 0, ready_at = 0, ended_ms = 0;
+		std::uint32_t since = 0, ready_at = 0, ended_ms = 0, armed_ms = 0;
 		int newcomers = 0, ready = 0;
 		bool all_ready = false;
+		bool armed = false; // AQ2: held since the admission, clock not started (the zone load has not ended yet)
 		event last = event::none;
 		unsigned holds = 0;
 		bool active() const { return who != role::none; }
@@ -382,8 +392,22 @@ namespace join_in_progress_core
 		bool begin(role r, int count, std::uint32_t now)
 		{
 			if (!enabled() || active() || r == role::none) return false;
-			who = r; since = now; ready_at = 0; ended_ms = 0; newcomers = count < 1 ? 1 : count; ready = 0; all_ready = false;
-			last = event::none; ++holds;
+			who = r; since = now; ready_at = 0; ended_ms = 0; armed_ms = 0; newcomers = count < 1 ? 1 : count; ready = 0; all_ready = false;
+			armed = false; last = event::none; ++holds;
+			return true;
+		}
+		// AQ2: the host's hold at the admission: held at once, the clock starts at open() (the zone load's end).
+		bool arm(role r, int count, std::uint32_t now)
+		{
+			if (!begin(r, count, now)) return false;
+			armed = true;
+			return true;
+		}
+		// AQ2: the zone load ended: the hold's clock (cap, elapsed, the logged hold time) starts now. False when not armed.
+		bool open(std::uint32_t now)
+		{
+			if (!active() || !armed) return false;
+			armed = false; armed_ms = now - since; since = now;
 			return true;
 		}
 		void add_newcomer() { if (active()) ++newcomers; }
@@ -404,6 +428,7 @@ namespace join_in_progress_core
 					return event::ready;
 				}
 			}
+			if (armed) return elapsed(now) >= join_hold_armed_limit_ms ? close(event::cap, now) : event::none;
 			if (!all_ready && elapsed(now) >= cap_ms) return close(event::cap, now);
 			if (all_ready && now - ready_at >= join_hold_restart_limit_ms) return close(event::restart_late, now);
 			return event::none;
@@ -415,7 +440,7 @@ namespace join_in_progress_core
 			ended_ms = elapsed(now);
 			// The native start runs only once every image is in (the 0x26 / J completion), on every role.
 			if (why == event::restart) { all_ready = true; if (ready < newcomers) ready = newcomers; }
-			who = role::none; last = why;
+			who = role::none; last = why; armed = false;
 			return why;
 		}
 	};

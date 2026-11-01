@@ -601,9 +601,10 @@ int main(int argc, char** argv)
 		{
 			// p060fix/AQ: the join hold's state machine (src/join_in_progress_core.hpp join_hold).
 			using ev = join_hold::event; using role = join_hold::role;
-			check(join_hold_default_seconds == 6 && join_hold_max_seconds == 15 && join_hold_seconds(6) == 6 && join_hold_seconds(0) == 0 && join_hold_seconds(-4) == 0 && join_hold_seconds(16) == 15 && join_hold_seconds(15) == 15,
-			      "AQ: JoinHoldSeconds defaults to 6 (Owen 10-31: 6 s unless the measured longest admission is above; measured 5.27 s) and is clamped to 0..15");
-			join_hold h; check(h.enabled() && h.cap_ms == 6000, "AQ: a default hold caps at 6000 ms");
+			check(join_hold_default_seconds == 10 && join_hold_max_seconds == 15 && join_hold_seconds(6) == 6 && join_hold_seconds(0) == 0 && join_hold_seconds(-4) == 0 && join_hold_seconds(16) == 15 && join_hold_seconds(15) == 15,
+			      "AQ2: JoinHoldSeconds defaults to 10 (Owen 11-01: to be safe over internet joins; LAN max zone-load end -> ready 6.40 s, live-060ze ZE-4PE2p) and is clamped to 0..15");
+			{ join_hold d; check(d.enabled() && d.cap_ms == 10000 && d.begin(join_hold::role::host, 1, 0) && d.poll(9999, 1, 0) == ev::none && d.poll(10000, 1, 0) == ev::cap, "AQ2: a default hold caps at 10000 ms (still held at 9999)"); }
+			join_hold h; h.configure(6); check(h.enabled() && h.cap_ms == 6000, "AQ: JoinHoldSeconds=6 caps at 6000 ms (the checks below use 6)");
 			// 1 newcomer, ready before the cap; the restart ends it
 			check(h.begin(role::host, 1, 1000) && h.active() && h.newcomers == 1 && !h.begin(role::host, 1, 1001), "AQ: the host opens one hold (a second open is refused while it lasts)");
 			check(h.poll(2000, 1, 0) == ev::none && h.poll(6999, 1, 0) == ev::none, "AQ: a newcomer still streaming keeps the hold (5999 ms)");
@@ -628,16 +629,32 @@ int main(int argc, char** argv)
 			// existing participants (3 / 4 peers): they cannot see the seats; only the cap, their restart or the session end
 			for (int joining = 1; joining <= 3; ++joining)
 			{
-				join_hold m; char what[160];
+				join_hold m; m.configure(6); char what[160];
 				std::snprintf(what, sizeof what, "AQ: an existing participant with %d newcomer(s) holds until its restart (text \"%s\"), never ready by itself", joining, join_hold_text(joining));
 				check(m.begin(role::member, joining, 0) && m.newcomers == joining && m.poll(5999, -1, -1) == ev::none && !m.all_ready && m.release(ev::restart, 4000) == ev::restart && m.ready == joining, what);
 			}
-			{ join_hold m; check(m.begin(role::member, 0, 0) && m.newcomers == 1 && m.poll(6000, -1, -1) == ev::cap, "AQ: a member whose host died is released by the cap (count 0 shows as one player)"); }
+			{ join_hold m; m.configure(6); check(m.begin(role::member, 0, 0) && m.newcomers == 1 && m.poll(6000, -1, -1) == ev::cap, "AQ: a member whose host died is released by the cap (count 0 shows as one player)"); }
 			{ join_hold n; check(!n.begin(role::none, 1, 0) && !n.active(), "AQ: a newcomer (role none) never holds"); }
 			{ join_hold off; off.configure(0); check(!off.enabled() && !off.begin(role::host, 1, 0) && off.poll(10000, 1, 0) == ev::none, "AQ: JoinHoldSeconds=0 never holds (today's path)"); }
 			{ join_hold big; big.configure(40); check(big.cap_ms == 15000, "AQ: JoinHoldSeconds above 15 is clamped to 15 s"); }
 			check(std::strcmp(join_hold_text(1), "A player is joining...") == 0 && std::strcmp(join_hold_text(3), "3 players are joining...") == 0 && std::strcmp(join_hold_text(0), "A player is joining...") == 0,
 			      "AQ: the hold screen text: \"A player is joining...\" / \"N players are joining...\"");
+			// p060fix/AQ2: the host's hold is armed at the admission and opens (its clock starts) at the zone load's end.
+			{
+				join_hold a; a.configure(6);
+				check(a.arm(role::host, 1, 1000) && a.active() && a.armed && !a.arm(role::host, 1, 1001) && !a.begin(role::host, 1, 1001), "AQ2: the admission arms one hold (held at once; a second arm or open is refused while it lasts)");
+				check(a.poll(1000 + 7000, 1, 0) == ev::none && a.armed, "AQ2: while armed (the zone load) the cap does not apply: 7000 ms of loading keep it");
+				check(a.open(9500) && !a.armed && a.armed_ms == 8500 && a.since == 9500 && a.elapsed(9500) == 0 && !a.open(9600), "AQ2: the zone load's end opens it once; the clock restarts there (armed 8500 ms)");
+				check(a.poll(9500 + 5999, 1, 0) == ev::none && a.poll(9500 + 6000, 1, 0) == ev::cap && !a.active() && !a.armed && a.ended_ms == 6000, "AQ2: the cap counts 6000 ms from the opening, not from the admission");
+				check(a.arm(role::host, 1, 0) && a.poll(join_hold_armed_limit_ms - 1, 1, 0) == ev::none && a.poll(join_hold_armed_limit_ms, 1, 0) == ev::cap && !a.active() && join_hold_armed_limit_ms == 30000,
+				      "AQ2: a zone load that never ends: the armed hold ends after 30000 ms (never an endless freeze)");
+				check(a.arm(role::host, 1, 0) && a.poll(500, 0, 0) == ev::gone && !a.active(), "AQ2: the newcomer gone during the zone load (its add given up / it left) ends the armed hold");
+				check(a.arm(role::host, 1, 0) && (a.add_newcomer(), a.newcomers == 2) && a.open(300) && a.poll(400, 1, 1) == ev::none && a.poll(500, 0, 2) == ev::ready && a.ready == 2 && a.release(ev::restart, 900) == ev::restart && a.ended_ms == 600,
+				      "AQ2: two newcomers admitted at one zone load share the armed hold; ready when both images are in; the logged time runs from the opening");
+				check(a.arm(role::host, 1, 0) && a.release(ev::session, 200) == ev::session && !a.armed, "AQ2: the session's end ends an armed hold");
+				join_hold off; off.configure(0); check(!off.arm(role::host, 1, 0) && !off.active() && !off.open(10), "AQ2: JoinHoldSeconds=0 arms nothing");
+				join_hold m; check(m.begin(role::member, 1, 0) && !m.armed && !m.open(10), "AQ2: an existing participant's hold is open from its 0x47 (never armed)");
+			}
 		}
 		// p060fix/AI S2: the rebuild also runs on the stock pool at stage 1 (the standalone ActorPools=124 install) and on
 		// E4's 96-slot pool at stage 2; any other stage/count pairing is left alone.
@@ -783,7 +800,11 @@ int main(int argc, char** argv)
 		check(world_gate_original.size() == 7 && world_gate_original[0] == 0xf6 && world_gate_original[1] == 0x86 && world_gate_original[2] == 0x28 && world_gate_original[3] == 0x07 && world_gate_original[6] == world_gate_flag_bit,
 		      "AQ: the site is the 7-byte `test byte ptr [esi+0x728], 2` (a call rel32 and two nops fit it exactly)");
 		check(std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va == message_clear; }) && std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va == message_show; }),
-		      "AQ: the native network message show 0x60a600 and expiry 0x60a690 are guarded (slot offsets +0x1c8 / +0x1f8)");
+		      "AQ: the native network message show 0x60a600 and expiry 0x60a690 are guarded (slot offsets +0x1c8 / +0x1f8; the solo-segment notice; since AQ2 the hold draws its own message)");
+		// p060fix/AQ2: the admission site the hold arms at is the guarded synchronous area-load boundary call (inside the
+		// zone loader 0x484ce0, after its `test byte ptr [ebp+0x220], 2` pending-load check, before the load).
+		check(area_barrier_call == 0x484def && std::any_of(guards.begin(), guards.end(), [](const auto& g) { return g.va <= area_barrier_call && area_barrier_call + 5 <= g.va + g.hex.size() / 2; }),
+		      "AQ2: the area-load boundary call 0x484def (where the hold is armed through the native add) is guarded");
 		// (3) Review S2: a heap-allocated kind object is keyed by its vtable, in-image kinds by their address.
 		event_entry heap_host{}, heap_guest{}, in_image{}, member{};
 		heap_host.time = heap_guest.time = in_image.time = member.time = 2.0f;

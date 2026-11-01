@@ -76,6 +76,18 @@ namespace d3d8
 	};
 	static_assert(sizeof(surface_desc) == 32);
 
+	// D3DVIEWPORT8 and D3DRECT.
+	struct viewport
+	{
+		DWORD x, y, width, height;
+		float min_z, max_z;
+	};
+	static_assert(sizeof(viewport) == 24);
+	struct d3d_rect
+	{
+		LONG x1, y1, x2, y2;
+	};
+
 	struct locked_rect
 	{
 		INT pitch;
@@ -116,7 +128,10 @@ namespace d3d8
 		constexpr int get_back_buffer = 16;
 		constexpr int create_image_surface = 27;
 		constexpr int copy_rects = 28;
+		constexpr int get_render_target = 32;
 		constexpr int clear = 36;
+		constexpr int set_viewport = 40;
+		constexpr int get_viewport = 41;
 	}
 
 	// IDirect3DSurface8 vtable slots.
@@ -142,6 +157,8 @@ namespace d3d8
 	using create_image_surface_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, UINT, DWORD, void**);
 	using copy_rects_t = HRESULT(STDMETHODCALLTYPE*)(void*, void*, const RECT*, UINT, void*, const POINT*);
 	using clear_t = HRESULT(STDMETHODCALLTYPE*)(void*, DWORD, const void*, DWORD, DWORD, float, DWORD);
+	using get_render_target_t = HRESULT(STDMETHODCALLTYPE*)(void*, void**);
+	using viewport_t = HRESULT(STDMETHODCALLTYPE*)(void*, viewport*);
 	using get_desc_t = HRESULT(STDMETHODCALLTYPE*)(void*, surface_desc*);
 	using lock_rect_t = HRESULT(STDMETHODCALLTYPE*)(void*, locked_rect*, const RECT*, DWORD);
 	using unlock_rect_t = HRESULT(STDMETHODCALLTYPE*)(void*);

@@ -72,6 +72,11 @@ namespace display
 	// IDirect3DDevice8 just before every Present. Set before install().
 	void set_frame_hook(void (*hook)(void* device));
 
+	// p060fix/AQ2: `draw` runs on the game's render thread with its IDirect3DDevice8 just before every Present, ahead
+	// of the frame hook (so screenshots include what it draws): the join hold's on-screen message (hold_overlay.hpp).
+	// Set before install() to have the device hooked for it in every display mode.
+	void set_overlay(void (*draw)(void* device));
+
 	// Creates and resets the device without multisampling (a multisampled back buffer can't be
 	// copied). Set before install(); `why` goes in the log.
 	void disable_multisampling(const char* why);
