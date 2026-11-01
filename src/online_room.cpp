@@ -560,6 +560,9 @@ namespace online_room
         int native_mode = 0; // accepted menu mode: 0 legacy, 1 campaign, 2 Danger Room
         bool native_posting = false; // menu Host stays unjoinable until actual native posting succeeds
 		core::room_metadata listed; // what the broker has (sent with host / the last presence)
+		// Fix AN2: a private room stays resolvable after the start with drop-in off while the host's own started-session
+		// refusal is installed, so a code join reaches it and shows its specific notice (online_browser_core::advertised_drop_in).
+		bool advertised_drop_in() { return browser::advertised_drop_in(metadata.public_room, join_in_progress::late_join_enabled(), join_in_progress::installed()); }
 		DWORD looked = 0;
 		// The room code, as the host lobby menus show it ("Online room code: XXXX-XXXX"; the game keeps its own copy).
 		char code_text[64]{}, short_code_text[64]{};
@@ -1506,7 +1509,7 @@ namespace online_room
 			looked = now;
 			const auto g = read_game();
 			room_progress.observe(g);
-			auto desired = browser::current(listed, configured_room_name, g, room_progress, join_in_progress::late_join_enabled(), status_players());
+			auto desired = browser::current(listed, configured_room_name, g, room_progress, advertised_drop_in(), status_players());
             if (native_posting) desired.joinable = false;
             if (native_mode) desired.game_mode = native_mode == 2 ? "danger_room" : "campaign";
 			online_status::room(metadata.public_room, desired.name);
@@ -1516,10 +1519,11 @@ namespace online_room
 				if (!request.empty() && post(request))
 				{
 					pacer.sent(now);
-					logger::write("online: room listing update: zone %s (%s), %s, %s, %d of %d players%s", desired.zone.empty() ? "-" : desired.zone.c_str(),
+					logger::write("online: room listing update: zone %s (%s), %s, %s, %d of %d players%s%s", desired.zone.empty() ? "-" : desired.zone.c_str(),
 					              desired.zone_name.empty() ? "no display name" : online_security::sanitize_log_text(desired.zone_name).c_str(), desired.in_progress ? "in progress" : "not started",
 					              desired.joinable ? "joinable" : "not joinable", status_players(), desired.max_players,
-					              desired.host_display_name != listed.host_display_name ? (", host " + online_security::sanitize_log_text(desired.host_display_name)).c_str() : "");
+					              desired.host_display_name != listed.host_display_name ? (", host " + online_security::sanitize_log_text(desired.host_display_name)).c_str() : "",
+					              desired.in_progress && desired.joinable && !join_in_progress::late_join_enabled() ? " (private, DROP-IN off: the host refuses the join itself)" : "");
 					listed = desired;
 				}
 			}
@@ -1973,7 +1977,7 @@ namespace online_room
         hosting = true; configured_code.clear(); configured_room_name = browser::trim(name);
         metadata.public_room = public_room; metadata.max_players = 4; native_posting = false; native_mode = 0;
         room_progress = {}; pacer = {};
-        listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::late_join_enabled(), 1);
+        listed = browser::current(metadata, configured_room_name, read_game(), room_progress, advertised_drop_in(), 1);
         return true;
     }
     bool host_native(const std::string& name, bool public_room, int max_players, bool danger_room) {
@@ -2056,7 +2060,7 @@ namespace online_room
             client.begin(preset, room_clock()); preset = browser::operation::none;
             if (hosting) {
                 const auto game = read_game(); room_progress.observe(game);
-                listed = browser::current(metadata, configured_room_name, game, room_progress, join_in_progress::late_join_enabled(), 1);
+                listed = browser::current(metadata, configured_room_name, game, room_progress, advertised_drop_in(), 1);
             }
         }
         if (inbox_overflow) {
@@ -2525,7 +2529,7 @@ namespace online_room
         launch_code = configured_code;
         if (menu_client) configured_code.clear(); // a preset cannot filter native discovery before selection
         if (wanted) {
-            listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::late_join_enabled(), 1);
+            listed = browser::current(metadata, configured_room_name, read_game(), room_progress, advertised_drop_in(), 1);
         }
         if (!menu_client) online_status::set(st::state::connecting, hosting ? std::string() : configured_code, 0);
 		if (menu_client) logger::write("online: menu broker client prepared; room creation waits for an explicit intent");

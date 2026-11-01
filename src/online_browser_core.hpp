@@ -310,6 +310,18 @@ namespace online_browser_core
 		void observe(const game_view& g) { if (g.session && !menu_zone(g.zone)) started = true; }
 	};
 	inline bool joinable(bool started, bool drop_in, int players, int max_players) { return players < max_players && (!started || drop_in); }
+	// The `drop_in` that joinable() advertises to the broker (fix AN2). The broker's `joinable` gates only new `resolve`
+	// calls (refused with `room_not_joinable` before the joiner is a member or reaches the host) and is a flag on the
+	// public list rows; it decides no admission. A PUBLIC room follows the host's admission choice, so its list row and
+	// Browse stay truthful and fix AN explains the broker refusal from that row. A PRIVATE room is never listed, so a
+	// refused code join could only show the retry text; while the host's own started-session refusal is installed (rule 26:
+	// the native admission at 0x609970 refuses before any participant exists and sends the tagged 0x1c, fix AF), it stays
+	// resolvable after the start with drop-in off, and that refusal gives the joiner the specific notice. Free seats,
+	// native posting and the host's admission decision are unchanged.
+	inline bool advertised_drop_in(bool public_room, bool late_join_enabled, bool host_refusal_installed)
+	{
+		return late_join_enabled || (!public_room && host_refusal_installed);
+	}
 
 	// The metadata this host's room should carry now. `last` is what it carried until now (public, version token and
 	// max players never change; the zone stays while the host is in the menus between levels).

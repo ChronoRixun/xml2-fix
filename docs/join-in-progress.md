@@ -479,8 +479,10 @@ frame and reports every term; `xml2_join_in_progress_boundary_test <retail exe>
 restart` runs the bridges and the real retail seed setter on the mapped image.
 Room listings now advertise a started room as joinable exactly when the host
 admits late joiners (`late_join_enabled()`), so Browse and the broker's
-`room_not_joinable` agree with the host's DROP-IN choice; a code join to a
-started room with DROP-IN off is refused before the tunnel. Fix AN asks for a fresh public listing on that refusal:
+`room_not_joinable` agree with the host's DROP-IN choice for PUBLIC rooms; a code join to a
+started public room with DROP-IN off is refused before the tunnel. Fix AN2: a private room (never listed) stays
+resolvable after the start while this refusal is installed, so its code join reaches `LateJoinPolicyV1` and shows
+"This session has started; ask the host to return to the lobby" ([online-rooms.md](online-rooms.md#started-private-rooms-with-drop-in-off-fix-an2)). Fix AN asks for a fresh public listing on that refusal:
 a matching started, unjoinable row with a known free seat shows "This session has started. Ask the host to return to the
 lobby." Private or inconclusive listings retain "Not taking players right now. Try again soon." The existing native
 refusal notice remains available after the tunnel; see [the decision rule](online-menus.md#code-refusal-after-the-session-started-fix-an).

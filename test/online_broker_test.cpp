@@ -132,7 +132,8 @@ namespace gns_transport { bool installed() { return true; } bool room_can_start(
     bool deliver_removal(unsigned index) { fake::delivered.push_back(index); return fake::deliver_ok; } }
 namespace receive_validation { bool installed() { return true; } }
 namespace save_format { bool campaign_load_checked() { return true; } }
-namespace join_in_progress { bool installed() { return false; } bool late_join_enabled() { return false; } }
+namespace fake { bool jip_installed=false,jip_late_join=false; }
+namespace join_in_progress { bool installed() { return fake::jip_installed; } bool late_join_enabled() { return fake::jip_installed && fake::jip_late_join; } }
 namespace game_version { bool test_mode_active() { return fake::test_mode; } const char* test_mode_reason() { return "fixture"; } void refuse_startup() {} }
 namespace online_status {
 void begin(online_status_core::role) {} bool active() { return true; }
@@ -877,8 +878,70 @@ void join_refusal_offline() {
     room::wanted=false;room::worker_done=true;room::stop=true;
     std::cout<<"PASS join refusal dispatcher: lookup error/disconnect/timeout/cancel/queue failure preserve first cause; "<<cases<<" cases, no sockets\n";
 }
+// Fix AN2: what a hosted room advertises once its first level loaded. The broker's `joinable` gates only new resolves
+// (`room_not_joinable` before the joiner is a member or reaches the host), so a private room - never listed - stays
+// resolvable with DROP-IN off while the host's own started refusal (rule 26) is installed, and the code join reaches the
+// host's tagged refusal. Public rooms, a full room, native posting and an uninstalled refusal keep joinable=false; DROP-IN
+// on stays joinable as before. No GNS initialization, sockets or worker thread: the production browser tick posts into
+// the real outbox, as in --join-refusal-offline.
+void started_advert_offline() {
+    struct row { bool public_room,installed,late_join,posting; int max_players,members; bool joinable; const char* what; };
+    const row rows[]={
+        {false,true,false,false,4,1,true,"private, DROP-IN off, host refusal installed: stays joinable, the host refuses the join"},
+        {false,true,false,false,4,3,true,"private, DROP-IN off, 3 of 4: stays joinable, the host refuses the join"},
+        {true,true,false,false,4,1,false,"public, DROP-IN off: not joinable (list row and Browse unchanged, fix AN explains)"},
+        {false,false,false,false,4,1,false,"private, rule 26 not installed (no host refusal): not joinable"},
+        {true,false,false,false,4,1,false,"public, rule 26 not installed: not joinable"},
+        {false,true,true,false,4,1,true,"private, DROP-IN on: joinable as before"},
+        {true,true,true,false,4,1,true,"public, DROP-IN on: joinable as before"},
+        {false,true,false,false,2,2,false,"private, DROP-IN off, full (2 of 2): not joinable"},
+        {false,true,true,false,3,3,false,"private, DROP-IN on, full (3 of 3): not joinable"},
+        {false,true,false,true,4,1,false,"private, native posting pending: not joinable (retry text)"},
+    };
+    int cases=0;
+    for(const auto& r:rows) {
+        fake::jip_installed=r.installed;fake::jip_late_join=r.late_join;
+        room::client=b::client_state{};room::stop=false;room::worker_done=false;room::broker_started=false;
+        room::outbox.clear();room::inbox.clear();room::outbox_bytes=room::inbox_bytes=0;
+        room::room_clock=&fake::now;fake::clock=100000;
+        room::own_id="legends:0000000000000000";room::hosting=true;room::room_ready=true;room::broker_gone=false;
+        assert(room::members.reset({room::own_id}));
+        for(int i=1;i<r.members;++i) assert(room::members.join("legends:"+std::string(15,'1')+char('0'+i)));
+        room::metadata={};room::metadata.version_token="FIXTURE";room::metadata.public_room=r.public_room;room::metadata.max_players=r.max_players;
+        room::room_progress={};room::pacer={};room::native_mode=1;room::native_posting=r.posting;
+        room::listed=b::current(room::metadata,"",b::game_view{},room::room_progress,room::advertised_drop_in(),1);
+        room::listed.max_players=r.max_players;room::listed.joinable=!r.posting; // the lobby advert as after host_posted
+        auto presences=[] {
+            std::vector<online_room_core::line> out;
+            for(const auto& e:room::outbox) { auto m=online_room_core::parse(e.line);if(m.text("op")=="presence") out.push_back(online_room_core::parse(m["metadata"].text)); }
+            return out;
+        };
+        room::looked=fake::clock-500;room::browser_tick(); // the lobby advert (as before this fix)
+        const bool lobby_joinable=!r.posting && r.members<r.max_players;
+        assert(!room::listed.in_progress && room::listed.joinable==lobby_joinable);
+        room::outbox.clear();room::outbox_bytes=0;
+        room::room_progress.started=true; // the host's first level loaded
+        fake::clock+=b::presence_interval_ms;room::looked=fake::clock-500;room::browser_tick();
+        assert(room::listed.in_progress && room::listed.joinable==r.joinable);
+        const auto sent=presences();assert(sent.size()==1 && sent[0]["in_progress"].text=="true");
+        // The wire carries joinable only when it changed: a private DROP-IN-off room sends no joinable:false.
+        if(lobby_joinable==r.joinable) assert(sent[0]["joinable"].t==online_room_core::value::type::missing);
+        else assert(sent[0]["joinable"].text==(r.joinable ? "true" : "false"));
+        // DROP-IN changed later in the session (the Party row): every room follows the host's choice again at once.
+        if(r.installed && !r.posting && r.members<r.max_players) {
+            room::outbox.clear();room::outbox_bytes=0;fake::jip_late_join=!r.late_join;
+            fake::clock+=b::presence_interval_ms;room::looked=fake::clock-500;room::browser_tick();
+            const bool expect=!r.public_room || fake::jip_late_join;
+            assert(room::listed.joinable==expect);
+        }
+        std::cout<<"PASS started advert: "<<r.what<<"\n";++cases;
+    }
+    fake::jip_installed=fake::jip_late_join=false;room::hosting=room::room_ready=false;room::outbox.clear();room::outbox_bytes=0;
+    std::cout<<"PASS started advert offline: "<<cases<<" cases\n";
+}
 int main(int argc,char** argv) {
     if(argc==2 && std::string(argv[1])=="--join-refusal-offline") { join_refusal_offline();return 0; }
+    if(argc==2 && std::string(argv[1])=="--started-advert-offline") { std::cout<<std::unitbuf;started_advert_offline();return 0; }
     if(argc>=2 && std::string(argv[1])=="--room-closed-offline") { std::cout<<std::unitbuf;room_closed_offline(argc>2 ? argv[2] : "");return 0; }
     if(argc!=1) { std::cerr<<"unknown broker fixture argument\n";return 2; }
     std::cout<<std::unitbuf;
