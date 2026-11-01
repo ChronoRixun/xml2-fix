@@ -160,6 +160,17 @@ namespace join_in_progress_core
 		return host_mode == 1 ? 2 : host_mode;
 	}
 	inline int campaign_restore_mode(int mode, bool cohort_restart) { return cohort_restart && mode == 0 ? 2 : mode; }
+	// p060fix/AR2 (live-060zk ZK-3b1/3b2/3b2r/3b3): with a newcomer in the restart the host's cohort sync ("cohort
+	// synchronized", the epoch's end: checksum protection, the removal window, the host-only ready/loaded bridges)
+	// lands AFTER its first shared frame (`player N reached the shared start`, ~65 ms after frame 0). With every
+	// newcomer lost before the restart nothing held it and the host synced ~70 ms BEFORE its frame 0 - in all four
+	// failing runs, and in none of the passing ones - and whichever peer reached frame 0 first ended on the native
+	// pause/ready screen. The host keeps its epoch until its own first shared frame when no newcomer is left to wait
+	// for (the same point as the newcomer case); a cap bounds the wait if frame 0 never comes (every other peer gone).
+	inline bool host_sync_waits_for_frame0(bool host, bool newcomers_left, bool frame0_seen, std::uint32_t waited_ms, std::uint32_t cap_ms = 10000)
+	{
+		return host && !newcomers_left && !frame0_seen && waited_ms < cap_ms;
+	}
 	inline bool participant_loaded(std::uint32_t grid, bool cohort_loading_observed, std::uint16_t frame)
 	{
 		// A full shared restart has no team-menu loaded grid. Its first simulation frame proves that the native

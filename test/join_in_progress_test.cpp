@@ -321,6 +321,23 @@ int main(int argc, char** argv)
 		check(!c.observe(false,false), "cohort: checksum resume happens once");
 	}
 	{
+		// p060fix/AR2: the host's sync waits for its own first shared frame when no newcomer is left (ZK-3b1/3b2/3b2r/3b3)
+		check(host_sync_waits_for_frame0(true, false, false, 0) && host_sync_waits_for_frame0(true, false, false, 9999),
+			"AR2: the host with no newcomer left keeps its epoch before frame 0");
+		check(!host_sync_waits_for_frame0(true, false, true, 0), "AR2: the host's own frame 0 ends the wait (the sync lands after it, as with a newcomer)");
+		check(!host_sync_waits_for_frame0(true, true, false, 0), "AR2: a newcomer still joining is waited for by the seats, not this rule");
+		check(!host_sync_waits_for_frame0(false, false, false, 0), "AR2: an existing guest syncs as before (passing runs: before its frame 0)");
+		check(!host_sync_waits_for_frame0(true, false, false, 10000) && !host_sync_waits_for_frame0(true, false, false, 60000),
+			"AR2: the cap releases the host when frame 0 never comes");
+		check(host_sync_waits_for_frame0(true, false, false, 2999, 3000) && !host_sync_waits_for_frame0(true, false, false, 3000, 3000), "AR2: the cap is exact");
+		// the cohort itself: holding supplied by the rule keeps the epoch, frame 0 releases it on the next observation
+		cohort c; c.begin(); c.start(); c.observe(true, false);
+		bool frame0 = false;
+		check(!c.observe(false, host_sync_waits_for_frame0(true, false, frame0, 100)) && c.active, "AR2: the zero-newcomer host's epoch survives the zone's end");
+		frame0 = true;
+		check(c.observe(false, host_sync_waits_for_frame0(true, false, frame0, 170)) && !c.active, "AR2: the zero-newcomer host syncs after its first shared frame");
+	}
+	{
 		machine m;
 		check(!m.defer_add(&r1, 1, false, 0), "lobby (not started): the native add runs");
 		m.started = true;

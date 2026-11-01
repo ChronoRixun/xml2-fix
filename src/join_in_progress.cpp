@@ -70,6 +70,8 @@ namespace join_in_progress
 		// no-removal window ends at the latter. Cleared at every restart entry and at the session's end.
 		bool restart_restored = false, restart_zone_back = false;
 		DWORD restart_entry_wait = 0; bool restart_entry_waiting = false;
+		// p060fix/AR2: the host's cohort sync waits for its own first shared frame when no newcomer is left in the restart
+		bool restart_frame0_seen = false, host_sync_wait_logged = false; DWORD host_sync_wait_since = 0;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -388,6 +390,7 @@ namespace join_in_progress
 			// runs (every peer restarts with the same participants), and no own-timeout removal is pending for one.
 			gns_transport::newcomers_restart_entry("this PC's restart entry");
 			restart_restored = restart_zone_back = false;
+			restart_frame0_seen = false; host_sync_wait_since = 0; host_sync_wait_logged = false; // p060fix/AR2: per restart
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
 				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
 			admission.clear();
@@ -524,6 +527,7 @@ namespace join_in_progress
 				// consumed and never ran; the joiner's `late_restart` had been cleared by `cohort synchronized` 245 ms before
 				// its frame 0, so its FPU step was skipped too - the epoch differed by role).
 				if (!restart.should_reseed(frame)) return;
+				restart_frame0_seen = true; // p060fix/AR2: the host's cohort sync may land now (the newcomer case's order)
 				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
 				logger::write("join in progress: first shared frame %u - synchronized RNG epoch reset (this PC had drawn %u since the last epoch, seed %08x); every peer continues from the native seed %06x with count 0",
@@ -631,7 +635,29 @@ namespace join_in_progress
 				fn<init_t>(controller_resume)(fn<getter_t>(controllers_getter)());
 				logger::write("join in progress: existing participant's native controls resumed after world restore");
 			}
-			if (epoch.observe(loading, machine.holding()))
+			// p060fix/AR2: with no newcomer left in this restart (every one lost before it) the host would sync here, ~70 ms
+			// BEFORE its first shared frame (live-060zk ZK-3b1/3b2/3b2r/3b3: the first peer at frame 0 then ended on the native
+			// pause/ready screen); with a newcomer it syncs ~65 ms AFTER (`reached the shared start`). Keep the host's epoch
+			// until its own frame 0, as in the newcomer case; the cap bounds the wait if frame 0 never comes.
+			const bool newcomers_left = machine.holding();
+			bool host_sync_wait = false;
+			if (!loading && epoch.started && epoch.saw_loading && existing_cohort_member && !newcomers_left)
+			{
+				void* s = session();
+				const bool is_host = s && host(s);
+				const auto now = GetTickCount();
+				if (is_host && !host_sync_wait_since) host_sync_wait_since = now ? now : 1;
+				const auto waited = host_sync_wait_since ? now - host_sync_wait_since : 0;
+				host_sync_wait = join_in_progress_core::host_sync_waits_for_frame0(is_host, newcomers_left, restart_frame0_seen, waited);
+				if (host_sync_wait && !host_sync_wait_logged)
+				{
+					host_sync_wait_logged = true;
+					logger::write("join in progress: no newcomer is left in this restart - this PC (host) keeps the cohort epoch until its first shared frame, as when a newcomer reaches the shared start (cap 10000 ms)");
+				}
+				else if (!host_sync_wait && host_sync_wait_logged && !restart_frame0_seen)
+					logger::write("join in progress: the host's cohort epoch cap reached after %u ms with no first shared frame - the cohort synchronizes now", unsigned(waited));
+			}
+			if (epoch.observe(loading, newcomers_left || host_sync_wait))
 			{
 				// Follow-up 9: while the frame-0 epoch is still armed the late restart ends THERE, on every peer alike (round 6:
 				// the joiner reached this point 245 ms before its frame 0 and lost the epoch's steps gated on the flag).
