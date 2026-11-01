@@ -116,7 +116,7 @@ namespace gns_transport_core
 	constexpr bool fragment_opcode(std::uint8_t opcode) { return opcode == 0x12 || opcode == 0x13; }
 
 	// GNS payload framing: one kind byte, then for a game message the opcode and the body.
-	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6, join_boundary = 10 };
+	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6, join_boundary = 10, newcomer_lost = 11 };
 	constexpr std::uint32_t keepalive_ms = 100; // flush_link and unbound room tunnels use the same heartbeat
 	constexpr std::uint32_t hello_magic = 0x31534e47; // "GNS1"
 	constexpr std::size_t hello_size = 1 + 4 + 4 + 2;
@@ -152,6 +152,69 @@ namespace gns_transport_core
 			return false;
 		}
 	};
+
+	// p060fix/AR: a newcomer of the admission in progress was lost before the cohort restart (live-060zj ZJ-7j/7j2: the
+	// host removed the killed joiner natively 20 s after its loss, just before its own restart, while the lobby guest
+	// removed it by its own 8.5 s cut-frame timeout INSIDE its restart - after resetgame, before the mode-2 load - and
+	// ended on the native pause/ready screen with no checksum). ONE host decision, reliable and ordered on each host
+	// link before the native 0x2b and the restart's 0x26: [11, lost index, newcomers still joining (mask), 0xa4]. Every
+	// other peer removes that participant before its own restart begins (at once when its zone runs, at the latest at
+	// the restart entry), so every peer restarts from the one image with the same participants.
+	constexpr std::size_t newcomer_lost_size = 4;
+	inline std::vector<std::uint8_t> newcomer_lost(std::uint8_t index, std::uint8_t remaining)
+	{
+		return {std::uint8_t(kind::newcomer_lost), index, std::uint8_t(remaining & 0x0e & ~(1u << (index & 3))), 0xa4};
+	}
+	inline bool newcomer_lost_authorized(bool bound, bool reliable, int sender_index) { return join_boundary_authorized(bound, reliable, sender_index); }
+	// A non-host PC's record of the admission's newcomers (session indexes 1..3, bit per index) until its restart entry.
+	// admitted: the host's accepted boundary mask, the mesh newcomers and the host's decisions - this PC never removes
+	// one of them by its own cut-frame timeout before its restart (the host decides); decided: the host's decisions
+	// not yet carried out here; applied: carried out (a repeated decision is ignored).
+	struct newcomer_ledger
+	{
+		std::uint8_t admitted = 0, decided = 0, applied = 0;
+		static std::uint8_t bit(int index) { return index >= 1 && index <= 3 ? std::uint8_t(1u << index) : std::uint8_t(0); }
+		void admit(std::uint8_t mask) { admitted |= std::uint8_t(mask & 0x0e); }
+		bool decide(int index)
+		{
+			const auto b = bit(index);
+			if (!b) return false;
+			admitted |= b;
+			if ((applied | decided) & b) return false;
+			decided |= b;
+			return true;
+		}
+		bool own_removal_allowed(int index) const { const auto b = bit(index); return !b || !((admitted | decided) & b); }
+		bool must_remove(int index) const { return (decided & bit(index)) != 0; }
+		void removed(int index) { const auto b = bit(index); decided &= std::uint8_t(~b); applied |= b; }
+		// This PC's restart begins (or its session ends): the decisions still to carry out, then a fresh ledger.
+		std::uint8_t restart_entry() { const auto left = decided; admitted = decided = applied = 0; return left; }
+	};
+	// The host's decisions sent in the admission in progress (review P1: never a stale bit from an earlier admission).
+	// A bit counts only while the admission still lists that index as one of its newcomers; otherwise it is dropped
+	// and the removal is classified afresh. reset(): every end of an admission (restart entry, no-restart, session end).
+	struct host_decisions
+	{
+		std::uint8_t sent = 0;
+		bool already(int index, bool admission_lists_it)
+		{
+			const auto b = newcomer_ledger::bit(index);
+			if (!(sent & b)) return false;
+			if (admission_lists_it) return true;
+			sent &= std::uint8_t(~b); // an earlier admission's decision: not this one
+			return false;
+		}
+		void record(int index) { sent |= newcomer_ledger::bit(index); }
+		void reset() { sent = 0; }
+	};
+	// The host's classification of a participant's removal (p060fix/AR): a newcomer of the admission in progress lost
+	// before the restart was announced (0x26 not broadcast, no restart begun) is removed at once after the decision went
+	// out; anything else keeps the ordinary paths (agreed cut frame, native watchdog, native leave).
+	enum class newcomer_loss { ordinary, before_restart };
+	inline newcomer_loss classify_newcomer_loss(bool host, bool admission_newcomer, bool restart_begun)
+	{
+		return host && admission_newcomer && !restart_begun ? newcomer_loss::before_restart : newcomer_loss::ordinary;
+	}
 
 #define GNS_TRANSPORT_OPCODE_VALIDATOR 1
 	using opcode_length_validator = bool(*)(std::uint8_t opcode, std::size_t length);
@@ -292,6 +355,12 @@ namespace gns_transport_core
 			p.frame = std::uint16_t(data[1] | (std::uint16_t(data[2]) << 8));
 			p.index = data[3]; // newcomer seat mask (0 means an ordinary area load)
 			p.valid = data[4] == 0xa3 && (p.index & ~0x0eu) == 0;
+		}
+		else if (p.k == kind::newcomer_lost && size == newcomer_lost_size)
+		{
+			p.index = data[1];
+			p.frame = data[2]; // the newcomers still joining (mask)
+			p.valid = data[3] == 0xa4 && p.index >= 1 && p.index <= lost_index_max && (data[2] & ~0x0eu) == 0 && !(data[2] & (1u << p.index));
 		}
 		else if (p.k == kind::datagram && size >= datagram_header && size - datagram_header <= max_datagram_body)
 		{

@@ -213,6 +213,7 @@ void run_aq3_regression(const char* mode) {
     }
     std::cout<<"PASS AQ3 regression "<<mode<<"\n";
 }
+#include "join_in_progress_lost_newcomer_fixture.inl" // p060fix/AR
 void run_join_hold() {
     using namespace join_in_progress_rules;
     using join_in_progress_core::join_hold;
@@ -510,6 +511,8 @@ void run_join_hold() {
     join_in_progress::hold.configure(6);gns_transport::fixture_boundary_ready=true;
     join_in_progress::hold_end(join_hold::event::session);join_in_progress::epoch={};machine.reset();put(local,0x18,0);put(remote,0x18,1);
     std::cout<<"PASS AQ3 missing decision/restart: GNS-only boundary service and armed holds release at cap + 4000 ms; a 9 s decision wait plus 2 s load cannot open/renew an expired hold; late 0x47 never renews; a disabled guest bypasses the wait\n";
+
+    run_lost_newcomer_fixture(); // p060fix/AR: a newcomer lost between its admission and the shared start
 
     // ---- 7. The overlay's other paths: 16-bit back buffer (blend), multisampled (clear, viewport restored), refusals ----
     hold_overlay::release();

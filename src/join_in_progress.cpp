@@ -64,6 +64,12 @@ namespace join_in_progress
 		std::uint32_t deferred_start_task = 0;
 		join_in_progress_core::machine machine; // the game's thread only (bridges, receive pump, load tick)
 		join_in_progress_core::cohort epoch;
+		join_in_progress_core::admission_losses admission; // p060fix/AR: the host's admission and its newcomers lost before the restart
+		void owed_restart_tick();
+		// p060fix/AR: this PC's restart restored the image (the mode-2 load returned) / its restored zone runs again; the
+		// no-removal window ends at the latter. Cleared at every restart entry and at the session's end.
+		bool restart_restored = false, restart_zone_back = false;
+		DWORD restart_entry_wait = 0; bool restart_entry_waiting = false;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -364,10 +370,27 @@ namespace join_in_progress
 		void __cdecl deferred_campaign_start(void*)
 		{
 			if (epoch.active && epoch.requested && zone_load_pending()) return;
+			// p060fix/AR (review P2): every host decision is carried out before this restart begins; the task stays
+			// scheduled while one cannot be yet (bounded: after 3 s the restart goes on and says so).
+			if (epoch.active && epoch.requested && !epoch.started && !gns_transport::newcomer_decisions_carried("this PC's restart entry"))
+			{
+				const DWORD now = GetTickCount();
+				if (!restart_entry_waiting) { restart_entry_waiting = true; restart_entry_wait = now; }
+				if (now - restart_entry_wait < 3000) return;
+				logger::write("join in progress: a host removal decision could not be carried out within 3000 ms - the restart goes on (the restarted epoch's cut frame removes it)");
+			}
+			restart_entry_waiting = false;
 			const auto task = deferred_start_task;
 			deferred_start_task = 0;
 			if (task) fn<task_remove_t>(task_remove)(fn<getter_t>(scheduler_getter)(), task);
 			if (!epoch.active || !epoch.requested || epoch.started) return;
+			// p060fix/AR: a newcomer the host decided lost is gone from this PC's session before anything of the restart
+			// runs (every peer restarts with the same participants), and no own-timeout removal is pending for one.
+			gns_transport::newcomers_restart_entry("this PC's restart entry");
+			restart_restored = restart_zone_back = false;
+			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
+				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
+			admission.clear();
 			// p060fix/AQ: the restart replaces the held world; the hold ends here on every role (first, before any native call).
 			hold_end(join_in_progress_core::join_hold::event::restart);
 			mesh_newcomers = 0;
@@ -419,6 +442,7 @@ namespace join_in_progress
 				}
 			}
 			fn<native_load_t>(at<std::uint32_t>(at<void*>(game, 0), 0x20c))(game, buffer, full);
+			if (epoch.active && epoch.started) restart_restored = true; // p060fix/AR
 		}
 
 		// ---- canonical cohort restart (join_in_progress_rules.hpp "Canonical cohort restart") ---------------------------
@@ -599,6 +623,7 @@ namespace join_in_progress
 			const bool start_menu = menu && std::strcmp(reinterpret_cast<const char*>(menu) + 0xc, "start") == 0;
 			const bool loading = zone_load_pending() || start_menu || (pause && at<std::uint8_t>(pause, 0x6c));
 			if (!loading && late_restart && epoch.started && epoch.saw_loading && !probe_zone_started) { probe_zone_started = true; probe_milestone("zone started", 3); }
+			if (!loading && epoch.started && restart_restored && !restart_zone_back) restart_zone_back = true; // p060fix/AR: the window ends
 			if (existing_cohort_member && epoch.resume_controls(!loading))
 			{
 				// Existing-world teardown disables controllers after network setup enabled them. The first input
@@ -641,7 +666,8 @@ namespace join_in_progress
 				if (seat.at == stage::free) continue;
 				if (!listed(s, seat.record))
 				{
-					logger::write("join in progress: player %d left while %s; the seat is free again", seat.index, join_in_progress_core::name(seat.at));
+					logger::write("join in progress: player %d left while %s; the seat is free again%s", seat.index, join_in_progress_core::name(seat.at),
+						(admission.lost & join_in_progress_core::admission_losses::bit(seat.index)) ? " (lost before the restart: every peer removed it by the host's decision; the cohort restart goes on without it)" : "");
 					seat = {};
 					continue;
 				}
@@ -714,7 +740,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -740,6 +766,50 @@ namespace join_in_progress
 				machine.seats = {};
 				return false;
 			}
+		}
+
+		// p060fix/AR: every newcomer of a positive admission was lost before its image (no transfer runs, no seat left):
+		// the old peers hold for a restart that would never come, and only the one image makes their held worlds equal
+		// again - the host captures it for the existing participants and the cohort restarts without the lost seats.
+		bool (*owed_start)(void*, const join_in_progress_core::seat&) = &start_image; // mutable for the owned native fixture only
+		void owed_restart_tick()
+		{
+			if (!admission.lost || !epoch.active) return;
+			__try
+			{
+				void* s = session();
+				if (!s || !host(s) || !first(s)) return;
+				void* m = manager();
+				bool left = false, others = false, lost_listed = false;
+				for (const auto& seat : machine.seats) left |= seat.at == stage::adding || seat.at == stage::streaming || seat.at == stage::starting;
+				for (void* n = first(s); n; n = at<void*>(n, node_next))
+				{
+					void* record = at<void*>(n, node_record);
+					if (at<std::uint32_t>(record, record_flags) & flag_local) continue;
+					if (admission.lost & join_in_progress_core::admission_losses::bit(index_of(record))) lost_listed = true;
+					else if (!machine.pending(record)) others = true;
+				}
+				if (lost_listed) return; // its removal (the host's decision) runs first; the image must not wait for it
+				const auto now = GetTickCount();
+				const bool sender = at<std::uint32_t>(m, manager_sender) != 0;
+				if (!others && !sender && !left)
+				{
+					logger::write("join in progress: every newcomer of this admission was lost and no other participant remains - no restart needed; the host plays on");
+					admission.clear();
+					gns_transport::newcomers_restart_entry("the admission's end (no restart)", true);
+					return;
+				}
+				if (!join_in_progress_core::owed_restart_due(admission.lost, restart_begun(), sender, left, others, zone_load_pending(),
+					at<std::uint8_t>(m, manager_wait) != 0, now - admission.lost_at, admission.owed_attempts)) return;
+				++admission.owed_attempts;
+				int index = 1;
+				while (index < 3 && !(admission.lost & (1u << index))) ++index;
+				const join_in_progress_core::seat owed{nullptr, index, stage::streaming, now};
+				logger::write("join in progress: every newcomer of this admission was lost before its image (mask 0x%x%s) - the host restarts the cohort anyway from one live image, as every old peer holds for it",
+					unsigned(admission.lost), at<std::uint8_t>(m, manager_wait) ? ", the native add wait still on after 3 s" : "");
+				if (!owed_start(s, owed)) logger::write("join in progress: the owed cohort restart could not start (attempt %u of %u)", admission.owed_attempts, join_in_progress_core::owed_attempts_max);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:owed", "join in progress: a fault while starting the owed cohort restart - it stops"); admission.owed_attempts = join_in_progress_core::owed_attempts_max; }
 		}
 
 		// ---- solo story segments: seat owners ------------------------------------------------------------------------
@@ -1144,6 +1214,7 @@ namespace join_in_progress
 					logger::write("join in progress: new mesh participant; cohort checksum hold active");
 				}
 				const int index = index_of(record);
+				if (machine.started && !host(session()) && index > 0 && index < 4) gns_transport::note_admission_newcomers(std::uint8_t(1u << index)); // p060fix/AR
 				at<std::int32_t>(m, manager_adding) = index;
 				void* done = e4_observe::native_call("jip:mesh completion", [&] { return fn<natneg_t>(natneg_done)(m, address, port); });
 				logger::write("join in progress: mesh peer %d connected through the session transport (natneg completion %s)", index, done ? "ran" : "found no record");
@@ -2014,6 +2085,7 @@ namespace join_in_progress
 		if (!first(session())) { epoch = {}; area_load = false; checksum_window.armed = false; return; }
 		device_switch_probe(); // AE15 (probe only): a prompt device change re-arms the window, the draw ring and the camera lines on this PC
 		observe_epoch();
+		owed_restart_tick(); // p060fix/AR
 		if (!machine.any()) { area_load = false; return; }
 		// A mid-game zone load runs synchronously between pump ticks and never opens the initial Start Game menu.
 		// The boundary bridge has already added the newcomer; the next pump with the zone flags clear can serialize it.
@@ -2034,4 +2106,11 @@ namespace join_in_progress
 	bool bringing_in() { return installed() && (machine.holding() || epoch.active); }
 	bool can_service() { return bringing_in() && !deferred_start_running && !zone_load_pending(); }
 	bool pending_player(const void* record) { return installed() && machine.pending(record); }
+	// p060fix/AR (gns_transport.cpp host_newcomer_decision / carry_decisions / vanished_links)
+	bool admission_newcomer(int index) { return installed() && epoch.active && admission.newcomer(machine, index); }
+	std::uint8_t admission_remaining(int lost) { return installed() ? admission.remaining(machine, lost) : std::uint8_t(0); }
+	void newcomer_lost_decided(int index) { if (installed()) admission.decided(index, GetTickCount()); }
+	bool restart_begun() { return installed() && join_in_progress_core::restart_removal_held(epoch.active, epoch.announced, epoch.requested, epoch.started); }
+	bool restart_started() { return installed() && epoch.active && epoch.started; }
+	bool restart_removal_held() { return installed() && join_in_progress_core::removal_window(epoch.active, epoch.announced, epoch.requested, epoch.started, restart_zone_back); }
 }
