@@ -2,10 +2,32 @@
 #include "log.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 
 namespace controller_scan_cache
 {
+    namespace
+    {
+        thread_local unsigned native_scans = 0; // this thread is inside a cache scan's original EnumDevices
+        std::atomic<DWORD> worker_thread{0};
+        std::atomic<bool> gave_up{false};       // a first publication timed out: synchronous for the session
+        struct native_scan
+        {
+            native_scan() { ++native_scans; }
+            ~native_scan() { --native_scans; }
+            native_scan(const native_scan&) = delete;
+            native_scan& operator=(const native_scan&) = delete;
+        };
+    }
+
+    bool scanning_here()
+    {
+        const DWORD worker = worker_thread.load();
+        return native_scans != 0 || (worker != 0 && worker == GetCurrentThreadId());
+    }
+
     std::optional<topology> device_topology()
     {
         UINT count = 0;
@@ -61,13 +83,13 @@ namespace controller_scan_cache
         return {};
     }
 
-    std::shared_ptr<const snapshot> cache::wait_for_first(key query)
+    std::shared_ptr<const snapshot> cache::wait_for_first(key query, const DWORD timeout_ms)
     {
         std::unique_lock lock(mutex_);
         const auto at = std::ranges::find_if(entries_, [&](const auto& item) { return item->query == query; });
         if (at == entries_.end()) return {};
         const auto item = *at;
-        changed_.wait(lock, [&] { return item->published != nullptr; });
+        if (!changed_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return item->published != nullptr; })) return {};
         return item->published;
     }
 
@@ -100,7 +122,11 @@ namespace controller_scan_cache
         for (const auto& item : work)
         {
             auto next = std::make_shared<snapshot>();
-            const auto result = item->real(item->query.object, item->query.type, &collect, next.get(), item->query.flags);
+            HRESULT result;
+            {
+                const native_scan inside; // a re-entered hook passes straight through (scanning_here())
+                result = item->real(item->query.object, item->query.type, &collect, next.get(), item->query.flags);
+            }
             if (SUCCEEDED(next->result)) next->result = result;
             if (FAILED(next->result)) next->devices.clear(); // never publish a partial failed enumeration
             {
@@ -128,6 +154,7 @@ namespace controller_scan_cache
         HANDLE wake = nullptr;
         DWORD WINAPI worker(void*)
         {
+            worker_thread = GetCurrentThreadId();
             ULONGLONG next_log = 0;
             for (;;)
             {
@@ -162,9 +189,16 @@ namespace controller_scan_cache
     }
     std::shared_ptr<const snapshot> request(key query, enumerate_t real)
     {
+        // Never wait for the worker on the worker (or inside its scan), and not again after a timeout.
+        if (gave_up.load() || scanning_here()) return {};
         const auto result = shared().request(query, real, GetTickCount64());
         if (result) return result;
         SetEvent(wake);
-        return shared().wait_for_first(query);
+        if (auto first = shared().wait_for_first(query, first_scan_timeout_ms)) return first;
+        if (!gave_up.exchange(true))
+            logger::write("dinput: the controller scan worker published no device list within %lu ms - "
+                          "this session enumerates controllers directly from now on (as CacheDeviceScan=0)",
+                          static_cast<unsigned long>(first_scan_timeout_ms));
+        return {};
     }
 }

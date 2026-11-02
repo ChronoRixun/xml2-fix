@@ -5364,8 +5364,19 @@ namespace
 			return;
 		}
 		CHECK(SUCCEEDED(keyboard->SetDataFormat(&c_dfDIKeyboard)));
-		CHECK(SUCCEEDED(keyboard->SetCooperativeLevel(GetConsoleWindow(), DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY))); // the game's flags
-		CHECK(SUCCEEDED(keyboard->Acquire()));
+		// The game's flags need a window; a runner without a console (CI services) has none, and the synthetic pipe reads
+		// below do not depend on it.
+		const HWND console_window = GetConsoleWindow();
+		if (console_window)
+		{
+			CHECK(SUCCEEDED(keyboard->SetCooperativeLevel(console_window, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY))); // the game's flags
+			CHECK(SUCCEEDED(keyboard->Acquire()));
+		}
+		else
+		{
+			std::printf("  info  no console window here - the game's cooperative level is not set; the pipe reads still run\n");
+			keyboard->Acquire(); // the default cooperative level (background, non-exclusive)
+		}
 		BYTE state[256]{};
 		CHECK(SUCCEEDED(keyboard->GetDeviceState(sizeof(state), state)));
 
@@ -5407,7 +5418,8 @@ namespace
 
 		const auto log = read_file(module_dir() / "xml2-fix.log");
 		CHECK(log.find("test: input pipe " + pipe_path + " ([Test] InputPipe=1, PipeName " + name + ")") != std::string::npos);
-		CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
+		if (console_window)
+			CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
 		const std::string guard_line = "test: XMen2.exe doesn't have the expected code at 0x0055C890";
 		CHECK(log.find(guard_line) != std::string::npos && log.find(guard_line) == log.rfind(guard_line)); // logged once

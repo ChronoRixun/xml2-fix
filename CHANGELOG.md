@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.8.2 - 2026-11-02
+
+A hotfix for 1.8.1 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged): under Proton / Wine (Steam Deck) the game
+stopped on a black screen at start since 1.8.1. No gameplay rule or agreement byte changes, so 1.8.2, 1.8.1 and 1.8.0
+PCs play together; no Rebuild. Windows behaviour is unchanged.
+
+- **Controller scan cache re-entry** ([docs](docs/controller-scan-cache.md#re-entry-bounded-wait-and-wineproton)). Wine's
+  `IDirectInput8A::EnumDevices` forwards to `IDirectInput8W::EnumDevices` through the W vtable, i.e. back into the Fix's
+  hook, on the cache's own worker thread; that inner query waited for a list only the worker publishes, and the game's
+  main thread waited for the worker forever. The hook now calls the original enumeration directly while it runs on the
+  worker or inside a cache scan (`controller_scan_cache::scanning_here()`); Windows' dinput never re-enters this way.
+- **Bounded first wait.** A cold query waits at most 10 s for its first list; then the session logs it once and
+  enumerates controllers directly from then on (the `CacheDeviceScan=0` path) instead of hanging.
+- **Wine default.** Under Wine / Proton (`ntdll!wine_get_version`), `[Input] CacheDeviceScan` defaults to `0` when the
+  ini does not set it; a value in `xml2-fix.ini` is used as written. Nothing changes or is logged differently on
+  Windows. New `xml2_controller_scan_cache_test` cases: re-entry from the scan thread, a stalled first scan, the
+  Wine-default truth table. The same change shipped in 1.11.0-beta.1.
+- Test only: `xml2_test`'s input-pipe check sets the game's keyboard cooperative level only when a console window
+  exists (GitHub's current Windows runner image has none).
+
 ## 1.8.1 - 2026-10-26
 
 A hotfix for 1.8.0 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged): the once-a-second pause with a

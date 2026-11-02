@@ -12,8 +12,9 @@
 
 namespace logger
 {
-    void write(const char*, ...) {}
-    void write_once(std::string_view, const char*, ...) {}
+    std::atomic<unsigned> timeout_lines{0}, reentry_lines{0};
+    void write(const char* fmt, ...) { if (std::strstr(fmt, "published no device list")) ++timeout_lines; }
+    void write_once(std::string_view key, const char*, ...) { if (key == "scan-reentry") ++reentry_lines; }
 }
 namespace xinput_pad
 {
@@ -64,6 +65,39 @@ namespace
         return obj.result;
     }
     void* table[10]{nullptr, reinterpret_cast<void*>(&add_ref), reinterpret_cast<void*>(&release), nullptr, reinterpret_cast<void*>(&enumerate)};
+
+    // Wine's IDirectInput8A::EnumDevices: it calls the W interface through the W vtable - the hook's patched slot.
+    void* forward_to = nullptr;
+    std::atomic<DWORD> forward_thread{0};
+    std::atomic<bool> probe_inside{false};
+    HRESULT STDMETHODCALLTYPE enumerate_forward(void* p, DWORD type, LPDIENUMDEVICESCALLBACKW cb, void* user, DWORD flags)
+    {
+        ++static_cast<input*>(p)->calls;
+        if (GetCurrentThreadId() == caller_thread) ++static_cast<input*>(p)->on_caller;
+        forward_thread = GetCurrentThreadId();
+        return gamepad_fix::enum_devices(forward_to, type, cb, user, flags);
+    }
+    // Records whether the cache's scan is marked as running on this thread.
+    HRESULT STDMETHODCALLTYPE enumerate_probe(void* p, DWORD type, LPDIENUMDEVICESCALLBACKW cb, void* user, DWORD flags)
+    {
+        probe_inside = controller_scan_cache::scanning_here();
+        return enumerate(p, type, cb, user, flags);
+    }
+    // A scan that never returns on the worker (until the test releases it); the caller's own scan works.
+    HANDLE stall_entered = nullptr, stall_release = nullptr;
+    HRESULT STDMETHODCALLTYPE enumerate_stall(void* p, DWORD type, LPDIENUMDEVICESCALLBACKW cb, void* user, DWORD flags)
+    {
+        if (GetCurrentThreadId() != caller_thread)
+        {
+            SetEvent(stall_entered);
+            WaitForSingleObject(stall_release, INFINITE);
+        }
+        return enumerate(p, type, cb, user, flags);
+    }
+    void* forward_table[10]{nullptr, reinterpret_cast<void*>(&add_ref), reinterpret_cast<void*>(&release), nullptr, reinterpret_cast<void*>(&enumerate_forward)};
+    void* wide_table[10]{nullptr, reinterpret_cast<void*>(&add_ref), reinterpret_cast<void*>(&release), nullptr, reinterpret_cast<void*>(&enumerate)};
+    void* probe_table[10]{nullptr, reinterpret_cast<void*>(&add_ref), reinterpret_cast<void*>(&release), nullptr, reinterpret_cast<void*>(&enumerate_probe)};
+    void* stall_table[10]{nullptr, reinterpret_cast<void*>(&add_ref), reinterpret_cast<void*>(&release), nullptr, reinterpret_cast<void*>(&enumerate_stall)};
     controller_scan_cache::instance fixture(bool wide, bool dx3, unsigned id)
     {
         controller_scan_cache::instance out;
@@ -193,12 +227,55 @@ int main(int argc, char** argv)
         check(WaitForSingleObject(obj.entered, 2000) == WAIT_OBJECT_0);
         std::atomic<bool> returned{false};
         std::shared_ptr<const controller_scan_cache::snapshot> first;
-        std::thread waiter([&] { first = cache.wait_for_first(key); returned = true; });
+        std::thread waiter([&] { first = cache.wait_for_first(key, INFINITE); returned = true; });
         Sleep(10); check(!returned);
         SetEvent(obj.resume); worker.join(); waiter.join();
         check(first && same(first->devices, obj.devices)); check(obj.on_caller == 0);
         CloseHandle(obj.entered); CloseHandle(obj.resume);
     }
+    // Fix AT: a scan's own native enumeration is marked on its thread (the hook passes it straight through),
+    // nowhere else and not after it returns.
+    {
+        input obj{probe_table}; obj.devices = {fixture(false, false, 41)};
+        controller_scan_cache::cache cache;
+        controller_scan_cache::key key{&obj, 8, false, 4, 1};
+        check(!controller_scan_cache::scanning_here());
+        cache.request(key, &enumerate_probe, 0);
+        cache.tick(0, plugged); // on this thread
+        check(probe_inside); check(!controller_scan_cache::scanning_here());
+        probe_inside = false;
+        cache.request(key, &enumerate_probe, 30000);
+        std::atomic<bool> other_thread_inside{true};
+        std::thread worker([&] { cache.tick(30000, plugged); other_thread_inside = controller_scan_cache::scanning_here(); });
+        worker.join();
+        check(probe_inside); check(!other_thread_inside); check(!controller_scan_cache::scanning_here());
+    }
+    // Fix AT: a stalled first scan - the cold query gives up after its limit (nullptr), not before; the stalled
+    // scan still publishes once it returns.
+    {
+        input obj{table}; obj.devices = {fixture(false, false, 42)};
+        obj.entered = CreateEventW(nullptr, TRUE, FALSE, nullptr); obj.resume = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        controller_scan_cache::cache cache;
+        controller_scan_cache::key key{&obj, 8, false, 4, 1};
+        cache.request(key, &enumerate, 0);
+        std::thread worker([&] { cache.tick(0, plugged); });
+        check(WaitForSingleObject(obj.entered, 2000) == WAIT_OBJECT_0);
+        const auto before = GetTickCount64();
+        check(cache.wait_for_first(key, 300) == nullptr);
+        const auto waited = GetTickCount64() - before;
+        check(waited >= 250 && waited < 2000);
+        SetEvent(obj.resume); worker.join();
+        const auto late = cache.wait_for_first(key, 300);
+        check(late && same(late->devices, obj.devices));
+        controller_scan_cache::key unknown{&obj, 8, false, 4, 0};
+        check(cache.wait_for_first(unknown, INFINITE) == nullptr); // no such query: nothing to wait for
+        CloseHandle(obj.entered); CloseHandle(obj.resume);
+    }
+    // Fix AT (c): the ini's valid value wins; without one the cache defaults to on, but off under Wine.
+    check(gamepad_fix::cache_device_scan_choice(std::nullopt, false)); check(!gamepad_fix::cache_device_scan_choice(std::nullopt, true));
+    check(gamepad_fix::cache_device_scan_choice(true, true)); check(gamepad_fix::cache_device_scan_choice(true, false));
+    check(!gamepad_fix::cache_device_scan_choice(false, false)); check(!gamepad_fix::cache_device_scan_choice(false, true));
+    if (const char* wine = gamepad_fix::wine_version()) std::printf("note: this test runs under Wine %s\n", wine);
     // A blocked refresh cannot hold up the caller or overwrite the immutable old snapshot.
     {
         input obj{table}; obj.devices = {fixture(false, false, 1)};
@@ -246,7 +323,58 @@ int main(int argc, char** argv)
         gamepad_fix::enum_devices(input, 4, &callback, &output, 1);
         check(same(output.devices, input->devices)); check(input->on_caller == 0); check(output.thread == caller_thread);
     }
-    std::printf("PASS controller scan cache: %u checks; 16 A/W/version/size combinations; no real enumeration on caller with ON\n", checks);
+    // Fix AT (a), the Proton black screen: the worker's real A enumeration calls back into the hook through the W
+    // vtable (as Wine's dinput does). The re-entered call goes straight to the original on the worker; the caller
+    // gets the complete list at once - no wait on itself, no timeout.
+    auto* narrow = new input{forward_table};
+    auto* wide = new input{wide_table}; wide->devices = {fixture(false, false, 51), fixture(false, false, 52)};
+    forward_to = wide;
+    gamepad_fix::vtables[forward_table] = {{{4, reinterpret_cast<void*>(&enumerate_forward)}}, false, 8};
+    gamepad_fix::vtables[wide_table] = {{{4, reinterpret_cast<void*>(&enumerate)}}, true, 8};
+    {
+        received forwarded;
+        const auto before = GetTickCount64();
+        check(SUCCEEDED(gamepad_fix::enum_devices(narrow, 4, &callback, &forwarded, 1)));
+        const auto took = GetTickCount64() - before;
+        check(took < controller_scan_cache::first_scan_timeout_ms / 2);
+        check(same(forwarded.devices, wide->devices)); check(forwarded.thread == caller_thread);
+        check(narrow->calls >= 1 && narrow->on_caller == 0); check(wide->calls >= 1 && wide->on_caller == 0);
+        check(forward_thread != caller_thread); check(logger::reentry_lines == 1); check(logger::timeout_lines == 0);
+        // Called directly by the game, the W interface is an ordinary cached query.
+        received direct;
+        gamepad_fix::enum_devices(wide, 4, &callback, &direct, 1);
+        check(same(direct.devices, wide->devices)); check(wide->on_caller == 0);
+    }
+    // Fix AT (b): a first scan that never returns. The caller gives up after first_scan_timeout_ms, scans
+    // synchronously itself (complete list), logs once, and every later query is synchronous at once - also a
+    // previously cached one and the A->W forwarding path. (Last: the production worker stays stalled until released.)
+    {
+        stall_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr); stall_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        auto* stalled = new input{stall_table}; stalled->devices = {fixture(false, false, 61)};
+        gamepad_fix::vtables[stall_table] = {{{4, reinterpret_cast<void*>(&enumerate_stall)}}, false, 8};
+        received first;
+        const auto before = GetTickCount64();
+        check(SUCCEEDED(gamepad_fix::enum_devices(stalled, 4, &callback, &first, 1)));
+        const auto took = GetTickCount64() - before;
+        check(WaitForSingleObject(stall_entered, 0) == WAIT_OBJECT_0);
+        check(took + 50 >= controller_scan_cache::first_scan_timeout_ms && took < controller_scan_cache::first_scan_timeout_ms + 3000);
+        check(same(first.devices, stalled->devices)); check(stalled->on_caller == 1); check(logger::timeout_lines == 1);
+        received again;
+        const auto again_at = GetTickCount64();
+        gamepad_fix::enum_devices(stalled, 4, &callback, &again, 0); // a new cold key
+        check(GetTickCount64() - again_at < 1000); check(same(again.devices, stalled->devices)); check(stalled->on_caller == 2);
+        received cached;
+        gamepad_fix::enum_devices(wide, 4, &callback, &cached, 1); // published before the timeout
+        check(same(cached.devices, wide->devices)); check(wide->on_caller == 1);
+        received forwarded;
+        gamepad_fix::enum_devices(narrow, 4, &callback, &forwarded, 1);
+        check(same(forwarded.devices, wide->devices)); check(wide->on_caller == 2);
+        check(GetTickCount64() - again_at < 1000); check(logger::timeout_lines == 1);
+        SetEvent(stall_release);
+    }
+    std::printf("PASS controller scan cache: %u checks; 16 A/W/version/size combinations; no real enumeration on caller with ON; "
+                "re-entered scan passed through; stalled first scan fell back after %lu ms\n", checks,
+                static_cast<unsigned long>(controller_scan_cache::first_scan_timeout_ms));
     std::fflush(stdout);
     // The production service intentionally has process lifetime; do not run fixture CRT
     // teardown while its retained fake COM object is available to that service.

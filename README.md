@@ -32,11 +32,12 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.1** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
+**Current release: XML2 Fix 1.8.2** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
 game as 0.4.0-beta.7; 1.8.0 adds the first game's revival price, so it refuses 1.8.0-beta.7 in co-op) and Ultimate
 Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
-([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
+([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); 1.8.2 is 1.8.1 without the black screen at start under
+Proton / Steam Deck ([1.8.2 release notes](packaging/release-notes/v1.8.2.md)). Both play with 1.8.0 and need no Rebuild.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
@@ -624,7 +625,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | --- | ------- | ------- |
 | `Prompts` | `auto` | `auto`: each player's prompts follow the device they last used; `pad`; `keyboard`; `off`: the game's own prompts |
 | `PromptColors` | `1` | `0`: every pad button as plain `[A]`-style text |
-| `CacheDeviceScan` | `1` | background controller scans and XInput slot discovery; `0` restores the previous paths ([details](docs/controller-scan-cache.md)) |
+| `CacheDeviceScan` | `1` (`0` under Wine/Proton) | background controller scans and XInput slot discovery; `0` restores the previous paths ([details](docs/controller-scan-cache.md)) |
 | `CutsceneMouse` | `1` | `0`: the game's own rule, where only a locked-controls cutscene stops the mouse (a mod's cinematic without `lockControls` lets it outline characters and click to move) |
 
 **[Online]** ([details](#-online))

@@ -1,6 +1,7 @@
 # Controller scan cache
 
-`[Input] CacheDeviceScan=1` (default, also when absent) serves controller
+`[Input] CacheDeviceScan=1` (default on Windows, also when absent; under Wine
+and Proton the default is `0`, see below) serves controller
 enumerations from background snapshots and moves XInput slot discovery off the
 frame thread. `CacheDeviceScan=0` restores the previous DirectInput enumeration
 and XInput discovery paths. Both games use the same hooks; this changes no
@@ -47,6 +48,33 @@ are not continuously scanned. The worker pins the compatibility DLL for process
 lifetime, so DLL unloading cannot destroy code during an enumeration. A worker
 setup failure retains the original enumeration path.
 
+## Re-entry, bounded wait and Wine/Proton
+
+Under Wine (Proton, Steam Deck) `IDirectInput8A::EnumDevices` (and the DirectInput 7
+A interface) forwards to the W interface through its vtable, whose slot the fix
+has patched. The worker's raw A scan therefore re-entered the hook on the worker,
+queued a W query only the worker could publish and waited for itself; the game's
+first cold query waited for the worker forever (black screen before any frame,
+from 1.8.1 until this fix).
+Three rules now apply:
+
+- **Re-entry.** While a thread runs a cache scan's original enumeration, and on the
+  worker thread itself, the hook passes the call straight to the original
+  (`controller_scan_cache::scanning_here()`): no cache, no spoofing, no virtual pads.
+  The outer query still replays its list through those on its caller. Windows'
+  dinput does not call the hook from inside its enumeration, so this branch is not
+  taken there (one `scan's own enumeration re-entered the hook` line if it is).
+- **Bounded wait.** A cold query waits at most `first_scan_timeout_ms` (10 s) for its
+  first list. Then it enumerates synchronously on its caller, the log says
+  `published no device list within 10000 ms` once, and every later query of that
+  session is synchronous (as `CacheDeviceScan=0`). A Windows enumeration measured
+  170-900 ms, so only a scan that would otherwise hang reaches the limit.
+- **Wine default.** When ntdll exports `wine_get_version`, an absent, empty or
+  invalid `CacheDeviceScan` means `0`; an explicit `1` or `0` is used as written.
+  The log names the Wine version and which applied. The cache was never verified
+  under Wine (Raw Input topology, hot-plug), while the synchronous path reached the
+  menu and played there.
+
 ## XInput
 
 The existing loading thread stays alive to probe all four slots once a second.
@@ -62,7 +90,8 @@ Build the Win32 targets `xml2_controller_scan_cache_test` and
 `xml2_xinput_connections_test`. The first exercises the production cache and
 replay hook with fake COM devices, covering A/W, versions 3/5/7/8, DX3/current
 sizes, exact bytes, order, early stop, hot-plug, failures, refresh, retained COM
-lifetime and a blocked scan. The second exercises production XInput discovery,
+lifetime, a blocked scan, a scan that re-enters the hook from the worker (Wine's
+A->W forwarding) and a stalled first scan (the bounded wait and its fallback). The second exercises production XInput discovery,
 slot reads, failure signalling, publication races and OFF call counts.
 `xml2_xinput_connections_test --timing-real` also measures actual XInput calls
 without launching a game or injecting input.
