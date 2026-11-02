@@ -751,6 +751,14 @@ namespace gamepad_fix
 			{
 				return real(self, type, callback, user, flags);
 			}
+			// The scan worker's own raw enumeration came back in (Wine: the A interface calls the W one through its
+			// patched vtable): straight to the original, never to the cache it is filling. Spoofing, virtual pads and
+			// the game's callback run on the outer caller, as for every replayed list.
+			if (controller_scan_cache::scanning_here())
+			{
+				logger::write_once("scan-reentry", "dinput: the controller scan's own enumeration re-entered the hook (A->W forwarding, e.g. Wine) - passed straight through");
+				return real(self, type, callback, user, flags);
+			}
 
 			int version = 0;
 			{
@@ -762,20 +770,24 @@ namespace gamepad_fix
 			const bool controllers = type == 0 || (context.di8 ? type == DI8DEVCLASS_GAMECTRL ||
 				(main_type >= DI8DEVTYPE_JOYSTICK && main_type <= DI8DEVTYPE_SUPPLEMENTAL) : main_type == 4);
 			HRESULT result = DI_OK;
-			if (cache_scans && controllers && controller_scan_cache::start())
+			std::shared_ptr<const controller_scan_cache::snapshot> list;
+			if (cache_scans && controllers)
 			{
-				const auto list = controller_scan_cache::request({self, version, is_wide(self), type, flags}, real);
-				if (list)
-				{
-					result = list->result;
-					for (const auto& item : list->devices)
-						if (enum_callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(item.bytes.data()), &context) == DIENUM_STOP) break;
-				}
+				if (controller_scan_cache::start())
+					list = controller_scan_cache::request({self, version, is_wide(self), type, flags}, real);
+				else
+					logger::write_once("scan-worker-failed", "dinput: controller scan worker unavailable - original enumeration retained");
+			}
+			if (list)
+			{
+				result = list->result;
+				for (const auto& item : list->devices)
+					if (enum_callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(item.bytes.data()), &context) == DIENUM_STOP) break;
 			}
 			else
 			{
-				if (cache_scans && controllers)
-					logger::write_once("scan-worker-failed", "dinput: controller scan worker unavailable - original enumeration retained");
+				// Cache off, worker unavailable, or no first list in time (controller_scan_cache::request): the original
+				// synchronous enumeration on the caller.
 				result = real(self, type, &enum_callback, &context, flags);
 			}
 			// The virtual pads after the real devices, so each is always the same pad in the game's list.
@@ -823,6 +835,19 @@ namespace gamepad_fix
 		for (auto it=source_slots.begin();it!=source_slots.end();)
 			if (!attached_instances.contains(it->first)) it=source_slots.erase(it); else ++it;
 		topology_known = true;
+	}
+
+	const char* wine_version()
+	{
+		using wine_get_version_t = const char*(__cdecl*)();
+		const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+		const auto get = ntdll ? reinterpret_cast<wine_get_version_t>(GetProcAddress(ntdll, "wine_get_version")) : nullptr;
+		if (!get)
+		{
+			return nullptr;
+		}
+		const char* version = get();
+		return version && *version ? version : "(unknown version)";
 	}
 
 	void cache_device_scan(const bool enabled)

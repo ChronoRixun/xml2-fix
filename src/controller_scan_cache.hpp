@@ -45,6 +45,18 @@ namespace controller_scan_cache
     using topology = std::vector<raw_device>;
     std::optional<topology> device_topology();
 
+    // True on the scan worker's thread, and on any thread while it runs a cache scan's
+    // native enumeration (tick()). The hook then passes the call straight to the original:
+    // under Wine, IDirectInput8A/7A::EnumDevices calls the W interface through its patched
+    // vtable, so the worker's own raw scan re-enters the hook. Waiting on the cache there
+    // waited for itself (black screen under Proton, 2026-11-02).
+    bool scanning_here();
+
+    // The longest a cold query waits for its first background publication. After that the
+    // caller enumerates synchronously and the cache stays off for the session: only a scan
+    // that would otherwise hang the game (or a first DirectInput scan this slow) reaches it.
+    constexpr DWORD first_scan_timeout_ms = 10000;
+
     // tick() is called by one background thread. request() only copies a published
     // snapshot; it never enumerates, detects topology or waits for a scan.
     class cache
@@ -68,8 +80,9 @@ namespace controller_scan_cache
     public:
         std::shared_ptr<const snapshot> request(key query, enumerate_t real, std::uint64_t now);
         // Cold queries keep DirectInput's complete-first-list contract. Only
-        // their first publication can wait; cached and refreshing queries cannot.
-        std::shared_ptr<const snapshot> wait_for_first(key query);
+        // their first publication can wait (at most timeout_ms; nullptr then);
+        // cached and refreshing queries cannot.
+        std::shared_ptr<const snapshot> wait_for_first(key query, DWORD timeout_ms);
         void tick(std::uint64_t now, std::optional<topology> devices);
         std::array<std::uint64_t, 2> counts(); // real scans, snapshots served
     };
@@ -77,5 +90,8 @@ namespace controller_scan_cache
     // A process-lifetime worker, started outside DllMain on the first enumeration.
     // False on a worker setup failure: the hook retains its original path.
     bool start();
+    // nullptr: the caller enumerates synchronously - a first publication took longer than
+    // first_scan_timeout_ms (logged once; every later query of the session is synchronous
+    // too), or the caller is the scan itself (scanning_here()).
     std::shared_ptr<const snapshot> request(key query, enumerate_t real);
 }

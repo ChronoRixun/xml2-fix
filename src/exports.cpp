@@ -229,7 +229,16 @@ namespace
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
-		const bool cache_device_scan = ini::flag(L"Input", L"CacheDeviceScan", true);
+		// A valid value reads the same with either fallback; an absent, empty or invalid one does not.
+		const bool scan_value = ini::flag(L"Input", L"CacheDeviceScan", true);
+		const bool scan_set = scan_value == ini::flag(L"Input", L"CacheDeviceScan", false);
+		const char* const wine = gamepad_fix::wine_version();
+		const bool cache_device_scan =
+			gamepad_fix::cache_device_scan_choice(scan_set ? std::optional<bool>(scan_value) : std::nullopt, wine != nullptr);
+		if (wine && scan_set)
+			logger::write("input: running under Wine %s - [Input] CacheDeviceScan=%d is set in xml2-fix.ini, so it is used", wine, cache_device_scan ? 1 : 0);
+		else if (wine)
+			logger::write("input: running under Wine %s - [Input] CacheDeviceScan is not set, so it defaults to 0 here (background controller scans off; CacheDeviceScan=1 turns them on)", wine);
 		gamepad_fix::cache_device_scan(cache_device_scan);
 		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
 		virtual_pad::install();
