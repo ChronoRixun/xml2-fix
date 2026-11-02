@@ -55,7 +55,10 @@ Kind 9 removal_notice (0.6 preview fix F, rule 64 OnlineRemovalNotice, [online-p
 section 4) is the same kind of room-module message: host to the removed member only, before the tunnel policy. Kind 16 is
 rule 63's restore transaction (not sent yet). Kind 10 is the host's admission boundary decision (AQ3) and kind 11 the
 host's lost-newcomer decision (p060fix/AR, [join-in-progress.md](join-in-progress.md) "A newcomer lost before the shared
-start"); both are GNS-only reliable controls, accepted only from the bound host. Kinds 12-15 are free.
+start"); both are GNS-only reliable controls, accepted only from the bound host. Kind 12 is the host's room roster
+(p060fix/AS, [online-rooms.md](online-rooms.md) item 5): a room-module message, host to each member reliably on its
+connect and to all members after every join/leave, routed before the tunnel policy and accepted only from the pinned
+host; no rule id (coordinator exception 2026-11-01, see online-rooms.md). Kinds 13-15 are free.
 
 ## A participant lost abruptly (three or more players)
 

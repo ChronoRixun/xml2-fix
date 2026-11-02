@@ -16,6 +16,11 @@ shuts down the worker connection; the existing broker disconnect semantics
 remove membership and close a host's room. No new server operation, gameplay
 rule, agreement revision, transport framing, or release identity is introduced.
 Any future wire/gameplay contract **needs a rule id** from the coordinator.
+**Coordinator exception, 2026-11-01 (room roster, link kind 12, p060fix/AS):** no rule id or revision bump, like the
+GNS controls 10/11. The roster is sent on the room connection as soon as it connects, before native admission and the
+agreement exchange, so an agreement rule could not gate it; builds with different `[Online] GameVersion` tokens never
+meet (the joiner refuses with `version_mismatch` before connecting); an older member only refuses and counts kind 12
+(link kept, its own map unchanged); an older host sends none and AS joiners use the broker order after 5 s.
 
 | Current state | Input / result | Next state and effect |
 |---|---|---|
@@ -269,7 +274,8 @@ seed the room table. The established native admission/Ready/JIP handlers still
 own membership and play. Intentional Leave drops queued datagrams, callbacks,
 room listener/roster and old-generation worker results before later attempts.
 Rules 25/26, their revisions/values, framing and release identities are unchanged.
-Any distinct future peer-visible contract still **needs a rule id**.
+Any distinct future peer-visible contract still **needs a rule id** (the room roster, link kind 12, is the coordinator
+exception of 2026-11-01 described at the top).
 
 ### Started private rooms with DROP-IN off (fix AN2)
 
