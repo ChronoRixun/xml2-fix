@@ -22,14 +22,19 @@ class ListModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / 'repo'
             (root / 'scripts').mkdir(parents=True)
-            shutil.copyfile(HERE / 'run_native.py', root / 'scripts' / 'run_native.py')
+            for script in ('run_native.py','test_online_menus.py','check_online_menus_guards.py'):
+                shutil.copyfile(HERE / script, root / 'scripts' / script)
+            (root / 'src').mkdir()
+            for name in ('online_menus_guards.hpp','online_menus_anchors_guards.inc'):   # host_modes counts guard_source()
+                shutil.copyfile(REPO / 'src' / name,root / 'src' / name)
             (root / 'test').mkdir()
             for name in ('xml2_test.cpp', 'classic_hud_install_test.cpp'):
                 shutil.copyfile(REPO / 'test' / name, root / 'test' / name)
             bins = root / 'native' / 'bin' / 'Release'
             bins.mkdir(parents=True)
             for name in ('xml2_npc_query_scheduler_test.exe', 'xml2_npc_semi_auto_test.exe', 'xml2_log_test.exe',
-                         'xml2_speaker_label_install_test.exe'):
+                         'xml2_speaker_label_install_test.exe', 'xml2_pool_counter_observers_test.exe',
+                         'xml2_pad_hotplug_test.exe', 'xml2_pad_hotplug_live_test.exe'):
                 (bins / name).write_bytes(b'MZ')
             (bins / 'xml2-fix.ini').write_bytes(b'[Game]\r\nKeep=1\r\n')
             vectors = Path(td) / 'vectors'
@@ -46,9 +51,17 @@ class ListModeTests(unittest.TestCase):
             lines = done.stdout.splitlines()
             self.assertTrue(any(l.endswith('xml2_npc_query_scheduler_test.exe X:/game/XMen2.exe X:/xbox/default.xbe') for l in lines))
             self.assertTrue(any(l.endswith('xml2_npc_semi_auto_test.exe X:/game/XMen2.exe X:/xbox/default.xbe') for l in lines))
+            self.assertTrue(any(l.endswith('xml2_pool_counter_observers_test.exe X:/game/XMen2.exe') for l in lines))
             self.assertTrue(any(l.endswith('xml2_speaker_label_install_test.exe X:/game/XMen2.exe guard6') for l in lines))
             self.assertTrue(any('lcsave_durable_parity.exe' in l and l.endswith('case1') for l in lines))
+            for fixture in ('xml2_pad_hotplug_test', 'xml2_pad_hotplug_live_test'):
+                for mode in ('', ' 1', ' 0'):
+                    expected = fixture + '.exe X:/game/XMen2.exe' + mode
+                    self.assertEqual(sum(l.endswith(expected) for l in lines), 1, expected)
             self.assertFalse(any('deleted a stale' in l for l in lines))
+            from test_online_menus import host_modes
+            listed=[line.split()[-1] for line in lines if 'xml2_online_menus_test.exe' in line]
+            self.assertEqual(sorted(listed),sorted(mode for mode in host_modes(REPO) if mode!='on'))
 
 
 if __name__ == '__main__':

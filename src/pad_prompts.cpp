@@ -3,11 +3,15 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "pad_prompts_rules.hpp"
+#include "lc_fonts.hpp"
+#include "lc_fonts_rules.hpp"
+#include "online_menus_rules.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -26,6 +30,7 @@ namespace pad_prompts
 		bool installed = false;
 		activity seen;                             // the game thread's, from the poll
 		std::array<int, players> last_shown{{-1, -1, -1, -1}}; // for the log
+		std::atomic<unsigned> switches{0};            // every change of last_shown (AE15: the join-in-progress probe polls it)
 
 		// The labels handed back: the renderer reads one before it asks for the next, as with the game's single
 		// buffer (0xa68c18); a few in turn all the same.
@@ -62,6 +67,7 @@ namespace pad_prompts
 			if (last != static_cast<int>(s))
 			{
 				last = static_cast<int>(s);
+				++switches;
 				logger::write("prompts: player %d's prompts show the %s", player + 1, s == shown::pad ? "pad" : "keyboard");
 			}
 			return s;
@@ -105,6 +111,10 @@ namespace pad_prompts
 			char* label = next_buffer();
 			if (pad_device(b.device))
 			{
+				if (lc_fonts::prompt_scope())
+					if (const auto glyph=lc_fonts_rules::pad_glyph(name_of(button_of(b.control)))) {
+						label[0]=static_cast<char>(glyph);label[1]=0;return label;
+					}
 				strncpy_s(label, sizeof(labels[0]), pad_label(b.control, colours).c_str(), _TRUNCATE);
 				return label;
 			}
@@ -114,19 +124,41 @@ namespace pad_prompts
 			{
 				return at<const char*>(no_name_label);
 			}
+			if (lc_fonts::prompt_scope())
+				if (const auto glyph=lc_fonts_rules::key_glyph(name)) {
+					label[0]=static_cast<char>(glyph);label[1]=0;return label;
+				}
 			_snprintf_s(label, sizeof(labels[0]), _TRUNCATE, "[%s]", name);
 			return label;
 		}
 
+		bool (*menu_scope)() = nullptr; // online_menus::pad_prompt_scope: a co-op screen is the current menu
+
 		const char* __cdecl prompt_label(const int code)
 		{
-			return label_for_target(prompt_target(code), code);
+			auto t = prompt_target(code);
+			if (menu_scope && !t.play_row && (t.code == 0x16 || t.code == 0x18) && menu_scope())
+			{
+				// On the co-op screens a pad's X and Y are the screens' "other" and "next" buttons: name them.
+				if (const auto* play_map = binding_map(0, t.player);
+				    play_map && choose(chosen_mode, has_keyboard(play_map), pad_of(play_map), seen) == shown::pad)
+				{
+					t.code = online_menus_rules::pad_prompt_code(t.code);
+				}
+			}
+			return label_for_target(t, code);
 		}
 
 		// In place of the call to the per-frame poll (0x6285c0, __thiscall, no arguments): the poll, then what it read.
+		std::atomic<bool> keyboard_note{false}; // note_keyboard, taken by the next poll
+
 		void __fastcall poll_input(void* input, void* edx)
 		{
 			at<void(__fastcall*)(void*, void*)>(poll_function)(input, edx);
+			if (keyboard_note.exchange(false))
+			{
+				seen.keyboard_noted = true;
+			}
 			if (input)
 			{
 				seen.sample(static_cast<const std::uint8_t*>(input));
@@ -231,6 +263,23 @@ namespace pad_prompts
 		return label_for_target({codes[slot], player, true}, codes[slot]);
 	}
 
+	bool pad_shown(const int player)
+	{
+		if (!installed || player < 0 || player >= players) return false;
+		const auto* play_map = binding_map(0, player);
+		return play_map && choose(chosen_mode, has_keyboard(play_map), pad_of(play_map), seen) == shown::pad;
+	}
+
+	void note_keyboard()
+	{
+		keyboard_note.store(true);
+	}
+
+	void set_menu_scope(bool (*scope)())
+	{
+		menu_scope = scope;
+	}
+
 	void install(const HMODULE game)
 	{
 		const auto mode_value = read_ini(L"Prompts");
@@ -293,4 +342,5 @@ namespace pad_prompts
 		              describe(chosen_mode),
 		              colours ? "A B X Y in the Xbox colours (0x5ef777)" : "every pad button as [A]-style text ([Input] PromptColors=0)");
 	}
+	unsigned device_switches() { return switches.load(); }
 }

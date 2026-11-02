@@ -39,6 +39,20 @@ namespace lcsave
 		}
 	}
 
+	bool validate_talent_positions(const Tables& tables, const NativeLayout& native, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&] {
+			if (!tables.loaded() || !tables.data->build) detail::fail("talent positions need build tables");
+			const auto& b = *tables.data->build;
+			for (std::uint32_t p = 0; p < b.T.TALN_shared.size(); ++p)
+				(void)detail::talent_engine_id(detail::talent_code(0,p), native);
+			for (const auto& [stats, talents] : b.T.TALN_hero)
+				for (std::uint32_t p = 0; p < talents.size(); ++p)
+					(void)detail::talent_engine_id(detail::talent_code(stats+1,p), native);
+		});
+	}
+
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables)
 	{
 		return convert_old_to_new(old_file, tables, ConvertOptions{});
@@ -195,8 +209,10 @@ namespace lcsave
 				std::vector<u16> held;
 				for (u32 k = 0; k < a.tail.count; ++k) held.push_back(a.talents[k].id);
 				std::vector<u16> added;
-				for (const auto tid : b.herostat_talents[si])
+				for (const auto code : b.herostat_talents[si])
 				{
+					// the layout's engine id (M = native.talent_multiplier); shared talents by their code, not by `< 100`
+					const auto tid = static_cast<u16>(detail::talent_engine_id(code, native));
 					if (std::find(held.begin(), held.end(), tid) != held.end()) continue;
 					if (std::find(added.begin(), added.end(), tid) != added.end()) continue;
 					added.push_back(tid);
@@ -204,7 +220,7 @@ namespace lcsave
 					t.hero_block = static_cast<std::uint32_t>(n);
 					t.stats_index = static_cast<std::uint32_t>(si);
 					t.talent_id = tid;
-					t.shared = tid < 100;
+					t.shared = detail::talent_code_owner(code) == 0;
 					out.push_back(t);
 				}
 			}

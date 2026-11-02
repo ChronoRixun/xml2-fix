@@ -25,8 +25,13 @@ namespace lcsave::detail
 	constexpr u32 ceil_enh_per_list = 64;
 	constexpr u32 ceil_equipped = 3;
 	constexpr u32 ceil_hero_blocks = 64;
-	constexpr u32 ceil_zone_records = 5;
-	constexpr u32 ceil_world_slot = 150;
+	// the zone-record count and the world-item slots are the layout's (native.record_count, native.world_slots)
+
+	// talents: the build's tables keep a talent's (owner, position) as a code; the engine id is the layout's
+	// (owner + 1) x M + position, M = native.talent_multiplier (RETAIL / E10A2 100, W2 200; limits-wave2.md 4.7)
+	constexpr u32 talent_code(u32 owner_plus1, u32 position) { return owner_plus1 << 16 | position; }
+	constexpr u32 talent_code_owner(u32 code) { return code >> 16; }        // stats index + 1; 0 = shared
+	constexpr u32 talent_code_position(u32 code) { return code & 0xffff; }
 
 	struct OldInstance
 	{
@@ -109,7 +114,7 @@ namespace lcsave::detail
 		std::vector<u8> course_residue;
 		u8 grades[old_dr_grades]{};
 		OldReview review{};
-		std::unique_ptr<OldZoneStrings> zone_strings = std::make_unique<OldZoneStrings>();
+		std::unique_ptr<OldZoneStrings> zone_strings = std::make_unique<OldZoneStrings>();   // sized by the layout
 		std::vector<OldZone> zones;
 		OldSnapshot mission{};
 		OldProfile profile;
@@ -137,6 +142,14 @@ namespace lcsave::detail
 	OldProfile read_profile_file(const std::uint8_t* data, std::size_t size, std::string& description);
 	std::vector<std::uint8_t> write_profile_file(const std::string& description, const OldProfile& p);
 	std::string zone_string(const OldZoneStrings& table, u32 handle);
+	// the engine talent id of a talent code on `native`; refused (fail) when the position does not fit the layout's
+	// id space (position < M; a shared position < M - 1, the shared cap M - 1)
+	u32 talent_engine_id(u32 code, const NativeLayout& native);
+	// what the engine's pools must hold to load a model: every serialized instance (carried, world, equipped of the hero
+	// and restore blocks), their enhancement elements, the world items (native_load_demand)
+	NativeLoadDemand model_demand(const OldSlot& m);
+	// the demand against the layout's pools (instances, attached enhancements, world items); "" when it fits
+	std::string demand_refusal(const NativeLoadDemand& d, const NativeLayout& native);
 	u32 script_var_value(const OldScriptVar& v);
 
 	// ---------------------------------------------------------------------------------------------- container
@@ -244,6 +257,10 @@ namespace lcsave::detail
 		const ZoneDelta* zone_map(u32 zone) const;
 	};
 
+	inline constexpr u32 ITEM_OWN_REBUILT = 0x1; // catalogue attribute (distinct from sidecar flag 0x4)
+	// Existing catalogue revision that introduced rebuilt reward classes; a migration boundary, not a new identity.
+	inline constexpr u32 item_own_rebuilt_catalogue_revision = 8;
+
 	struct CatEntry
 	{
 		unsigned domain = 0;
@@ -316,7 +333,7 @@ namespace lcsave::detail
 		std::vector<std::string> item;                         // canonical key by definition index
 		std::vector<std::string> course;
 		u32 hero_count = 0;
-		std::vector<std::vector<u16>> herostat_talents;        // by stats index: talent ids the herostat lists
+		std::vector<std::vector<u32>> herostat_talents;        // by stats index: talent codes (talent_code) the herostat lists
 		std::vector<u8> herostat_xpexempt;                     // by stats index: 1 = the entry is xpexempt (no level processing)
 		std::vector<std::string> herostat_autospend;           // by stats index: the autospend class name, lower case ("" = none)
 		// zone numbering, read lazily from the placement files
@@ -381,13 +398,20 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> convert_slot(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);
 	void validate_native_sections(const FileIn& file, const NativeLayout& native = retail_layout); // semantic preflight, no conversation I/O
-	void validate_native_tables(const TablesData& tables); // installed engine budgets, not reader ceilings
+	void validate_native_tables(const TablesData& tables, const NativeLayout& native = retail_layout); // installed engine budgets, not reader ceilings
 	// LC campaign -> the old model laid out for `native`. The file's required-feature marker decides
 	// (decide_features): a feature-1 file is refused on a retail layout; a feature-0 file on a contiguous layout has
 	// its registered typed fields migrated (registry required); a feature-1 file on a contiguous layout has them validated.
+	// probe = the representability probe's target pass (limits-wave2.md section 7): the target layout's structural checks
+	// and talent mapping, but the definition index is per build (bounded by this build's own table, never the target's
+	// width) and the model is not written (an index the target's width cannot hold is the target build's own business)
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl,
 		std::vector<std::string>& notes, const NativeLayout& native = retail_layout, const TypedRegistry* registry = nullptr,
-		MigrationReport* report = nullptr);
+		MigrationReport* report = nullptr, bool probe = false);
+	// the representability probe (limits-wave2.md section 7): "" when a pre-W2 build of layout `target` (E10A2) can
+	// apply the LC campaign `file` exactly; otherwise the first failing rule by name
+	std::string representable(const std::vector<std::uint8_t>& file, const TablesData& t, const NativeLayout& target,
+		const TypedRegistry* registry = nullptr);
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t,
 		const NewFileContext& context, ConvertState& state, const NativeLayout& native = retail_layout);
 	// the typed entity-id adapter over a file's SVAR lists (typed_registry.cpp; tools/lcsave/typed_registry.py
@@ -400,8 +424,8 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> convert_profile(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);
 	std::vector<std::uint8_t> profile_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t,
-		const NewFileContext& context, ConvertState& state);
-	std::vector<std::uint8_t> reverse_profile(const std::vector<std::uint8_t>& new_bytes, const TablesData& t);
+		const NewFileContext& context, ConvertState& state, const NativeLayout& native = retail_layout);
+	std::vector<std::uint8_t> reverse_profile(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const NativeLayout& native = retail_layout);
 	Value dump_old(const OldSlot& old, const TablesData& t, int start_cv, int items_cv, bool native = false);
 	Value dump_new(const std::vector<std::uint8_t>& file, const TablesData& t);
 }

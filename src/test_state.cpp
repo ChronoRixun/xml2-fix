@@ -1,6 +1,14 @@
 #include "test_state.hpp"
+#include "save_limits.hpp"
 #include "entity_capacity.hpp"
 #include "entity_capacity_layout.hpp"
+#include "actor_pools.hpp"
+#include "e4_observe.hpp"
+#include "char_sounds.hpp"
+#include "motion_pool.hpp"
+#include "resident_stats.hpp"
+#include "particle_scratch.hpp"
+#include "script_pools.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -44,7 +52,10 @@ namespace test_state
 			for (auto& g : guards)
 			{
 				std::uint8_t bytes[10]{};
-				if (!mem.read(g.va, bytes, sizeof bytes) || !limits_rules::matches(bytes, g.hex))
+				// Limits wave 2: the three objective lookups start with W2's wide-index caves when its layout is
+				// installed; those bytes are W2's (save_limits::expected), the rest of each guard stays retail.
+				const auto expected = save_limits::expected(g.va, g.hex);
+				if (!expected || !mem.read(g.va, bytes, sizeof bytes) || !limits_rules::matches(bytes, *expected))
 				{
 					return false;
 				}
@@ -60,6 +71,9 @@ namespace test_state
 			return;
 		}
 		last = now;
+		e4_observe::sample();
+		actor_pools::sample();
+		resident_stats::sample();
 		static const bool valid = supported();
 		if (!valid)
 		{
@@ -88,6 +102,13 @@ namespace test_state
 		{
 			return state;
 		}
+		if (command == "resident_stats") return resident_stats::telemetry_json();
+		if (command == "resident_census") return resident_stats::census_json();
+		if (command == "motion_pool") return motion_pool::telemetry_json();
+		if (command == "char_sounds") return char_sounds::telemetry_json();
+		if (command == "script_pools") return script_pools::telemetry_json();
+		if (command == "actor_pools") return actor_pools::telemetry_json();
+		if (command == "particle_scratch") return particle_scratch::telemetry_json();
 		if (command == "objectives")
 		{
 			return objectives;

@@ -1,4 +1,5 @@
 #include <winsock2.h>
+#include "e4_observe.hpp"
 #include "gns_transport.hpp"
 #include "gns_transport_core.hpp"
 #include "network_validation.hpp"
@@ -13,6 +14,7 @@
 #include "net_impair.hpp"
 #include "online_room.hpp"
 #include "online_room_core.hpp"
+#include "online_removal_core.hpp"
 #include "online_tick.hpp"
 #include "join_in_progress.hpp"
 #include "xml1_hook_memory.hpp"
@@ -25,6 +27,16 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+static_assert(std::uint8_t(gns_transport_core::kind::join_boundary) != online_party_core::kind_report &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != online_party_core::kind_table &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != online_removal_core::link_kind &&
+	std::uint8_t(gns_transport_core::kind::join_boundary) != 16, "admission controls must reach GNS past room party/removal/restore routing");
+static_assert(std::uint8_t(gns_transport_core::kind::newcomer_lost) != online_party_core::kind_report &&
+	std::uint8_t(gns_transport_core::kind::newcomer_lost) != online_party_core::kind_table &&
+	std::uint8_t(gns_transport_core::kind::newcomer_lost) != online_removal_core::link_kind &&
+	std::uint8_t(gns_transport_core::kind::newcomer_lost) != 16 &&
+	std::uint8_t(gns_transport_core::kind::newcomer_lost) != std::uint8_t(gns_transport_core::kind::join_boundary), "the lost-newcomer decision must reach GNS past room party/removal/restore routing");
 
 #if XML2_FIX_GNS
 #include <steam/steamnetworkingsockets.h>
@@ -65,10 +77,16 @@ namespace gns_transport
 			std::uint16_t port = 0;    // the peer's stock port
 			HSteamNetConnection connection = k_HSteamNetConnection_Invalid;
 			bool connector = false, bound = false, switched = false, closed = false, overflow = false, sequenced = false;
+			bool handoff_logged = false;
 			bool tunnel = false; // a room member's P2P connection (online_room owns it; the link only borrows it)
+			bool room_wait = false; // a tunnel link whose room connection was not up yet when it was found (Fix AS follow-up)
 			std::uint16_t sequence = 0; // the next native reliable sequence the GNS messages continue
 			gns_transport_core::outbox out;
 			gns_transport_core::inbox in;
+			gns_transport_core::join_boundary_queue join_boundaries;
+			// p060fix/AR: host control frames GNS refused (its send buffer full, e.g. during the image transfer). They go
+			// out before any later game message of this link (flush_link), so the decision still precedes the 0x26.
+			std::deque<std::vector<std::uint8_t>> controls;
 			DWORD opened = 0, bound_at = 0, hello_at = 0;
 			std::uint64_t sent = 0, received = 0, sent_bytes = 0, received_bytes = 0, deferred = 0, delivered = 0;
 			DWORD reported = 0, keepalive_at = 0, last_rx = 0, max_gap = 0;
@@ -97,6 +115,8 @@ namespace gns_transport
 		// receive pump, GNS callbacks inside RunCallbacks there.
 		std::vector<std::unique_ptr<link>> links;
 		std::vector<stray> strays;
+		bool session_hosted_here();                                                         // p060fix/AR (defined below)
+		void newcomer_decision_received(link& from, const gns_transport_core::parsed& p);   // p060fix/AR (defined below)
 		void* manager_ = nullptr;
 		std::uint32_t own_address = 0; // network order
 		std::uint16_t own_port = 0;
@@ -199,8 +219,16 @@ namespace gns_transport
 				if (at<std::uint8_t*>(node, node_object) == peer) return true;
 			return false;
 		}
-		void close(link& l, const char* why, bool linger)
+		void close(link& l, const char* why, bool linger, const char* failure = "handoff-link-closed")
 		{
+			if (!l.closed && l.bound && !l.switched)
+			{
+				// New gameplay has already been captured here. Reopening native
+				// output would lose those frames or reorder it around the held FIFO.
+				l.gone_why = failure;
+				logger::write("online: GNS handoff failed [%s] for %s (%s): held=%zu / %zu bytes, inbound=%zu / %zu bytes; link ended, native loss handling retained; no native fallback",
+				              failure, text(l.address, l.port).c_str(), why, l.out.pending(), l.out.pending_bytes(), l.in.size(), l.in.bytes());
+			}
 			if (l.connection != k_HSteamNetConnection_Invalid)
 			{
 				if (l.tunnel) online_room::set_transport_bound(l.connection, false);
@@ -224,10 +252,10 @@ namespace gns_transport
 			if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
 			listener = k_HSteamListenSocket_Invalid;
 		}
-		bool send_now(link& l, const std::vector<std::uint8_t>& payload, bool reliable)
+		bool send_now(link& l, const std::vector<std::uint8_t>& payload, bool reliable, bool no_nagle = false)
 		{
 			const auto r = sockets()->SendMessageToConnection(l.connection, payload.data(), std::uint32_t(payload.size()),
-			                                                  reliable ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable, nullptr);
+			                                                  reliable ? k_nSteamNetworkingSend_Reliable : no_nagle ? k_nSteamNetworkingSend_UnreliableNoNagle : k_nSteamNetworkingSend_Unreliable, nullptr);
 			if (r == k_EResultOK) { ++l.sent; l.sent_bytes += payload.size(); return true; }
 			if (r != k_EResultLimitExceeded) logger::write_once("gns-send-failed", "online: GNS send to %s failed (EResult %d)", text(l.address, l.port).c_str(), int(r));
 			return false;
@@ -310,16 +338,34 @@ namespace gns_transport
 			logger::write_capped("gns-debug", "online: GNS: %s", text);
 		}
 
+        gns_transport_core::room_identity_lifecycle<SteamNetworkingIdentity> identity_lifecycle;
+        struct identity_io {
+            bool get_identity(SteamNetworkingIdentity& out) { return sockets()->GetIdentity(&out); }
+            void reset_identity(const SteamNetworkingIdentity& value) { sockets()->ResetIdentity(&value); }
+            void close_listener() {
+                if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
+                listener = k_HSteamListenSocket_Invalid; listen_failed = listener_disabled = false;
+            }
+        };
+        bool transport_idle() {
+            // Leave already closed these room connections. Retire their native
+            // wrappers before checking for genuinely live links/strays.
+            if (!online_room::requested())
+                for (auto& l : links) if (l->tunnel && !l->closed && !online_room::owns(l->connection)) close(*l, "room left", false);
+            for (const auto& l : links) if (!l->closed) return false; // pending native links also own their context
+            return strays.empty();
+        }
 		bool ensure(void* manager)
 		{
 			if (failed) return false;
 			if (!ready)
 			{
 				SteamNetworkingErrMsg error{};
-				// Rooms ([Online] Host/JoinCode): GNS starts as this install's identity, so the broker's certificate fits.
+				// Capture GNS's native identity before adopting the room identity.
 				SteamNetworkingIdentity identity;
 				const bool room = online_room::identity(identity);
-				if (!GameNetworkingSockets_Init(room ? &identity : nullptr, error))
+				if (online_room::requested() && !room) return false; // worker still loading identity
+				if (!GameNetworkingSockets_Init(nullptr, error))
 				{
 					failed = true;
 					logger::write("online: GNS initialisation failed (%s) - the stock transport stays in use", error);
@@ -352,6 +398,19 @@ namespace gns_transport
 				ready = true;
 				logger::write("online: GNS initialised on the game's thread (fake loss %d %%, fake lag %d ms)", fake_loss, fake_lag);
 			}
+            identity_io identity_adapter;
+            if (!identity_lifecycle.remember_native(identity_adapter)) return false;
+            SteamNetworkingIdentity room_identity;
+            const bool requested_room = online_room::requested();
+            const bool have_room_identity = requested_room && online_room::identity(room_identity);
+            const bool committed_room = online_room::view().state == online_browser_core::phase::room;
+            if (!identity_lifecycle.synchronize(requested_room, have_room_identity ? &room_identity : nullptr,
+                    transport_idle(), committed_room, identity_adapter)) {
+                // A live room's tick degrades the broker. Keep its established
+                // transport queues running; do not reset identity or listener.
+                return committed_room && requested_room;
+            }
+			if (!manager) return true; // menus have no native transport manager yet
 			if (manager != manager_)
 			{
 				close_all("the session's transport changed");
@@ -469,14 +528,14 @@ namespace gns_transport
 					// decides who binds first. Both sides compare virtual addresses, as each sees the other.
 					l->connector = gns_transport_core::connects(online_room::own_virtual(), own_port, ntohl(l->address), l->port);
 					l->connection = online_room::connection_for(ntohl(l->address));
-					if (l->connection == k_HSteamNetConnection_Invalid) l->closed = true;
+					if (l->connection == k_HSteamNetConnection_Invalid) l->room_wait = true; // adopt_room_connections() binds it later
 					else if (l->connector)
 					{
 						send(*l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
 						l->hello_at = GetTickCount();
 					}
 					logger::write("online: GNS link %s for a new participant - %s", text(l->address, l->port).c_str(),
-					              l->closed ? "no room connection to it, its messages stay on the tunnelled stock socket" : (l->connector ? "hello sent on its room connection" : "waiting for its hello on its room connection"));
+					              l->room_wait ? "its room connection is not up yet - the link waits for it (its messages use the tunnelled stock socket until then)" : (l->connector ? "hello sent on its room connection" : "waiting for its hello on its room connection"));
 					links.push_back(std::move(l));
 					continue;
 				}
@@ -507,6 +566,36 @@ namespace gns_transport
 			              l.connector ? "connected" : "accepted", static_cast<void*>(l.peer), session ? reinterpret_cast<record_of_t>(0x611110)(session, l.peer) : nullptr);
 		}
 
+		// Fix AS follow-up: tunnel links found before their room connection was up take it when it comes up (then the
+		// connector says hello, as at discovery); after room_link_wait_ms the link gives up as before (stock socket).
+		void adopt_room_connections()
+		{
+			const auto now = GetTickCount();
+			for (auto& item : links)
+			{
+				auto& l = *item;
+				if (!l.room_wait || l.closed) continue;
+				const auto c = online_room::connection_for(ntohl(l.address));
+				const auto step = gns_transport_core::room_link_step(c != k_HSteamNetConnection_Invalid, now - l.opened);
+				if (step == gns_transport_core::room_link::wait) continue;
+				l.room_wait = false;
+				if (step == gns_transport_core::room_link::give_up)
+				{
+					l.closed = true;
+					logger::write("online: GNS link %s: no room connection to it after %lu ms - its messages stay on the tunnelled stock socket", text(l.address, l.port).c_str(), unsigned long(now - l.opened));
+					continue;
+				}
+				l.connection = c;
+				if (l.connector)
+				{
+					send(l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
+					l.hello_at = now;
+				}
+				logger::write("online: GNS link %s: its room connection came up %lu ms after the link - %s", text(l.address, l.port).c_str(), unsigned long(now - l.opened),
+				              l.connector ? "hello sent on it" : "waiting for its hello on it");
+			}
+		}
+
 		void lost_message(link& from, const gns_transport_core::parsed& p); // a lost participant's cut frame (below)
 		void received(void* manager, link& l, SteamNetworkingMessage_t* m)
 		{
@@ -531,6 +620,19 @@ namespace gns_transport
 				return;
 			}
 			if (l.tunnel && !l.bound) return; // nothing of the game's before the pair is bound
+			if (p.k == gns_transport_core::kind::join_boundary)
+			{
+				if (gns_transport_core::join_boundary_authorized(l.bound, (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0, participant_index(l)))
+					l.join_boundaries.push(p.frame, std::uint8_t(p.index));
+				return;
+			}
+			if (p.k == gns_transport_core::kind::newcomer_lost)
+			{
+				// p060fix/AR: only the bound host's reliable decision counts; a host never takes one.
+				if (gns_transport_core::newcomer_lost_authorized(l.bound, (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0, participant_index(l)) && !session_hosted_here())
+					newcomer_decision_received(l, p);
+				return;
+			}
 			if (p.k == gns_transport_core::kind::keepalive)
 			{
 				// The adapter's own keepalive (every 100 ms from a running transport): the native last-receive time
@@ -551,6 +653,11 @@ namespace gns_transport
 			message msg;
 			msg.opcode = p.opcode;
 			msg.reliable = (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
+            // 060w: the dead-hero guest accepted 0x2b into the native reliable
+            // parser without a removal callback. Classify the host's explicit
+            // departure on its authenticated room tunnel before that queue.
+            if (l.tunnel && p.opcode==0x2b)
+                online_room::host_departure(l.connection,msg.reliable,p.opcode,p.body,p.length);
 			if (p.length) msg.body.assign(p.body, p.body + p.length);
 			++l.received;
 			if (rare(msg.opcode)) logger::write_capped("gns-trace", "online: GNS trace: received 0x%02x in the %s task", unsigned(msg.opcode), context);
@@ -561,7 +668,7 @@ namespace gns_transport
 			if (!l.in.push(std::move(msg)) && !l.overflow)
 			{
 				l.overflow = true;
-				close(l, "its receive queue is full (a handler deferred for too long)", false);
+				close(l, "its receive queue is full (a handler deferred for too long)", false, "handoff-inbound-overflow");
 			}
 		}
 
@@ -614,18 +721,24 @@ namespace gns_transport
 			}
 		}
 
-		// The receive queue's reliable messages of one opcode the native ordered queue holds (0x610790's first walk).
+		// The three walks of native 0x610790, without its iterator writes:
+		// received, pending transmit and fragmented messages. During handoff,
+		// old native sends and new held adapter sends must both count.
 		std::uint32_t native_queued(std::uint8_t* peer, std::uint8_t opcode)
 		{
 			std::uint32_t n = 0;
-			if (!at<std::uint32_t>(peer, peer_receive_count)) return 0;
-			for (auto* node = at<std::uint8_t*>(peer, peer_receive_queue); node; node = at<std::uint8_t*>(node, node_next))
-			{
-				auto* header = at<std::uint8_t*>(node, node_object);
-				n += header && header[0x10] == opcode;
+			struct queue { std::uint32_t head, count, opcode; };
+			constexpr queue queues[]{{0x3090,0x309c,0x10},{0x30a0,0x30ac,0x10},{0x30b0,0x30bc,0xd}};
+			for (const auto& q : queues) {
+				if (!at<std::uint32_t>(peer, q.count)) continue;
+				for (auto* node = at<std::uint8_t*>(peer, q.head); node; node = at<std::uint8_t*>(node, node_next)) {
+					const auto* header = at<const std::uint8_t*>(node, node_object);
+					n += header && header[q.opcode] == opcode;
+				}
 			}
 			return n;
 		}
+
 		// The next reliable sequence the native receive side expects after everything it already queued.
 		std::uint16_t next_sequence(std::uint8_t* peer)
 		{
@@ -697,13 +810,19 @@ namespace gns_transport
 		void flush_link(link& l)
 		{
 			if (!l.bound || l.closed || l.connection == k_HSteamNetConnection_Invalid) return;
-			if (GetTickCount() - l.keepalive_at >= 100)
+			if (GetTickCount() - l.keepalive_at >= gns_transport_core::keepalive_ms)
 			{
 				l.keepalive_at = GetTickCount();
 				const std::vector<std::uint8_t> ping{std::uint8_t(gns_transport_core::kind::keepalive)};
 				sockets()->SendMessageToConnection(l.connection, ping.data(), 1, k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
 			}
 			release_delayed(l);
+			while (!l.controls.empty())
+			{
+				if (!send_now(l, l.controls.front(), true)) return; // still refused: no later game message overtakes it
+				l.controls.pop_front();
+				logger::write("online: GNS link %s: a delayed host decision went out (before any later game message)", text(l.address, l.port).c_str());
+			}
 			if (!l.switched) return;
 			if (l.out.pending())
 			{
@@ -745,8 +864,8 @@ namespace gns_transport
 					if (at<std::uint32_t>(l->peer, peer_receive_count))
 						for (auto* node = at<std::uint8_t*>(l->peer, peer_receive_queue); node; node = at<std::uint8_t*>(node, node_next))
 							if (auto* h = at<std::uint8_t*>(node, node_object)) { ++queued; lowest = std::min<unsigned>(lowest, at<std::uint16_t>(h, 0xa)); }
-					logger::write("online: GNS link %s: native receive expects %u, %u queued (lowest %u), adapter next %u%s", text(l->address, l->port).c_str(),
-					              unsigned(expected), queued, lowest == 0x10000 ? 0u : lowest, unsigned(l->sequence), l->sequenced ? "" : " (not started)");
+					logger::write("online: GNS link %s: native receive expects %u, %u queued (lowest %u), adapter next %u%s; bound=%u switched=%u native send pending=%u", text(l->address, l->port).c_str(),
+					              unsigned(expected), queued, lowest == 0x10000 ? 0u : lowest, unsigned(l->sequence), l->sequenced ? "" : " (not started)",unsigned(l->bound),unsigned(l->switched),at<std::uint32_t>(l->peer,peer_send_count));
 				}
 			}
 		}
@@ -755,8 +874,9 @@ namespace gns_transport
 		{
 			for (auto& l : links)
 			{
-				// Outbound moves to GNS only once the native reliable queue to this peer is empty (all acknowledged),
-				// so no native message can arrive after a GNS one.
+				// Bound links stage NEW messages in the adapter. Only the finite old native queue must drain;
+				// continually adding input/campaign messages there can prevent an empty observation forever.
+				// Flush staged messages only after every old reliable message was acknowledged.
 				if (!l->bound || l->switched || l->closed || at<std::uint32_t>(l->peer, peer_send_count)) continue;
 				l->switched = true;
 				logger::write("online: GNS link %s carries the game's messages (switched %lu ms after binding)", text(l->address, l->port).c_str(),
@@ -802,12 +922,12 @@ namespace gns_transport
 					as_host = s[session_host] != 0;
 					if (as_host)
 					{
-						reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0);
-						reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0);
+						e4_observe::native_call("gns:drop notice", [&] { reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0); });
+						e4_observe::native_call("gns:host removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0); });
 						return true;
 					}
 					if (index == 0) return false; // the host: the native watchdog and its "lost connection to the host" dialog
-					reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0);
+					e4_observe::native_call("gns:peer removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0); });
 					return true;
 				}
 				return false;
@@ -996,6 +1116,100 @@ namespace gns_transport
 			logger::write_capped("gns-lost", "online: participant %d lost - %zu input records (frames %u..%u) from %s; its next frame here %u -> %u", int(p.index), p.count, unsigned(p.frame),
 			              unsigned(std::uint16_t(p.frame + p.count - 1)), text(from.address, from.port).c_str(), unsigned(before.next), unsigned(after.next));
 		}
+		// ---- p060fix/AR: a newcomer lost between its admission and the cohort restart ------------------------------
+		// The host alone decides (gns_transport_core.hpp newcomer_lost): before the restart is announced it sends every
+		// other bound participant the reliable decision, then removes the newcomer at once (the restart replaces every
+		// peer's world from the one image, so no cut frame is needed; waiting let the host's 20 s native fallback and the
+		// guest's 8.5 s timeout land on opposite sides of the restart). Every other peer removes it before its own
+		// restart begins and never by its own timeout. After the restart is announced the ordinary agreed cut frame
+		// applies in the restarted epoch, and no peer removes anyone inside its restart (restart entry .. restored zone).
+		bool session_hosted_here();
+		gns_transport_core::newcomer_ledger newcomers_here; // a non-host PC: the admission's newcomers and the host's decisions
+		gns_transport_core::host_decisions host_decided;    // the host: decisions sent in this admission
+		void declare_gone(link& l, const char* why);
+		bool host_newcomer_decision(int index, const char* why)
+		{
+			if (index < 1 || index > 3 || !session_hosted_here()) return false;
+			const bool newcomer = join_in_progress::admission_newcomer(index);
+			if (host_decided.already(index, newcomer)) return true;
+			if (gns_transport_core::classify_newcomer_loss(true, newcomer, join_in_progress::restart_begun()) !=
+				gns_transport_core::newcomer_loss::before_restart) return false;
+			host_decided.record(index);
+			const auto remaining = std::uint8_t(join_in_progress::admission_remaining(index) & ~host_decided.sent);
+			const auto wire = gns_transport_core::newcomer_lost(std::uint8_t(index), remaining);
+			int to = 0, send_failures = 0;
+			for (auto& item : links)
+			{
+				auto& o = *item;
+				const int other = participant_index(o);
+				if (o.closed || !o.bound || other <= 0 || other == index || o.connection == k_HSteamNetConnection_Invalid) continue;
+				if (o.controls.empty() && send_now(o, wire, true)) ++to; else { o.controls.push_back(wire); ++send_failures; }
+			}
+			logger::write("online: participant %d lost before the cohort restart (%s) - the host's decision: removed on every peer before its restart, the restart goes on without it (%d newcomer(s) still joining, mask 0x%x); sent to %d participant(s)%s",
+				index, why, int(((remaining >> 1) & 1) + ((remaining >> 2) & 1) + ((remaining >> 3) & 1)), unsigned(remaining), to, send_failures ? " (some queued: GNS refused them now; they leave before any later game message)" : "");
+			join_in_progress::newcomer_lost_decided(index);
+			return true;
+		}
+		// A non-host PC carries out one host decision: the participant's native removal as the host's notice 0x2b would
+		// (0x612c40 with 0x1107). removed / absent (already gone, e.g. by the native 0x2b) / later (no running zone yet).
+		enum class carry { removed, absent, later, fault };
+		carry remove_index_now(int index)
+		{
+			__try
+			{
+				auto* s = reinterpret_cast<std::uint8_t*>(session_static);
+				if (*reinterpret_cast<const std::uint32_t*>(s) != session_vtable || !s[session_set_up]) return carry::later;
+				const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
+				if (*reinterpret_cast<const std::uint32_t*>(zones) != zones_vtable || (zones[zones_loading_at] & 3)) return carry::later;
+				if (!*reinterpret_cast<const std::uint32_t*>(s + session_count)) return carry::absent;
+				for (auto* n = *reinterpret_cast<std::uint8_t**>(s + session_first); n; n = *reinterpret_cast<std::uint8_t**>(n + node_next_at))
+				{
+					auto* r = *reinterpret_cast<std::uint8_t**>(n + node_record_at);
+					if (!r || *reinterpret_cast<const std::int32_t*>(r + record_index_at) != index) continue;
+					if (*reinterpret_cast<const std::uint32_t*>(r + record_flags_at) & 1) return carry::absent; // this PC: never
+					own_removal = true;
+					e4_observe::native_call("gns:decided removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0); });
+					own_removal = false;
+					return carry::removed;
+				}
+				return carry::absent;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { own_removal = false; return carry::fault; }
+		}
+		// True when no host decision is left to carry out here.
+		bool carry_decisions(const char* where, bool last_chance)
+		{
+			if (!newcomers_here.decided) return true;
+			if (!last_chance && join_in_progress::restart_started()) return false; // inside the restart: only its entry carries them out
+			for (int index = 1; index <= 3; ++index)
+			{
+				if (!newcomers_here.must_remove(index)) continue;
+				const std::uint8_t* peer = nullptr; // the link is found again after the native call (it may end links)
+				for (auto& item : links) if (!item->vanished && (participant_index(*item) == index || (item->gone_at && item->lost_index == index))) { peer = item->peer; break; }
+				const auto r = remove_index_now(index);
+				if (r == carry::later)
+				{
+					if (last_chance) logger::write_once("ar-carry-later", "online: participant %d - the host's removal decision cannot be carried out yet at %s (no running zone); this PC's restart waits for it", index, where);
+					continue;
+				}
+				newcomers_here.removed(index);
+				if (link* l = peer ? by_peer(peer) : nullptr) { l->vanished = true; if (!l->gone_at) l->gone_at = GetTickCount() | 1; l->lost_index = index; }
+				if (r == carry::fault) logger::write("online: participant %d - a FAULT inside the native removal carrying out the host's decision at %s; not retried", index, where);
+				else logger::write("online: participant %d %s by the host's decision at %s (lockstep frame %u), before this PC's restart - every peer restarts without it",
+					index, r == carry::removed ? "removed" : "already gone", where, unsigned(*reinterpret_cast<const std::uint16_t*>(lockstep_frame)));
+			}
+			return !newcomers_here.decided;
+		}
+		void newcomer_decision_received(link& from, const gns_transport_core::parsed& p)
+		{
+			const int index = int(p.index);
+			if (!newcomers_here.decide(index)) return;
+			logger::write("online: the host decided participant %d lost before the cohort restart (%u newcomer(s) still joining, mask 0x%x) - this PC removes it before its own restart, never by its own timeout",
+				index, unsigned(((p.frame >> 1) & 1) + ((p.frame >> 2) & 1) + ((p.frame >> 3) & 1)), unsigned(p.frame));
+			for (auto& item : links)
+				if (item.get() != &from && !item->gone_at && !item->closed && item->bound && participant_index(*item) == index)
+					declare_gone(*item, "the host decided it was lost before the restart");
+		}
 #ifndef NDEBUG
 		// [Dev] LostCutLegacy = 1 (tests only, compiled out of Release): the 1.8.0 candidate's removal at this PC's own
 		// stop frame, unchanged, as the negative control of the agreed cut frame below.
@@ -1032,6 +1246,8 @@ namespace gns_transport
 			if (legacy_cut) { legacy_vanished_links(); return; }
 #endif
 			const bool waiting = lockstep_still(now);
+			const bool hosting = session_hosted_here();
+			if (!hosting) carry_decisions("its next transport tick", false); // p060fix/AR
 			for (auto& item : links)
 			{
 				auto& l = *item;
@@ -1056,6 +1272,18 @@ namespace gns_transport
 					logger::write("online: participant %d lost - %zu input records kept earlier filed; its next frame here %u -> %u", l.lost_index,
 					              it->records.size() / gns_transport_core::input_record_size, unsigned(before.next), unsigned(ring(l.lost_index).next));
 					it = early.erase(it);
+				}
+				// p060fix/AR: the host decides a newcomer lost before the restart and removes it at once (no cut frame).
+				if (hosting && host_newcomer_decision(l.lost_index, l.gone_why ? l.gone_why : (l.closed ? "GNS link closed" : "left the room")))
+				{
+					int index = -1;
+					bool as_host = false;
+					if (participant_index(l) < 0) { l.vanished = true; logger::write("online: participant %d - already removed from the session here; the restart goes on without it", l.lost_index); continue; }
+					if (!hand_over(l, index, as_host)) continue; // not in a running zone yet: tried again next tick
+					l.vanished = true;
+					logger::write("online: participant %d (%s) removed now by the host before the cohort restart (lockstep frame %u) - no cut frame: every peer restarts from the one image without it",
+						index, text(l.address, l.port).c_str(), unsigned(seen_frame));
+					continue;
 				}
 				// This PC's records of it to every other survivor, again whenever it holds more.
 				const auto r = ring(l.lost_index);
@@ -1092,8 +1320,28 @@ namespace gns_transport
 					logger::write("online: participant %d lost - this PC ran every frame it has its input for and waits at its frame %u: announced (lockstep frame %u, %zu other(s)%s)",
 					              l.lost_index, unsigned(r.next), unsigned(seen_frame), views.size(), all_inputs ? "" : ", not every survivor's records arrived");
 				}
+				// p060fix/AR: an admission newcomer is never removed here by this PC's own agreement or timeout before its
+				// restart - only by the host's decision (carry_decisions), which every peer receives before the restart's 0x26.
+				if (!hosting && !newcomers_here.own_removal_allowed(l.lost_index))
+				{
+					if (participant_index(l) < 0)
+					{
+						l.vanished = true;
+						logger::write("online: participant %d (%s) removed by the host's notice before this PC's restart", l.lost_index, text(l.address, l.port).c_str());
+					}
+					else logger::write_once("ar-wait-host", "online: participant %d (%s) is a newcomer of this admission - this PC waits for the host's decision (no removal by its own timeout before the restart)", l.lost_index, text(l.address, l.port).c_str());
+					continue;
+				}
 				const auto step = gns_transport_core::lost_decision(l.announced, views.data(), views.size(), elapsed);
 				if (step == gns_transport_core::lost_step::wait) continue;
+				// p060fix/AR: no removal inside a restart (from its 0x26 until its restart load was seen): the restarted epoch's
+				// frame 0 waits for the lost participant on every peer, and the agreement removes it there (live ZJ-7j:
+				// a removal after resetgame, before the mode-2 load, left the lobby guest on the pause/ready screen).
+				if (join_in_progress::restart_removal_held())
+				{
+					logger::write_once("ar-restart-held", "online: participant %d - its removal waits until this PC's restarted zone runs (no removal inside the cohort restart)", l.lost_index);
+					continue;
+				}
 				std::string others;
 				for (const auto& v : views) others += " " + std::to_string(v.ready);
 				int index = -1;
@@ -1116,8 +1364,8 @@ namespace gns_transport
 			}
 		}
 
-		// The native removals of a participant that went quiet (the host's watchdog 0x613790 at 0x613adc, its lag-report
-		// vote 0x614810 via 0x6133a0; lost codes 0x10cc/0x10cd) are filtered at the entries of the notice 0x611550 and
+		// Native participant removals (the host's watchdog 0x613790 at 0x613adc, or frame/checksum
+		// arbitration 0x614810 via 0x6133a0; lost codes 0x10cc/0x10cd) are filtered at the entries of the notice 0x611550 and
 		// the removal 0x612c40: for a remote participant (never the host, index 0) with a bound link, in a running zone,
 		// the link is ended here and vanished_links removes it at the agreed frame (hand_over calls the same two
 		// functions with own_removal set). Not deferred: other reasons (leave, session teardown), loads, unbound links,
@@ -1144,6 +1392,11 @@ namespace gns_transport
 			link* l = by_peer(peer);
 			if (!l || !l->bound || l->vanished) return false;
 			const auto now = GetTickCount();
+			if (l->gone_at && now - l->gone_at > native_fallback_ms && join_in_progress::restart_removal_held())
+			{
+				logger::write_once("ar-fallback-held", "online: participant %d (%s) - the native removal's 20 s fallback waits until this PC's restarted zone runs (no removal inside the cohort restart)", index, text(l->address, l->port).c_str());
+				return true;
+			}
 			if (l->gone_at && now - l->gone_at > native_fallback_ms)
 			{
 				logger::write_once("native-fallback", "online: participant %d (%s) still not handed over %lu ms after its loss - the native removal runs", index, text(l->address, l->port).c_str(), static_cast<unsigned long>(native_fallback_ms));
@@ -1174,17 +1427,19 @@ namespace gns_transport
 
 		void tick(void* manager)
 		{
+			online_room::ui_tick();
 			const bool listening = ensure(manager);
 			if (!ready) return;
 			sockets()->RunCallbacks();
 			online_room::tick();
 			if (!listening) return;
 			discover(manager);
+			adopt_room_connections();
 			const auto now = GetTickCount();
 			for (auto& item : links)
 			{
 				auto& l = *item;
-				if (!l.closed && l.tunnel && gns_transport_core::hello_due(l.connector, l.bound, now, l.hello_at))
+				if (!l.closed && l.tunnel && l.connection != k_HSteamNetConnection_Invalid && gns_transport_core::hello_due(l.connector, l.bound, now, l.hello_at))
 				{
 					send(l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
 					l.hello_at = now;
@@ -1307,12 +1562,12 @@ namespace gns_transport
 			return at<const void*>(header, 0) ? length : 0;
 		}
 
-		link* switched_for_endpoint(void* manager, const void* endpoint)
+		link* bound_for_endpoint(void* manager, const void* endpoint)
 		{
 			if (manager != manager_ || links.empty()) return nullptr;
 			// The enqueue's own lookup (0x60db20: the first listed peer whose +4 equals the endpoint).
 			auto* l = by_peer(reinterpret_cast<peer_of_t>(native_peer_of)(manager, endpoint));
-			return l && l->switched ? l : nullptr;
+			return l && gns_transport_core::handoff_lane(l->bound,l->switched)!=gns_transport_core::outbound_lane::native ? l : nullptr;
 		}
 	}
 
@@ -1321,16 +1576,26 @@ namespace gns_transport
 	{
 		++enqueues;
 		activity();
-		auto* l = switched_for_endpoint(manager, endpoint);
+		auto* l = bound_for_endpoint(manager, endpoint);
 		if (!l) return -1;
 		++enqueued_gns;
-		++sent_by[header[0x10]][(header[0xe] ? 1 : 0) + (header[0xf] ? 2 : 0)];
-		if (rare(header[0x10])) logger::write_capped("gns-trace", "online: GNS trace: queued 0x%02x in the %s task", unsigned(header[0x10]), context);
-		const auto opcode = header[0x10];
-		// A link GNS closed: the message is lost like a datagram to a peer gone quiet (the native timeout ends it).
+		const auto opcode=header[0x10];
+		++sent_by[opcode][(header[0xe] ? 1 : 0)+(header[0xf] ? 2 : 0)];
 		if (l->closed || gns_transport_core::fragment_opcode(opcode)) return 1;
-		if (!l->out.enqueue(opcode, header[0xe] != 0, header[0xf] != 0, at<const std::uint8_t*>(header, 0), body_length(header)))
-			close(*l, "its outbound queue exceeded 2 MiB", false);
+		const auto length=body_length(header);
+		if (!header[0xe] && gns_transport_core::handoff_lane(l->bound,l->switched,opcode)==gns_transport_core::outbound_lane::service) {
+			message control;control.opcode=opcode;
+			if(length)control.body.assign(at<const std::uint8_t*>(header,0),at<const std::uint8_t*>(header,0)+length);
+			send_now(*l,gns_transport_core::frame(control),false,true);
+			return 1;
+		}
+		if (!l->switched && !l->handoff_logged) {
+			l->handoff_logged=true;
+			logger::write("online: GNS handoff holds new gameplay; native send pending=%u; ACK/ping service remains live",at<std::uint32_t>(l->peer,peer_send_count));
+		}
+		if (rare(opcode)) logger::write_capped("gns-trace", "online: GNS trace: queued 0x%02x in the %s task", unsigned(opcode), context);
+		if (!l->out.enqueue(opcode,header[0xe]!=0,header[0xf]!=0,at<const std::uint8_t*>(header,0),length))
+			close(*l,"its outbound queue limit was exceeded",false,"handoff-outbound-overflow");
 		return 1;
 	}
 	int __stdcall direct(void* manager, const std::uint8_t* address, std::uint32_t port, std::uint8_t* header)
@@ -1339,14 +1604,18 @@ namespace gns_transport
 		if (manager != manager_ || !address) return -1;
 		for (auto& l : links)
 		{
-			if (!l->switched || at<std::uint32_t>(l->peer, peer_address) != at<const std::uint32_t>(const_cast<std::uint8_t*>(address), 8) ||
+			if (gns_transport_core::handoff_lane(l->bound,l->switched)==gns_transport_core::outbound_lane::native || at<std::uint32_t>(l->peer, peer_address) != at<const std::uint32_t>(const_cast<std::uint8_t*>(address), 8) ||
 			    at<std::uint16_t>(l->peer, peer_port) != std::uint16_t(port)) continue;
 			if (l->closed || gns_transport_core::fragment_opcode(header[0x10])) return 1;
 			message m;
 			m.opcode = header[0x10];
 			const auto length = body_length(header);
 			if (length) m.body.assign(at<const std::uint8_t*>(header, 0), at<const std::uint8_t*>(header, 0) + length);
-			send(*l, gns_transport_core::frame(m), false);
+			if (gns_transport_core::handoff_lane(l->bound,l->switched,m.opcode)==gns_transport_core::outbound_lane::held) {
+				if (!l->out.enqueue(m.opcode,false,false,m.body.data(),m.body.size())) close(*l,"its handoff queue limit was exceeded",false,"handoff-outbound-overflow");
+			} else if (gns_transport_core::handoff_lane(l->bound,l->switched,m.opcode)==gns_transport_core::outbound_lane::service)
+				send_now(*l, gns_transport_core::frame(m), false, true);
+			else send(*l, gns_transport_core::frame(m), false);
 			return 1;
 		}
 		return -1;
@@ -1364,21 +1633,101 @@ namespace gns_transport
 	{
 		++backlogs;
 		auto* l = by_peer(peer);
-		if (!l || !l->switched) return -1;
+		if (!l || !l->bound) return -1;
 		outstanding(*l);
 		return int(l->out.count(std::uint8_t(opcode)) + l->in.count(std::uint8_t(opcode)) + native_queued(static_cast<std::uint8_t*>(peer), std::uint8_t(opcode)));
 	}
 
+	namespace
+	{
+        bool session_hosted_here();
+		bool diagnostic_read(std::uintptr_t address, void* out, std::size_t size) {
+			__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
+			__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+		void log_self_drop_checksums(void* session) {
+			// 0x614810 clears these lists AFTER 0x6133a0 returns, so the notice
+			// hook still sees the heads used for arbitration. No iterator writes.
+			constexpr std::uintptr_t manager = 0xa536d8;
+			std::uint16_t next = 0, period = 0, current = 0;
+			std::uint32_t checksum_state = 0;
+			const bool valid = diagnostic_read(manager + 8, &next, sizeof next) &&
+				diagnostic_read(manager + 0xa, &period, sizeof period) &&
+				diagnostic_read(manager + 0x10, &checksum_state, sizeof checksum_state) &&
+				diagnostic_read(lockstep_frame, &current, sizeof current);
+			logger::write_capped("gns-drop-context", "online: native self-drop checksum context: manager=0x%08X readable=%u state=%u next=%u period=%u current=%u; arbitration may follow checksum OR input-frame mismatch",
+				unsigned(manager), unsigned(valid), unsigned(checksum_state), unsigned(next), unsigned(period), unsigned(current));
+			// Bounded participant lookup, independent of the lists' iterator fields.
+			std::uint32_t records[4]{}, flags[4]{}; char names[4][32]{};
+			std::uint32_t node = 0;
+			diagnostic_read(reinterpret_cast<std::uintptr_t>(session) + session_first, &node, sizeof node);
+			for (unsigned n = 0; n < 4 && node; ++n) {
+				std::uint32_t record = 0, index = 4;
+				if (!diagnostic_read(node + node_record_at, &record, sizeof record) || !record) break;
+				if (diagnostic_read(record + record_index_at, &index, sizeof index) && index < 4) {
+					records[index] = record;
+					diagnostic_read(record + record_flags_at, &flags[index], sizeof flags[index]);
+					diagnostic_read(record + 0x40, names[index], sizeof names[index] - 1);
+				}
+				if (!diagnostic_read(node + node_next_at, &node, sizeof node)) break;
+			}
+			for (unsigned index = 0; index < 4; ++index) {
+				const auto head = gns_transport_core::read_checksum_head(diagnostic_read, manager, index);
+				logger::write_capped("gns-drop-head", "online: native self-drop checksum head: index=%u record=0x%08X flags=0x%08X name=%s count=%u readable=%u present=%u frame=%u hash=0x%08X",
+					index, unsigned(records[index]), unsigned(flags[index]), names[index], unsigned(head.count), unsigned(head.readable), unsigned(head.present), unsigned(head.frame), unsigned(head.hash));
+			}
+		}
+        void log_self_drop_parent(void* session, const std::uint32_t* frame) {
+            std::uint32_t parent=0;
+            __try { parent=gns_transport_core::self_drop_parent(frame,8); }
+            __except(EXCEPTION_EXECUTE_HANDLER) { }
+            const char* name=parent==0x5f2867 ? "front-end exit" : parent==0x6149a7 ? "frame/checksum arbitration" : "other/unknown";
+            logger::write_capped("gns-drop-chain", "online: native self-drop chain: role=%s target_index=%u upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",session_hosted_here() ? "host" : "guest",unsigned(frame[1]),unsigned(parent),name);
+			if (parent == 0x6149a7) log_self_drop_checksums(session);
+        }
+		void log_removal_stack()
+		{
+			// Best-effort extra context: engine x86 frame omission can truncate this.
+			// The explicit entry caller above remains authoritative in that case.
+			void* frames[12]{};
+			const auto count = CaptureStackBackTrace(0, 12, frames, nullptr);
+			for (unsigned short i = 0; i < count; ++i)
+				logger::write_capped("gns-drop-stack", "online: native drop stack[%u]=0x%08X", unsigned(i), unsigned(reinterpret_cast<std::uintptr_t>(frames[i])));
+		}
+	}
+
 	// 0x611550 drop notice (ecx session; index, lost code, others' code, flag) / 0x612c40 removal (ecx session; record,
 	// reason, flag): 1 = deferred to the agreed cut frame (the native call is skipped), 0 = the native code runs.
-	int __stdcall notice_filter(void* session, std::int32_t index, std::uint32_t lost_code)
+	int __stdcall notice_filter(void* session, const std::uint32_t* frame)
 	{
+		const auto notice = gns_transport_core::read_removal_notice(frame);
+		const auto index = static_cast<std::int32_t>(notice.index);
+		const auto lost_code = notice.lost;
+		// Independent cap from the per-packet trace. A healthy GNS
+		// link alone cannot distinguish frame/checksum arbitration from voluntary teardown.
+		logger::write_capped("gns-drop-notice", "online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
+			unsigned(notice.caller), int(index), unsigned(lost_code), unsigned(notice.others), unsigned(notice.flag), unsigned(own_removal));
+		log_removal_stack();
+        if (!own_removal && index>=0 && index<4 && notice.caller==0x6133ce) log_self_drop_parent(session,frame);
+		// p060fix/AR: every native removal of an admission newcomer on the host (its watchdog, its leave, the seat's
+		// give-up drop, our own hand_over) sends the host's decision first and is never deferred to a cut frame.
+		if (ready && index > 0 && reinterpret_cast<std::uintptr_t>(session) == session_static && host_newcomer_decision(index, "its native removal")) return 0;
 		if (own_removal || !ready || lost_code != 0x10cc || index <= 0) return 0;
 		auto* record = record_of_index(session, index);
 		return record && defer_native_removal(session, record, "drop notice") ? 1 : 0;
 	}
-	int __stdcall lost_filter(void* session, std::uint8_t* record, std::uint32_t reason)
+	int __stdcall lost_filter(void* session, const std::uint32_t* frame)
 	{
+		auto* record = reinterpret_cast<std::uint8_t*>(frame[1]);
+		const auto reason = frame[2];
+		logger::write("online: native removal caller=0x%08X record=0x%08X reason=0x%04X flag=%u own=%u",
+			unsigned(frame[0]), unsigned(frame[1]), unsigned(reason), unsigned(frame[3] & 0xffu), unsigned(own_removal));
+		if (ready && record && reinterpret_cast<std::uintptr_t>(session) == session_static)
+		{
+			int index = -1;
+			__try { index = *reinterpret_cast<const std::int32_t*>(record + record_index_at); } __except (EXCEPTION_EXECUTE_HANDLER) { index = -1; }
+			if (index > 0 && host_newcomer_decision(index, "its native removal")) return 0; // p060fix/AR (see notice_filter)
+		}
 		if (own_removal || !ready || (reason != 0x10cc && reason != 0x10cd)) return 0;
 		return defer_native_removal(session, record, "removal") ? 1 : 0;
 	}
@@ -1390,8 +1739,8 @@ namespace gns_transport
 		{
 			__asm {
 				push ecx
-				push dword ptr [esp + 0xc]
-				push dword ptr [esp + 0xc]
+				lea eax, [esp + 4] // original native return address and arguments
+				push eax
 				push ecx
 				call notice_filter
 				pop ecx
@@ -1409,8 +1758,8 @@ namespace gns_transport
 		{
 			__asm {
 				push ecx
-				push dword ptr [esp + 0xc]
-				push dword ptr [esp + 0xc]
+				lea eax, [esp + 4] // original native return address and arguments
+				push eax
 				push ecx
 				call lost_filter
 				pop ecx
@@ -1520,6 +1869,64 @@ namespace gns_transport
 		}
 	}
 
+	void announce_join_boundary(std::uint16_t frame, std::uint8_t newcomers)
+	{
+		if (!ready) return;
+		const auto wire = gns_transport_core::join_boundary(frame, newcomers);
+		for (auto& item : links)
+		{
+			auto& l = *item;
+			const int index = participant_index(l);
+			if (!l.closed && l.bound && index > 0 && index < 4 && !(newcomers & (1u << index)))
+				if (!send_now(l, wire, true))
+					logger::write("join hold: the admission decision for frame %u could not be sent to player %d; its boundary wait remains bounded", unsigned(frame), index);
+		}
+	}
+	bool poll_join_boundary(std::uint16_t frame, std::uint8_t& newcomers)
+	{
+		for (auto& item : links)
+			if (!item->closed && item->bound && participant_index(*item) == 0 && item->join_boundaries.take(frame, newcomers)) return true;
+		return false;
+	}
+	void service_join_boundary()
+	{
+		if (!ready || !manager_) return;
+		// No enter(), native parser/drain, vanished_links(), or JIP tick while the loader's stack is live. Ordinary
+		// gameplay is only queued by received(); the admission control is consumed directly on the proven host link.
+		sockets()->RunCallbacks();
+		online_room::tick();
+		receive(manager_);
+		flush();
+	}
+	void clear_join_boundaries()
+	{
+		for (auto& item : links) item->join_boundaries.decisions.clear();
+	}
+	// p060fix/AR (gns_transport.hpp): the admission's newcomers on a non-host PC, and its restart entry.
+	void note_admission_newcomers(std::uint8_t mask)
+	{
+		if (!ready || session_hosted_here()) return;
+		newcomers_here.admit(mask);
+	}
+	bool newcomer_decisions_carried(const char* where)
+	{
+		if (!ready || session_hosted_here()) return true;
+		return carry_decisions(where, true);
+	}
+	void newcomers_restart_entry(const char* where, bool session_ended)
+	{
+		if (!ready) return;
+		if (!session_ended && !session_hosted_here()) carry_decisions(where, true);
+		const auto left = newcomers_here.restart_entry();
+		if (left) logger::write("online: %u host removal decision(s) (mask 0x%x) still open at %s - NOT carried out", unsigned(((left >> 1) & 1) + ((left >> 2) & 1) + ((left >> 3) & 1)), unsigned(left), where);
+		host_decided.reset();
+		if (session_ended) { for (auto& item : links) item->controls.clear(); return; } // queued decisions only die with the session
+		// A loss this PC noticed before its restart and still holds (not an admission decision): its agreement starts
+		// afresh in the restarted epoch, where frame 0 waits for it on every peer.
+		const auto now = GetTickCount() | 1;
+		for (auto& item : links)
+			if (item->gone_at && !item->vanished) { item->gone_at = now; item->announced = -1; item->inputs_sent_next = -1; }
+	}
 	void install(HMODULE game)
 	{
 		using namespace gns_transport_rules;
@@ -1566,6 +1973,9 @@ namespace gns_transport
 		{
 			state = 1;
 			gameplay_agreement::register_rule(gameplay_capabilities::gns_transport_id, agreement_revision, {1u, gns_port_offset, framing_revision, 0u}, true);
+			// Rule 64 OnlineRemovalNotice: link kind 9 on room tunnels (the Party Kick's notice to the removed PC). Every rule-25
+			// peer of this build carries it, so a peer without it is refused at admission like any other rule mismatch.
+			gameplay_agreement::register_rule(online_removal_core::rule_id, online_removal_core::rule_revision, online_removal_core::rule_effective, true);
 			logger::write("online: Transport=gns installed - participants' game messages go whole over GameNetworkingSockets on the stock port + %u (rule 25); admission and lobby stay stock; every PC must use it",
 			              unsigned(gns_port_offset));
 		}
@@ -1577,10 +1987,144 @@ namespace gns_transport
 			logger::write("online: [Online] Transport=gns rollback/protection verification failed; startup refused");
 		}
 	}
+
+	namespace
+	{
+		// The guarded half of party_snapshot: fields of the session list, its records and the input rings only.
+		bool party_read(party_facts& out, const void* (&records)[4])
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(session_static);
+				if (*reinterpret_cast<const std::uint32_t*>(s) != session_vtable || !s[session_set_up]) return false;
+				out.session = true;
+				out.hosting = s[session_host] != 0;
+                out.campaign_running = s[session_campaign_at] != 0;
+				const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
+				out.loading = *reinterpret_cast<const std::uint32_t*>(zones) == zones_vtable && (zones[zones_loading_at] & 3) != 0;
+				unsigned walked = 0;
+				for (auto* n = *reinterpret_cast<std::uint8_t* const*>(s + session_first); n; n = *reinterpret_cast<std::uint8_t**>(n + node_next_at))
+				{
+					if (++walked > 8) return false; // the engine has four slots; a longer chain is not a session list
+					auto* r = *reinterpret_cast<std::uint8_t**>(n + node_record_at);
+					if (!r) continue;
+					const auto index = *reinterpret_cast<const std::int32_t*>(r + record_index_at);
+					if (index < 0 || index > int(gns_transport_core::lost_index_max) || out.count >= 4) return false;
+					records[out.count] = r;
+					auto& p = out.participants[out.count++];
+					const auto flags = *reinterpret_cast<const std::uint32_t*>(r + record_flags_at);
+					p.index = index;
+					p.local = (flags & 1) != 0;
+					p.ready = ((flags >> 2) & 1) != 0;
+					const auto* name = reinterpret_cast<const char*>(r + 0x40);
+					unsigned k = 0;
+					while (k < 31 && name[k]) { p.name[k] = name[k]; ++k; }
+					p.name[k] = 0;
+					auto* peer = *reinterpret_cast<std::uint8_t**>(r + record_peer_at);
+                    if (!p.local && peer) {
+                        if (auto* l = by_peer(peer); l && l->tunnel && !l->closed) p.connection = std::uint32_t(l->connection);
+                        else {
+                            const auto address=ntohl(at<std::uint32_t>(peer,peer_address));
+                            if (online_room_core::is_virtual(address)) p.connection=std::uint32_t(online_room::connection_for(address));
+                        }
+                    }
+					const auto ring_now = ring(index);
+					p.ring = ring_now.ok;
+					p.next = ring_now.next;
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+	}
+	namespace
+	{
+		// The native session is set up and this PC is its host (guarded field reads only; no native call).
+		bool session_hosted_here()
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(session_static);
+				return *reinterpret_cast<const std::uint32_t*>(s) == session_vtable && s[session_set_up] && s[session_host] != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+	}
+	// The host removes a remote participant IN SESSION (the Party screen's Kick). Not the native pre-game removal (0x6133a0)
+	// mid-frame: the participant's link is declared gone through the one loss path every vanished participant takes, so the
+	// removal is agreed at a cut frame on every PC (vanished_links), the others are told by the host's lost-inputs/lost-ready
+	// messages, and the removed PC's session ends as if its connection had been lost. Refused unless this PC hosts a running
+	// zone and the index names a remote participant with a bound, live link (never the host index 0, never this PC). A repeat
+	// for the same loss finds no surviving link and is a no-op.
+	bool remove_member(unsigned index)
+	{
+		if (state.load() != 1 || index == 0 || index > 3 || !ready || !session_hosted_here() || !zone_running()) return false;
+		for (auto& item : links)
+		{
+			auto& l = *item;
+			if (!survivor(l) || participant_index(l) != int(index)) continue;
+			// Rule 64: the removed PC is told first, on its room connection (repeated until it leaves), then its link ends here.
+			const char* told = l.tunnel ? online_room::name(online_room::removal_start(l.connection, index)) : "no removal notice (a direct link, not a room connection)";
+			logger::write("online: participant %u (%s) removed by the host from the Party screen - %s; ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str(), told);
+			declare_gone(l, "removed by the host");
+			return l.closed || l.gone_at || l.gone_why;
+		}
+		return false;
+	}
+	bool deliver_removal(unsigned own_index)
+	{
+		namespace X = online_removal_core;
+		if (state.load() != 1 || !ready) return false;
+		party_facts facts;
+		const void* records[4]{};
+		if (!party_read(facts, records)) return false;
+		X::participant_fact who[4];
+		for (unsigned i = 0; i < facts.count && i < 4; ++i) who[i] = {facts.participants[i].index, facts.participants[i].local};
+		if (!X::may_deliver(facts.hosting || session_hosted_here(), who, facts.count, own_index)) return false;
+		const auto body = X::native_body(std::uint8_t(own_index));
+		const network_validation::context validation{entity_capacity::fast_transfer_active()};
+		if (!gns_transport_core::validate_opcode_length(X::native_opcode, body.size()) || !network_validation::valid_message(X::native_opcode, body.data(), body.size(), validation))
+			return false;
+		std::vector<X::link_fact> view;
+		for (auto& item : links)
+		{
+			const auto& l = *item;
+			view.push_back({l.tunnel, l.bound, l.closed, l.vanished, l.peer != nullptr, participant_index(l)});
+		}
+		const int chosen = X::host_link(view.data(), view.size());
+		if (chosen < 0) return false;
+		auto& l = *links[std::size_t(chosen)];
+		gns_transport_core::message m;
+		m.opcode = X::native_opcode;
+		m.reliable = true;
+		m.body.assign(body.begin(), body.end());
+		if (!l.in.push(std::move(m))) return false;
+		logger::write("online: the host's removal of this PC (rule 64) reaches the session from %s as the native removal notice 0x2b", text(l.address, l.port).c_str());
+		return true;
+	}
+	bool party_snapshot(party_facts& out)
+	{
+		out = {};
+		const void* records[4]{};
+		if (state.load() != 1 || !party_read(out, records)) { out = {}; return false; }
+		// The rule-26 machine compares record identities only (no dereference); asked outside the SEH frame (C++ code).
+		for (unsigned i = 0; i < out.count; ++i) out.participants[i].pending = join_in_progress::pending_player(records[i]);
+		return true;
+	}
 }
 #else
 namespace gns_transport
 {
+	void announce_join_boundary(std::uint16_t, std::uint8_t) {}
+	bool poll_join_boundary(std::uint16_t, std::uint8_t&) { return false; }
+	void service_join_boundary() {}
+	void clear_join_boundaries() {}
+	void note_admission_newcomers(std::uint8_t) {}
+	void newcomers_restart_entry(const char*, bool) {}
+	bool newcomer_decisions_carried(const char*) { return true; }
+	bool party_snapshot(party_facts& out) { out = {}; return false; }
+	bool remove_member(unsigned) { return false; }
+	bool deliver_removal(unsigned) { return false; }
 	void install(HMODULE)
 	{
 		const auto value = ini::text(L"Online", L"Transport");
@@ -1595,4 +2139,19 @@ namespace gns_transport
 {
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
+	bool room_can_start() {
+#if XML2_FIX_GNS
+		if (!installed()) return false;
+        return transport_idle();
+#else
+		return false;
+#endif
+	}
+	void room_ui_tick() {
+#if XML2_FIX_GNS
+        if (!installed() || !gns_transport_core::room_ui_pump_needed(ready, online_room::requested())) return;
+        ensure(nullptr);
+        if (ready) { sockets()->RunCallbacks(); online_room::tick(); }
+#endif
+	}
 }

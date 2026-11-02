@@ -2,6 +2,7 @@
 #include "network_validation.hpp"
 #include "gns_transport_rules.hpp"
 #include "gameplay_capabilities.hpp"
+#include "online_removal_core.hpp"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -55,9 +56,70 @@ namespace
 
 int main(int argc, char** argv)
 {
+	{
+		// Both peers bind with old reliable output. Native 0x0f ACKs must
+		// bypass held gameplay or neither peer can make the other drain.
+		unsigned old[2]{2,2},delivered[2]{};bool switched[2]{};
+		outbox staged[2];
+		for(unsigned tick=0;tick<8;++tick) {
+			for(unsigned side=0;side<2;++side) {
+				const std::uint8_t body[]{std::uint8_t(tick),0};
+				staged[side].enqueue(0x02,true,false,body,2);
+				const auto ack=handoff_lane(true,switched[side],0x0f);
+				if(old[1-side] && ack!=outbound_lane::held) --old[1-side];
+			}
+			for(unsigned side=0;side<2;++side) {
+				if(!old[side]) switched[side]=true;
+				if(switched[side])staged[side].flush([&](const message&,const std::vector<std::uint8_t>&) { ++delivered[side];return true; });
+			}
+		}
+		check(switched[0] && switched[1] && delivered[0]==8 && delivered[1]==8,"AC: bidirectional old queues drain through live ACKs before all input records deliver");
+	}
+	{
+		// Reproduce the late-admission host: hello has bound while campaign
+		// traffic remains native, then one input record is generated each tick.
+		// Keep producing during ACKs: a drain-only switch must not starve GNS.
+		outbox staged;
+		unsigned native_pending=32,native_new=0;
+		bool switched=false,early=false;
+		std::vector<unsigned> received_frames;
+		for(unsigned frame=0;frame<90;++frame) {
+			const std::uint8_t body[]{std::uint8_t(frame),0};
+			const auto lane=handoff_lane(true,switched);
+			if(lane==outbound_lane::native) { ++native_pending; ++native_new; }
+			else check(staged.enqueue(0x02,true,false,body,sizeof body),"AC: post-bind input accepted without refilling native queue");
+			if(native_pending) --native_pending; // one old reliable ACK per tick
+			if(!native_pending) switched=true;
+			if(switched) staged.flush([&](const message&,const std::vector<std::uint8_t>& wire) {
+				const auto p=parse(wire.data(),wire.size());
+				early|=native_pending!=0;
+				received_frames.push_back(p.body[0]);return true;
+			});
+		}
+		check(switched && native_new==0 && received_frames.size()==90,"AC: host GNS stream feeds all90 post-bind input frames despite continuous production");
+		check(!early && std::is_sorted(received_frames.begin(),received_frames.end()),"AC: first GNS input follows all old native reliable traffic in order");
+		check(!received_frames.empty() && received_frames.front()==0 && received_frames.back()==89,"AC: late joiner GNS stream receives frame0 through89, no transition hole");
+		check(handoff_lane(false,false)==outbound_lane::native && handoff_lane(true,true)==outbound_lane::game,"AC: unbound/native and completed/GNS paths retained");
+	}
+	{
+		// Retail 0x612449 emits a teardown notice for the local participant;
+		// 0x6133c9 emits the same wire opcode for several other removal causes.
+		const std::uint32_t teardown[]{0x61244e, 0, 0x10cc, 0x1106, 0xabcd0001};
+		const auto a = read_removal_notice(teardown);
+		check(a.caller == 0x61244e && a.index == 0 && a.lost == 0x10cc && a.others == 0x1106 && a.flag == 1,
+		      "B1 diagnostic records native teardown caller and both reason codes (flag is a byte)");
+		const std::uint32_t other[]{0x6133ce, 1, 0x10ce, 0x10cf, 0};
+		const auto b = read_removal_notice(other);
+		check(b.caller == 0x6133ce && b.index == 1 && b.lost == 0x10ce && b.others == 0x10cf && b.flag == 0,
+		      "same 0x2b opcode preserves a different removal source and reasons");
+	}
+
 	check(hello_due(true, false, 1000, 0), "hello: connector starts the handshake");
 	check(!hello_due(true, false, 1249, 1000), "hello: no busy retry before 250 ms");
 	check(hello_due(true, false, 1250, 1000), "hello: retry when the listener was not yet admitted at the first hello");
+	check(room_link_step(true, 0) == room_link::adopt && room_link_step(true, 29999) == room_link::adopt && room_link_step(false, 0) == room_link::wait &&
+	      room_link_step(false, 29999) == room_link::wait && room_link_step(false, 30000) == room_link::give_up && room_link_step(true, 30000) == room_link::adopt,
+	      "AS follow-up: a room link found before its room connection waits up to 30 s and binds over it when it comes up");
 	check(!hello_due(true, true, 2000, 1000) && !hello_due(false, false, 2000, 1000), "hello: a bound link or listener does not retry");
 	check(hello_due(true, false, 20, 0xffffff10u), "hello: retry interval survives the tick counter wrapping");
 	// Ordering: whole messages leave in enqueue order, reliable and unreliable alike, bodies copied at enqueue.
@@ -211,6 +273,32 @@ int main(int argc, char** argv)
 		const auto keepalive = parse(&ping, 1);
 		const std::uint8_t garbage = 0xee;
 		const auto invalid = parse(&garbage, 1);
+		// AQ3: the host's reliable area-boundary decision bypasses native gameplay dispatch during the load.
+		const std::uint8_t admission[]{10,0x34,0x12,0x0c,0xa3};
+		const auto boundary = parse(admission,sizeof admission);
+		check(admission[0]!=online_party_core::kind_report && admission[0]!=online_party_core::kind_table &&
+			admission[0]!=online_removal_core::link_kind && admission[0]!=16,
+			"AQ3: encoded admission cannot be intercepted by room party/removal/restore lanes");
+		check(boundary.valid && unsigned(boundary.k)==10 && boundary.frame==0x1234 && boundary.index==0x0c,
+			"AQ3: area-boundary admission carries the host frame and all newcomer seats");
+		const std::uint8_t bad_admission[]{10,0x34,0x12,0x01,0xa3};
+		check(!parse(admission,4).valid && !parse(bad_admission,sizeof bad_admission).valid,
+			"AQ3: truncated admission and a newcomer mask including the host are refused");
+		check(join_boundary_authorized(true,true,0) && !join_boundary_authorized(false,true,0) &&
+			!join_boundary_authorized(true,false,0) && !join_boundary_authorized(true,true,1) && !join_boundary_authorized(true,true,-1),
+			"AQ3: only a bound host's reliable admission decision is accepted");
+		for(const std::uint8_t seats : std::array<std::uint8_t,4>{0,2,6,14}) {
+			const auto wire=join_boundary(65535,seats);const auto p=parse(wire.data(),wire.size());
+			check(p.valid && p.frame==65535 && p.index==seats,"AQ3: ordinary load and 1-3 newcomer masks round-trip at frame wrap");
+		}
+		join_boundary_queue decisions;std::uint8_t seats=0xff;
+		decisions.push(65535,2);decisions.push(0,6);decisions.push(0,14);
+		check(!decisions.take(1,seats) && seats==0xff && decisions.take(65535,seats) && seats==2 &&
+			decisions.take(0,seats) && seats==14 && !decisions.take(0,seats),
+			"AQ3: decisions match the exact frame across wrap, duplicate frames update, and consumption is once");
+		for(unsigned i=0;i<20;++i) decisions.push(std::uint16_t(i),2);
+		check(decisions.decisions.size()==8 && !decisions.take(11,seats) && decisions.take(12,seats),
+			"AQ3: stale admission decisions are bounded to eight frames");
 		check(!tunnel_message_allowed(false, game) && !tunnel_message_allowed(false, keepalive) && !tunnel_message_allowed(false, invalid) &&
 		      tunnel_message_allowed(false, hello_message) && tunnel_message_allowed(false, ack),
 		      "unbound tunnel: only hello/hello_ack control messages are retained");
@@ -455,7 +543,31 @@ int main(int argc, char** argv)
 		check(lost_decision(327, two, 2, 100) == lost_step::wait && lost_decision(327, two, 2, lost_agree_timeout_ms) == lost_step::remove_timeout,
 		      "decision: a different frame waits (a later announcement replaces it), then times out");
 		check(lost_decision(-1, two, 0, 0) == lost_step::wait && lost_decision(40, two, 0, 0) == lost_step::remove_agreed, "decision: alone it removes once announced");
-		check(gns_transport_rules::agreement_revision == 4 && gns_transport_rules::framing_revision == 3, "rule 25 revision 4 / framing 3: every loss takes the agreed cut frame");
+		check(gns_transport_rules::agreement_revision == 6 && gns_transport_rules::framing_revision == 4, "rule 25 revision 6 / framing 4: every loss takes the agreed cut frame; party kinds 7/8 (0.6)");
+		{
+			// Old-peer refusal by name: this build's rule 25 record against a released revision-4 / framing-3 one.
+			using namespace gameplay_capabilities;
+			record now, old, same;
+			for (auto* r : {&now, &old, &same}) r->layout(3, {32, 768, 1024, 10}, true);
+			now.add(gns_transport_id, gns_transport_rules::agreement_revision, {1u, gns_transport_rules::gns_port_offset, gns_transport_rules::framing_revision, 0u}, true);
+			same.add(gns_transport_id, gns_transport_rules::agreement_revision, {1u, gns_transport_rules::gns_port_offset, gns_transport_rules::framing_revision, 0u}, true);
+			old.add(gns_transport_id, 4, {1u, 1000u, 3u, 0u}, true);
+			check(now.finalize() && old.finalize() && same.finalize() && now.bytes().size() == 108, "rule 25 records finalize; GCAP stays 108 bytes");
+			difference diff;
+			const auto against_old = now.compare(old.bytes(), &diff);
+			char names[128]{};
+			now.describe(diff.buckets, diff.local_only, true, names, sizeof names);
+			// The refusal is the digest's; the rule NAME comes from the advisory 8-bit summary, so the tuple must not
+			// collide with the released one (revision 5 did: both 0x23).
+			check(against_old == result::value && std::string(names) == "25 GnsTransport",
+			      (std::string("a revision-4 / framing-3 peer is refused and this side names 25 GnsTransport (") + names + ")").c_str());
+			difference back{};
+			char back_names[128]{};
+			check(old.compare(now.bytes(), &back) == result::value, "and the revision-4 side refuses this one too");
+			old.describe(back.buckets, back.local_only, true, back_names, sizeof back_names);
+			check(std::string(back_names) == "25 GnsTransport", (std::string("the revision-4 side names 25 GnsTransport (") + back_names + ")").c_str());
+			check(now.compare(same.bytes()) == result::match, "two revision-6 / framing-4 PCs agree");
+		}
 		auto hex6 = [](const std::array<unsigned char, 6>& b) { char out[13]{}; for (int i = 0; i < 6; ++i) std::snprintf(out + i * 2, 3, "%02x", b[i]); return std::string(out); };
 		bool notice_guarded = false, lost_guarded = false;
 		for (const auto& g : gns_transport_rules::guards)
@@ -466,6 +578,60 @@ int main(int argc, char** argv)
 		check(notice_guarded && lost_guarded && gns_transport_rules::notice_resume == gns_transport_rules::native_drop_notice + 6 && gns_transport_rules::lost_resume == gns_transport_rules::native_lost + 6,
 		      "the removal filters' six entry bytes are the guarded retail bytes; each bridge resumes right after them");
 	}
+    {
+        const std::uint32_t frame[]{0x6133ce,0,0x10cc,0x1106,1,0,0,0x6149a7};
+        check(self_drop_parent(frame,8)==0x6149a7,"AB: host self-drop upper return survives FPO (frame/checksum arbitration caller)");
+        check(self_drop_parent(frame,7)==0 && self_drop_parent(nullptr,8)==0,"AB: short/unreadable self-drop stack has no invented parent");
+        auto other=std::vector<std::uint32_t>(std::begin(frame),std::end(frame));other[1]=1;
+        check(self_drop_parent(other.data(),other.size())==0x6149a7,"AC: guest-index arbitration keeps its upper caller too");
+        other[1]=3;
+        check(self_drop_parent(other.data(),other.size())==0x6149a7,"AC: fourth participant arbitration is observed too");
+        other[1]=0;other[7]=0x5f2867;
+        check(self_drop_parent(other.data(),other.size())==0x5f2867,"AB: host self-drop names front-end exit return");
+        other[0]=0x6129f5;
+        check(self_drop_parent(other.data(),other.size())==0,"AB: a direct notice caller is not attributed to the FPO helper");
+    }
+
+    {
+        // Invented native memory: four index-addressed lists with POD samples.
+        // The reader cannot write the image and faults are reported explicitly.
+        std::vector<std::uint8_t> memory(0x400);
+        auto put=[&](std::uint32_t address, const void* value, std::size_t size) {
+            std::memcpy(memory.data()+address-0x1000,value,size);
+        };
+        for (unsigned index=0; index<4; ++index) {
+            const std::uint32_t list=0x10f0+0x10*index, node=0x1200+0x20*index, sample=0x1300+0x10*index, count=1;
+            const std::uint16_t frame=321;
+            const std::uint32_t hash=index==0 ? 0x12345678u : 0x87654321u;
+            put(list,&node,4);put(list+0xc,&count,4);put(node+0x10,&sample,4);
+            put(sample,&frame,2);put(sample+4,&hash,4);
+        }
+        auto read=[&](std::uintptr_t address, void* value, std::size_t size) {
+            if (address<0x1000 || address>0x1400 || size>0x1400-address) return false;
+            std::memcpy(value,memory.data()+address-0x1000,size);return true;
+        };
+        const auto before=memory;
+        const auto local=read_checksum_head(read,0x1000,0), remote=read_checksum_head(read,0x1000,1);
+        check(local.present && remote.present && local.frame==321 && remote.frame==321 && local.hash==0x12345678 && remote.hash==0x87654321,
+              "AB follow-up: capture both differing same-frame hashes by sender index");
+        check(read_checksum_head(read,0x1000,2).hash==remote.hash && read_checksum_head(read,0x1000,3).hash==remote.hash,
+              "AB follow-up: all four checksum sender slots observed");
+        check(memory==before,"AB follow-up: observation does not advance or mutate native lists/samples");
+        const std::uint32_t zero=0;
+        put(0x1304,&zero,4);
+        const auto zero_hash=read_checksum_head(read,0x1000,0);
+        check(zero_hash.present && zero_hash.hash==0,"AB follow-up: zero hash is present, not an absent sample");
+        put(0x10fc,&zero,4);
+        const auto empty=read_checksum_head(read,0x1000,0);
+        check(empty.readable && !empty.present && !empty.count,"AB follow-up: empty list reads no stale head");
+        put(0x1100,&zero,4);
+        const auto broken=read_checksum_head(read,0x1000,1);
+        check(!broken.readable && !broken.present && broken.count==1,"AB follow-up: corrupt nonempty list is explicitly unreadable");
+        check(!read_checksum_head(read,0x1400,0).readable,"AB follow-up: unreadable manager is contained");
+        check(!read_checksum_head(read,0x1000,4).readable,"AB follow-up: invalid participant index never reads memory");
+        check(read_checksum_head(read,0x1000,2).present,"AB follow-up: a bad peer slot does not hide other peers");
+    }
+
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

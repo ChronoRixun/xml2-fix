@@ -1,11 +1,25 @@
 # Test state API (schema 1)
 
+`PARTICLE_SCRATCH` returns the [particle scratch](particle-scratch.md) counters:
+`installed`, `requested`, `capacity`, `logged_arrays`, and an `operations` array
+with `va`, `peak` (unclamped demand), and `clamps` for each of the eleven methods.
+Counters are session totals and are collected when `ParticleScratch=40` installs.
+
+`script_pools` returns W3-8's installed/requested state and four counter objects
+(`statements`, `values`, `scripts`, `contexts`): `cap`, `live`, `peak_zone`,
+`peak_session`, `refused`, `refused_zone`. `null_values` counts compiler null
+refusals; `refusal_observers=false` means OFF occupancy sampling only.
+`cached_scripts` reports the separate compiled filename-cache counters.
+See [script-pools.md](script-pools.md) for sampling and integration limits.
+
 With `[Test] InputPipe=1`, the existing pipe accepts `state`, `objectives`, and
 `events` (no arguments, case insensitive). Each returns one JSON line, without
 an `ok` prefix. Existing input commands retain their protocol. With InputPipe=0
-no sampling runs, no pipe is opened, and no new engine hooks are installed.
+no keyboard state sampling runs, no pipe is opened, and no new engine hooks are
+installed. ScriptPools' separate read-only sampling uses an existing Present
+hook independently of InputPipe.
 
-Snapshots run on the game's keyboard thread at most ten times per second.
+State/objective/event snapshots run on the game's keyboard thread at most ten times per second.
 `sampled_ms` is Windows monotonic uptime. Clients must detect an unchanged sample
 stamp: a responding pipe does not prove that the game thread is running.
 An unsupported executable returns an explicit JSON error. Unreadable individual
@@ -31,6 +45,41 @@ live body has null health/position rather than a fabricated death.
 - `objectives`: current act records (null when unavailable), internal name,
   count, count_goal, complete, enabled, shown. Enabled and shown both mean the
   inverse of the engine's hidden/disabled bit; they are not independent flags.
+
+Carry diagnosis adds read-only fields to each observed actor: `energy` (+0x288,
+normal current energy), `max_energy` (+0x314), `pending_energy` (+0x6ac, queued
+recovery; not proof of a refill), `owner_entity` (+0x178), `selected_entity` (+0x76c), `ground_contact`
+(+0xbc), `physical_flags` (+4), `actor_flags` (+0x3d8), `status_byte` (+0x579),
+`flying` (actor_flags bit 2), and current `move_pointer`, `move_handler`,
+`move_animenum`, `move_name`. The last fields read CMove +0xc8/+0xbc/+8 and
+the bounded common-name pool; they never invoke an actor or move function.
+In native 0x434e4e, status byte bit 0x40 skips the input/frame callback block.
+These are sampled raw engine values, not an assertion that a carry succeeded.
+The special/infinite-energy branch of native 0x41d5d0 returns the maximum
+instead of stored current energy; this observer deliberately exposes both raw
+fields and the live probe requires stored current energy to cover the trial.
+
+For the next live round, enable `[Test] CarryTrace=1` alongside InputPipe.
+The log records carry entry, input/frame state (250 ms per actor/stage), and
+the actual animated world-space hand midpoints already queried by attachment,
+using selectors 6/5. It adds no bone or gameplay predicate calls. No hand line
+means the hand branch did not execute during that sampled interval. Compare
+the victim enum, current node, status byte, owners and energy before blaming a
+different bone index. Leave this diagnostic switch absent for ordinary play.
+`valid_mask` bits 0/1/2/3 report carrier RHand/LHand and victim RHand/LHand
+query success; F means both complete pairs, lower masks include a fallback.
+
+`scripts/carry_live_probe.py --device pad --actor ENTITY_ID` prints a plan.
+Only a live operator should add `--execute` against an already running test copy.
+It measures fresh state after the registered `restoreEnergy("ENTITY_ID",999)`
+script, holds Guard for 8 s, repeats the refill every 500 ms, records state,
+and releases in a finally block. `--device keyboard` uses E. `--cost 20`
+is Flight 3; ranks 1/2/4/5 use 40/30/10/5. Redirect its output to live evidence.
+A queued script acknowledgement is insufficient: stale snapshots or energy
+below that cost abort the trial. `setEnergy` is not registered in the retail PC
+script table. Run a separate no-refill exhaustion trial when testing depletion.
+The helper does not launch a game or activate a window. Offline protocol checks:
+`python -B test/carry_live_probe_test.py`.
 
 `events` drains a queue of at most 512 sampled transitions. `dropped` reports
 old records discarded since the previous drain. Events include observer start,
@@ -79,3 +128,12 @@ stock tutorial/Genosha conversations. The game-over aliases remain unverified.
 `xml2_test.exe --state-rules` runs the observer and input-parser fixtures without
 requiring a connected controller or a renderer. The default full suite also checks
 physical controller state; a non-centered pad can fail its unrelated idle assertion.
+
+`CHAR_SOUNDS` observes the installed character sound cache: JSON fields `installed`, `requested`, `capacity`,
+`peak`, `refusals`, `empty_sounddir_actors` and `allocations`. The exact allocation observer updates counters on the
+game thread; the pipe reads atomics. Absent/16 leaves retail bytes uninstrumented. See [char-sounds.md](char-sounds.md).
+
+`MOTION_POOL` reports the installed motion descriptor and exact allocation/clip/reader refusal counters,
+including peak occupancy and per-owner counts. See [motion-pool.md](motion-pool.md).
+
+`RESIDENT_STATS` reports resident/hero/NPC counts and peaks, refusal counters (outer/hero/NPC), and zone invariant failures. `RESIDENT_CENSUS` queues a game-thread census; polling after the next sample returns cached definition indices, handles, flags and payload classes.

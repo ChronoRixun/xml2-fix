@@ -524,6 +524,9 @@ namespace pad_prompts_rules
 		std::uint32_t keyboard = 0;
 		std::array<std::uint32_t, pad_count> pads{};
 		std::uint32_t pads_present = 0; // bit i: pad i was read at the last poll
+		// A key a co-op screen consumed before the poll could see it (Browse F5 / Page Up / Page Down, Ctrl+C / Ctrl+V; 060r live:
+		// F5 on Browse did not switch the prompts back to the keyboard): counts as typed at the next sample (fix K).
+		bool keyboard_noted = false;
 
 		static bool pressed(const std::uint8_t now, const std::uint8_t before) { return (now & 0x80) && !(before & 0x80); }
 
@@ -563,7 +566,8 @@ namespace pad_prompts_rules
 		void sample(const std::uint8_t* input)
 		{
 			++frame;
-			bool typed = false;
+			bool typed = keyboard_noted;
+			keyboard_noted = false;
 			for (std::size_t i = 0; i < 256 && !typed; ++i)
 			{
 				typed = pressed(input[keyboard_now + i], input[keyboard_before + i]);

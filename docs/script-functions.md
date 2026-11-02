@@ -10,7 +10,7 @@ the lost function is then dropped when the script compiles - the script carries 
 
 | Value | Meaning |
 | --- | --- |
-| *(no key)* | 1024 while the fix registers its own functions (`[Game] ForcedTeams`), otherwise the game's own 320 |
+| *(no key)* | 1024 while the fix registers its own functions (`[Game] ForcedTeams` or `[Online] Menus=1`), otherwise the game's own 320 |
 | `320` | the game's own limit; nothing installed |
 | `321` to `4096` | the total number of names |
 
@@ -59,8 +59,8 @@ Nothing about the limit is saved or sent: compiled statements hold handler point
 peers of a co-op game need the same functions; a peer whose raise was refused would drop the statements calling the
 functions past 320 while the other runs them. The installed capacity is therefore rule 14 of the shared gameplay
 agreement ([gameplay-agreement.md](gameplay-agreement.md)), revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}`
-with no key and no `[Game] ForcedTeams` (plain XML2), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an
-installed raise; a raise that was requested (by the key, or by default with ForcedTeams) but didn't install is
+with no key, no `[Game] ForcedTeams` and no `[Online] Menus=1` (plain XML2), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an
+installed raise; a raise that was requested (by the key, or by default with ForcedTeams or Menus=1) but didn't install is
 registered unverified, which closes host and join. Registered in `DllMain` next to rules 3 and 4, wherever the
 agreement participates (every LC build); an explicit `[Limits] ScriptFunctions` above 320 enlists the agreement by
 itself, as a requested controller does, while the default raise of a non-LC ForcedTeams mod leaves its online play as
@@ -76,3 +76,15 @@ a full table, ESP and EBX/ESI/EDI around every call.
 
 `[Test] ScriptFunctionProbes=N` (1 to 64) registers `xml2fixProbe1`..`N`, `n(i)`, behind the fix's own functions;
 each call writes its argument to `xml2-fix.log` - with the fix's functions filling the 320, every probe is past it.
+
+### Online menu dependency
+
+`[Online] Menus=1` also selects the automatic 1024-name capacity without an
+explicit Limits key or ForcedTeams, reserves one real overflow entry for
+`lcOnlineIntent n(i)`, and enlists agreement registration in exports before
+freeze. Successful startup changes rule 14 revision 1 from `{0,0,0,0}` to
+`{1024,0,0,0}`. Explicit 320 or failed capacity/lookup installation retains native
+UI; a requested-but-uninstalled raise is unverified and keeps admission closed.
+Missing, zero or invalid Menus leaves the previous OFF contract unchanged.
+The repo-owned `scripts/test_online_menus_startup.py` runs the real DLL's
+script_functions.cpp and exports.cpp paths for these cases, not mocked flags.

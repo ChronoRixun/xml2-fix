@@ -113,9 +113,17 @@ namespace options_menu
 			void* bar = nullptr;                  // the toggle.png highlight bar (the FSAA row's callback userdata)
 			panel_choices shown;                  // what the rows offered and showed when the panel opened
 			std::array<bool, row_count> present{}; // which of the rows' keys xml2-fix.ini had then
+			std::string resolution;               // native setting when this panel opened
 			bool reverted = false;                // "Revert to default" ran since
 		};
 		open_panel current;
+
+		std::string native_resolution()
+		{
+			const auto* text = reinterpret_cast<const char*>(base + game::resolution_setting);
+			const auto* end = static_cast<const char*>(std::memchr(text, 0, 12));
+			return end ? std::string(text, end) : std::string();
+		}
 
 		std::wstring ini_path()
 		{
@@ -301,6 +309,7 @@ namespace options_menu
 			const auto opts = display::read_ini_options();
 			current.shown = choices_for(opts, display::desktop_refresh_rate());
 			current.present = keys_present();
+			current.resolution = native_resolution();
 
 			const auto op_new = game_function<operator_new_t>(game::operator_new);
 			const auto cycle_ctor = game_function<cycle_ctor_t>(game::cycle_ctor);
@@ -411,6 +420,32 @@ namespace options_menu
 			}
 		}
 
+		bool save_resolution()
+		{
+			const auto chosen = native_resolution();
+			if (chosen == current.resolution) return false;
+			// This is the stock table's numeric WxH value, never UI/remote text.
+			unsigned width = 0, height = 0; bool second = false;
+			for (const char c : chosen) {
+				if (c == 'x' && !second && width) { second = true; continue; }
+				if (c < '0' || c > '9') return false;
+				auto& number = second ? height : width;
+				number = number * 10 + unsigned(c - '0');
+				if (number > 16384) return false;
+			}
+			if (!second || width < 640 || height < 480) return false;
+			const auto path = ini_path();
+			const auto w = std::to_wstring(width), h = std::to_wstring(height);
+			if (!WritePrivateProfileStringW(L"Display", L"Width", w.c_str(), path.c_str()) ||
+			    !WritePrivateProfileStringW(L"Display", L"Height", h.c_str(), path.c_str())) {
+				logger::write("options: ERROR: couldn't persist accepted resolution %s (error %lu)", chosen.c_str(), GetLastError());
+				return true; // changed but failed: never claim that the INI was untouched
+			}
+			display::set_resolution(width, height);
+			logger::write("options: accepted resolution %s saved to [Display] Width/Height and native settings; applies after restart", chosen.c_str());
+			return true;
+		}
+
 		void __cdecl on_save()
 		{
 			game_function<plain_t>(game::save_settings)();
@@ -420,10 +455,11 @@ namespace options_menu
 				logger::write("options: accepted, but the rows aren't in this panel - xml2-fix.ini untouched");
 				return;
 			}
+			const bool resolution_changed = save_resolution();
 			const auto changes = ini_changes(current.shown, selection_now(panel), current.present, current.reverted);
 			if (changes.empty())
 			{
-				logger::write("options: accepted - no display row changed, xml2-fix.ini untouched");
+				if (!resolution_changed) logger::write("options: accepted - no display row changed, xml2-fix.ini untouched");
 				return;
 			}
 			const auto ini = ini_path();

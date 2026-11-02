@@ -1,4 +1,8 @@
 #include "display.hpp"
+#include "no_activate.hpp"
+#include "pool_counters.hpp"
+#include "script_pools.hpp"
+#include "e4_observe.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
 #include "display_settings.hpp"
@@ -44,6 +48,7 @@ namespace display
 		bool geometry_hooked = false;
 		bool paused = false; // RunInBackground=0: Present reports the device lost while unfocused
 		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
+		void (*overlay_hook)(void*) = nullptr;   // p060fix/AQ2: the join hold's on-screen message, drawn before the screenshot hook
 		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
 		const char* no_activate = nullptr;       // why the window is shown without taking the focus, if it is
 		HWND window = nullptr;
@@ -303,6 +308,10 @@ namespace display
 
 		void remember_applied(const d3d8::present_parameters& pp)
 		{
+			if (!have_applied || applied.back_buffer_width != pp.back_buffer_width || applied.back_buffer_height != pp.back_buffer_height)
+			{
+				modes_adapter = no_adapter; // rebuild around the new active size on the next panel open
+			}
 			applied = pp;
 			have_applied = true;
 			if (pp.back_buffer_width && pp.back_buffer_height)
@@ -405,6 +414,11 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
+			script_pools::sample(); // guarded D0 snapshot on the game's render thread
+			if (overlay_hook)
+			{
+				overlay_hook(self); // onto the finished frame, so the test pipe's screenshot below shows it too
+			}
 			if (frame_hook)
 			{
 				frame_hook(self); // the back buffer holds the finished frame
@@ -430,6 +444,8 @@ namespace display
 			const HRESULT result = real_present(self, source, destination, override, dirty);
 			if (SUCCEEDED(result))
 			{
+				pool_counters::sample(); // fixed-storage reads, between simulation steps
+                e4_observe::sample();
 				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
 			}
 			return result;
@@ -451,6 +467,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 Reset exclusive parameters");
 			if (!pp || stock_fallback)
 			{
 				return real_reset(self, pp);
@@ -480,7 +497,7 @@ namespace display
 			}
 			const d3d8::present_parameters guaranteed =
 			    opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d, requested) : requested;
-			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested,
+			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 Reset fallback"); return real_reset(self, &pp_to_use); }, wanted, requested,
 			                                            opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr, "reset", true);
 			if (SUCCEEDED(result))
 			{
@@ -498,6 +515,7 @@ namespace display
 		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD engine_behaviour,
 		                                               d3d8::present_parameters* pp, void** out)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 CreateDevice exclusive parameters");
 			// The simulation's x87 word is XMen2.exe's 53-bit one only while Direct3D preserves it: the engine asks for
 			// D3DCREATE_FPU_PRESERVE (alchemy.ini preserveFPU, true unless edited), and the fix keeps it set, because the
 			// lockstep weapon brain runs the game's routines under exactly that word (det_math::game_x87_cw).
@@ -533,7 +551,7 @@ namespace display
 			const bool fullscreen = opts.window_mode == mode::fullscreen && !requested.windowed;
 			const auto guaranteed = fullscreen ? desktop_mode_fallback(self, requested) : requested;
 			const HRESULT result = apply_with_fallbacks(
-				[&](d3d8::present_parameters& pp_to_use) { return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
+				[&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 CreateDevice fallback"); return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
 				wanted, requested, fullscreen ? &guaranteed : nullptr, "device creation", false);
 			if (FAILED(result) || !*out)
 			{
@@ -564,9 +582,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || frame_rate::paces())
+			if (can_pause || frame_hook || overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : overlay_hook ? "the join hold's on-screen message" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
@@ -587,7 +605,12 @@ namespace display
 				}
 			}
 
-			modes = resolution_rules::video_list(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), opts.window_mode,
+			// Once the device exists its size is what the panel must be able to find,
+			// including windowed mode with Width/Height absent (the registry's size).
+			const auto selected = have_applied && applied.back_buffer_width && applied.back_buffer_height
+			    ? std::optional<size>(size{applied.back_buffer_width, applied.back_buffer_height})
+			    : resolution_override(opts, desktop_size());
+			modes = resolution_rules::video_list(adapter_modes, desktop_size(), desktop.refresh_rate, selected, opts.window_mode,
 			                                     opts.resolutions, mode_slots);
 			modes_adapter = which;
 
@@ -858,7 +881,18 @@ namespace display
 		// focus filter, turned into the pointer message it names on the window's thread.
 		bool test_pointer_enabled = false;
 		UINT test_pointer_message = 0;
+		UINT test_char_message = 0; // the pipe's `chars`: a WM_CHAR delivered to the engine on the window's thread
 		POINT last_test_engine_point{};
+		// The client-point mouse message being handed to the engine right now (pointer_pixel), on the window's thread.
+		struct in_flight_pointer { DWORD thread = 0; POINT point{}; size screen{}; int depth = 0; } in_flight;
+		LRESULT engine_pointer(const HWND handle, const UINT what, const WPARAM w, const LPARAM converted)
+		{
+			const in_flight_pointer saved = in_flight;
+			in_flight = {GetCurrentThreadId(), {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))}, engine_screen(), saved.depth + 1};
+			const LRESULT result = engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, converted) : DefWindowProcA(handle, what, w, converted);
+			in_flight = saved;
+			return result;
+		}
 
 		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
 		{
@@ -875,7 +909,14 @@ namespace display
 				}
 				const LPARAM converted = to_engine_point(handle, lparam);
 				last_test_engine_point = {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))};
-				engine(what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
+				engine_pointer(handle, what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
+				return 1;
+			}
+			if (test_pointer_enabled && test_char_message && message == test_char_message)
+			{
+				// The engine's own handler (0x5faa20) keeps a WM_CHAR's low byte for the text entry; a real keyboard's
+				// characters come through the same message.
+				engine(WM_CHAR, wparam & 0xff, 1);
 				return 1;
 			}
 			// A window being dragged across monitors asks first what size it should have at the new DPI.
@@ -923,7 +964,11 @@ namespace display
 				}
 				return 0;
 			}
-			return engine(message, wparam, has_client_point(message) ? to_engine_point(handle, lparam) : lparam);
+			if (has_client_point(message))
+			{
+				return engine_pointer(handle, message, wparam, to_engine_point(handle, lparam));
+			}
+			return engine(message, wparam, lparam);
 		}
 
 		// Puts filtered_window_procedure in front of the engine's (an ANSI window: igWin32Window
@@ -1249,6 +1294,13 @@ namespace display
 		frame_hook = hook;
 	}
 
+	void set_overlay(void (*draw)(void* device))
+	{
+		std::lock_guard lock(mutex);
+		overlay_hook = draw;
+		if (draw && device) hook_present("the join hold's on-screen message");
+	}
+
 	void disable_multisampling(const char* why)
 	{
 		no_multisampling = why;
@@ -1262,7 +1314,48 @@ namespace display
 	void enable_test_pointer()
 	{
 		test_pointer_message = RegisterWindowMessageA("xml2-fix test pointer");
+		test_char_message = RegisterWindowMessageA("xml2-fix test char");
 		test_pointer_enabled = test_pointer_message != 0;
+	}
+
+	std::string test_char(const unsigned character)
+	{
+		if (!test_pointer_enabled || !test_char_message)
+		{
+			return "error the test pointer is off";
+		}
+		if (character == 0 || character > 0xff)
+		{
+			return "error not a character the game's text entry reads";
+		}
+		HWND handle = nullptr;
+		{
+			std::lock_guard lock(mutex);
+			handle = window;
+		}
+		if (!handle || !engine_window_procedure)
+		{
+			return "error no game window of the fix's (the test characters need Mode = windowed or borderless)";
+		}
+		DWORD_PTR handled = 0;
+		if (!SendMessageTimeoutA(handle, test_char_message, character, 0, SMTO_BLOCK | SMTO_ABORTIFHUNG, 3000, &handled) || !handled)
+		{
+			return "error the game's window didn't take the message (error " + std::to_string(GetLastError()) + ")";
+		}
+		return "ok";
+	}
+
+	bool pointer_pixel(int& x, int& y, int& screen_width, int& screen_height)
+	{
+		if (!in_flight.depth || in_flight.thread != GetCurrentThreadId() || !in_flight.screen.width || !in_flight.screen.height)
+		{
+			return false;
+		}
+		x = in_flight.point.x;
+		y = in_flight.point.y;
+		screen_width = static_cast<int>(in_flight.screen.width);
+		screen_height = static_cast<int>(in_flight.screen.height);
+		return true;
 	}
 
 	std::string test_pointer(const UINT message, const int x, const int y)
@@ -1342,6 +1435,14 @@ namespace display
 		return false; // rewrite_present applies it when the device is next created or reset
 	}
 
+	void set_resolution(const unsigned width, const unsigned height)
+	{
+		std::lock_guard lock(mutex);
+		opts.width = static_cast<int>(width);
+		opts.height = static_cast<int>(height);
+		modes_adapter = no_adapter;
+	}
+
 	void set_run_in_background(const bool on)
 	{
 		std::lock_guard lock(mutex);
@@ -1353,6 +1454,12 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
+		if (no_activate::enabled())
+		{
+			opts.window_mode = mode::windowed;
+			opts.topmost = false;
+			logger::write("test: NoActivate keeps the D3D device windowed and Topmost off; RunInBackground=%u", opts.run_in_background);
+		}
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
 
 		desktop = current_desktop();
@@ -1371,7 +1478,7 @@ namespace display
 			// the device to start the frame limiter live, but every hook passes the engine's calls
 			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
-			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
+			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{overlay_hook != nullptr, "the join hold's on-screen message"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
 			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{

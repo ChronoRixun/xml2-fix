@@ -1,5 +1,129 @@
 # [Online] Host=broker / JoinCode - rooms through the project broker (Legends Classic 0.3.0 / XML2 Fix 1.8.0)
 
+The in-game broker API (`lc-online-broker/2`) extends this same client and TLS
+stack. `[Online] Menus=1`, the compatible LC menu assets, an installed
+`Transport=gns`, ReceiveValidation, the checked campaign loader, and a configured
+Broker are required for that route. TestMode remains refused. Hub entry performs
+no room operation. Launcher Host/Public/RoomName and JoinCode keys are consumed
+once as Host Setup / Code presets after real controller acceptance. Host Setup
+requires Open, native Game Options acceptance, then native Post; a complete Code
+submits one resolve per edit generation.
+The legacy non-menu Host/JoinCode route retains its one-shot start.
+
+The broker contract remains protocol 2: `auth`, `cert`, `list_rooms`, `host`,
+`resolve`, `turn`, `presence`, `signal`, and `ping`. Intentional cancel/leave
+shuts down the worker connection; the existing broker disconnect semantics
+remove membership and close a host's room. No new server operation, gameplay
+rule, agreement revision, transport framing, or release identity is introduced.
+Any future wire/gameplay contract **needs a rule id** from the coordinator.
+**Coordinator exception, 2026-11-01 (room roster, link kind 12, p060fix/AS):** no rule id or revision bump, like the
+GNS controls 10/11. The roster is sent on the room connection as soon as it connects, before native admission and the
+agreement exchange, so an agreement rule could not gate it; builds with different `[Online] GameVersion` tokens never
+meet (the joiner refuses with `version_mismatch` before connecting); an older member only refuses and counts kind 12
+(link kept, its own map unchanged); an older host sends none and AS joiners use the broker order after 5 s.
+
+| Current state | Input / result | Next state and effect |
+|---|---|---|
+| Idle Hub | Host / Code / Browse navigation | Open the corresponding UI; no host side effect |
+| Idle | Browse or Refresh | Authenticate, then list; retain prior rows while pending |
+| Idle | Open room | Native Game Options/save/difficulty/name/max choices; no broker room yet |
+| Native setup | Native Post / cancel | Accepted settings start host / cancel releases the selected image |
+| Idle | Complete Code / selected Browse Join | Authenticate, then resolve, one outstanding operation |
+| Authenticating | Verified protocol-2 challenge/auth identity and pinned CA | Listing / Hosting / Resolving; post that operation once |
+| Listing | Valid list, including zero rooms | Idle with fresh, atomically replaced snapshot |
+| Hosting | Valid code/roster | Room stays unjoinable until actual native Host activation |
+| Resolving | Valid code/roster; compatible token | Room -> authenticated host tunnel -> room-only discovery -> native admission -> Join |
+| Pending | Back, edit of submitted Code, close or route departure | Canceling; invalidate request/room generation, shut down worker socket |
+| Room | Intentional Back/Leave from custom screen, or a change to committed Code | Leaving; release tunnels/listener/queues and room-scoped state |
+| Canceling / Leaving | Worker has finished | Idle; no game-thread join/wait |
+| Pending | Timeout, invalid reply, broker error or TLS refusal | Retry wait; retain last list as stale; discard late completions |
+| Retry wait | Retry / explicit Refresh after limiter and backoff | Authenticate and retry the chosen operation |
+| Room | Broker loss, inbox overflow, bad/refused certificate or identity mismatch | Remain Room; retain virtual address/roster/tunnels and service flush/poll, stop new admission; only explicit Leave releases ownership |
+| Any start | Missing dependency / TestMode / invalid room name | Refused; no network success advertised |
+
+One shared lookup budget reserves at least 2 seconds between starts, including
+authentication. It also paces host/retry attempts conservatively. Back, Leave,
+re-entry and manual Refresh do not reset it. Failures back off 2/4/8/.../60
+seconds; `rate_limited` imposes at least 10 seconds. A successful operation resets
+backoff. Browse automatically refreshes after 10 seconds idle following a
+successful reply; failures need an explicit retry. Each attempt has a 10-second
+deadline. The UI never waits for network, DNS, TLS or worker completion. If native
+networking initialized GNS first, an idle instance may adopt the install identity
+through the existing GNS ResetIdentity API. Live native links prevent that
+switch and refuse the broker attempt; they are never disconnected by Hub work.
+A launcher code preset cannot filter native discovery before user selection.
+Cancel/Leave release room mode so Other ways can restore the native IP listener;
+the sendto/recvfrom adapters delegate directly while room mode is inactive. The
+native GNS identity is captured before room adoption and restored, discarding
+the room certificate, only after all native links/strays are idle. This idle
+check occurs immediately before listener/identity changes, not solely at the
+earlier menu request. A committed room never resets its GNS context because of
+a broker error. An idle fresh Hub does not initialize GNS.
+
+Changing the committed value on the custom Code screen (Delete, Clear, Back
+deleting a symbol, or Paste replacing it) intentionally performs Leave and
+`clear_room()` before a new resolve. An unchanged value/ignored key does not.
+The screen remains Code; a later complete value is subject to the same lookup
+limiter. This is the custom broker-Code policy, not native in-session departure
+or admission. LC must show "Editing the code leaves this room" in its committed
+Code status copy.
+
+An invalid launcher RoomName is discarded as a value; it does not disable
+Browse or Code. Host falls back to the derived default name. The one-shot name
+is removed even without Host/JoinCode. Launcher presets do not start the legacy
+status file until an accepted menu action actually starts an operation.
+
+There is one worker slot and one pending user operation. Socket shutdown
+interrupts connect/TLS/receive work. A synchronous Winsock DNS lookup may finish
+later; its result is canceled by generation and the slot is not reused until
+the old worker exits. No unbounded canceled-thread pool is created. Every inbox
+entry carries connection, request and room generations. Protocol 2 has no request
+IDs, so canceled/timed-out work uses a fresh connection; stale identities cannot
+be attached to a newer room.
+
+The existing 16 KiB **including LF** line bound is sufficient: broker SPEC 3.4
+and its `_op_list_rooms` cap the list at 50 summaries and remove whole trailing
+summaries until the serialized reply fits that bound. The client refuses an
+oversized line, 51 rows, duplicate/noncanonical codes, malformed JSON, invalid
+UTF-8, duplicate object keys and invalid known field types. It never truncates
+a room identity or publishes a partial malformed list. Optional metadata stays
+unknown. Inbox/outbox each retain at most 256 entries and 256 KiB; worker pending
+plaintext is capped at 64 KiB, TLS buffered input/handshake input at 64 KiB.
+Inbox overflow fails a pending attempt instead of evicting an identity/
+completion. In a committed room it closes only the broker worker and blocks
+admission, retaining the room generation, virtual address, roster and live
+tunnels. Certificate or identity errors follow the same room-survival policy;
+Retry/Host/Resolve cannot replace that room before intentional Leave.
+
+In-game room names are validated as trimmed printable ASCII, at most 32 bytes,
+excluding semicolon and quote. Invalid input is refused, rather than silently
+edited into another room name. Native screen names remain at most 31 game
+bytes. All remote displayed names use the round-3 renderer allowlist. Browse
+RTT stays `--`/Measuring; SAME means only an equal known release token. Unknown
+tokens never claim SAME. Full, nonjoinable, stale and password-protected rows
+cannot be selected for Join through this password-free UI.
+
+`online_status` v1 retains its process-final error semantics. Per-attempt
+retry/cancel/service errors are local `client_view` fields; retry does not reset
+the legacy file's final error. Successful Code or Browse resolve stores the
+canonical code and allowlisted room title in the existing bounded local Rejoin
+record. Broker membership is not native admission or Playing.
+
+Host evidence: `xml2_online_broker_test` executes the production worker/lifecycle
+against invented socket and mock-TLS transcripts (the mock does not verify a
+cryptographic pin); `xml2_broker_tls_test`
+separately checks real certificate trust and protocol selection. Its optional
+`--live` handshake/record path is a separately scheduled controlled-broker gate. Browser and menu fixtures
+cover limits, backoff, stale data, navigation and renderer bindings. These
+fixtures do not establish game rendering, real broker connectivity, native
+admission or healthy gameplay during broker loss. Room-survival fixtures drive
+the real `ui_tick()`/`tick()` using a real in-memory GNS socket pair and verify
+queued datagram flush, inbound polling, address rewriting and retry refusal
+after broker close, overflow, certificate failures and identity mismatch.
+The broker fixture answers `cert` like the real broker (a `cert_ok` after `auth_ok` on every connection) and installs
+through the room's certificate seam, and checks that Retry, Refresh and Done each succeed on a new connection after a
+rate limit, `no_such_room`, `room_full`, version mismatch, timeout or idle disconnect.
+
 Requested-only. Absent `Host`/`JoinCode`: nothing is hooked or written (the step-4 `Transport=gns` LAN mode and the
 stock transport are unchanged). Either key implies `[Online] Transport=gns` (gameplay rule 25, revision 4).
 
@@ -27,18 +151,23 @@ Host = broker                       ; this PC opens a room when its online sessi
    Trust is established before the `v:2` challenge is read. The client signs `"LCB1-auth-v2\0" || nonce || pubkey`,
    sends `cert` and `host` / `resolve(code)` after `auth_ok`, and requests `turn` after the room response. A `ping`
    every 30 seconds stays inside the broker's 120-second idle timeout. JSON lines, decrypted input, and both queues
-   are byte-bounded. The certificate (project-CA-signed, 24 h) is installed with `SetCertificate`; TURN/STUN servers
+   are byte-bounded. The certificate (project-CA-signed, 24 h) is installed with `SetCertificate`. Every new broker
+   connection delivers a `cert_ok` after `auth_ok` (fresh or cached), so a retry, refresh or later lookup meets the
+   certificate its earlier attempt installed: outside a room a repeat for the same identity is ignored (GNS keeps the
+   certificate while its identity is not reset), another identity is validated like a first certificate, and inside a
+   room any repeat is ignored without dropping the broker. TURN/STUN servers
    go into GNS's `P2P_STUN_ServerList` / `P2P_TURN_*`. ICE uses every candidate kind, or relay only with `Route=relay`.
 3. **Room.** The host writes the full eight-character code to `online-room.txt` next to the game for sharing; logs
    show only its first two characters. Codes and broker `host_ok` / `resolve_ok` responses are checked against the
    31-symbol alphabet. The room's protocol-2 metadata comes from the game (contract v1.3/v1.4, the public game
-   browser; `max_players` is 4, read-only live `players` stays server-derived): `public` from `[Online] Public`,
+   browser; `max_players` is the accepted native 2/3/4 for the menu route (legacy default 4); read-only live `players` stays server-derived): `public` from `[Online] Public`,
    `name` from `RoomName` (printable ASCII, at most 32, no `;` or `"`; public rooms only; default "<screen name>'s
    game"), `host_display_name` = the online screen name (the session's local player name, +0x3e8 of 0xa53058, set by
    the Play Online menus), `game_mode` `campaign` / `danger_room`, `zone` = the current zone's path (printable ASCII,
    at most 48; empty in the menus, the last level kept in the menus between levels), `zone_name` = that zone's
    zoneinfo savename (the name the game's save screen shows), `in_progress` = latched once a level of the online game
-   loads, `joinable` = a free seat and, after the start, `[Online] JoinInProgress`; `version_token` = exactly `[Online] GameVersion` (for 0.3.0, `LC33`), without a fingerprint suffix.
+   loads, `joinable` = a free seat and, after the start, the host's DROP-IN choice (`late_join_enabled`); a private room
+   with DROP-IN off also stays joinable after the start while rule 26's started refusal is installed (fix AN2, below); `version_token` = exactly `[Online] GameVersion` (for 0.3.0, `LC33`), without a fingerprint suffix.
    The browser compares that same token; admission still checks the full content fingerprint and rules.
    `Public`, `RoomName` are one-shot like `Host` (removed from the ini at start). The room opens before the name
    entry, so the first listing may carry the game's default name; changes go out as `presence` updates with only the
@@ -52,9 +181,18 @@ Host = broker                       ; this PC opens a room when its online sessi
    proven identity must be the member's (`str:` + the broker's identity), else the connection is closed. The patched,
    project-CA-pinned GNS build (net030-gnslib) refuses unsigned and foreign-CA certificates itself. Signals are capped
    at 8192 decoded bytes and 20 per second per member; duplicate requests on a live tunnel are refused.
-5. **Virtual addresses.** The broker's member order, preserved in a vector rather than a `std::set`, assigns the host
-   `10.77.0.1` and later members `.2`, `.3`, `.4`. Addresses are not key-derived and are not renumbered on departure;
-   tombstones keep rejoins and later joins from colliding with live assignments. Datagrams use link framing kind 4
+5. **Virtual addresses.** The HOST's room history assigns them: the host `10.77.0.1`, then every identity in the order
+   the host first saw it join (`.2`, `.3`, ...). Addresses are not key-derived and are not renumbered on departure;
+   a leaver keeps its entry (a returning identity gets its old address back, a new one appends), so rejoins and later
+   joins never collide with live assignments. The broker's `resolve_ok` lists only the members present now, so a
+   joiner cannot rebuild that history (Fix AS, RR-1: numbering that list gave a late rejoiner another map than the
+   room's); its map stays provisional (only the host's `.1`) until the host's **room roster** arrives on the host's room
+   connection (link kind 12: `[12][1][broker gen u32 LE][count][count x (8-byte key, active flag)]`, sent reliably on
+   every member's connect and to every member after each membership change). The member adopts it and replays the
+   broker `peer_joined` / `peer_left` events it saw after the roster's generation (later copies of events the roster
+   already holds are skipped by `gen`). Until then the joiner's game reaches no member (admission, datagrams and the
+   LAN search wait). A host without the roster (an older build): after 5 s on the connected host tunnel the broker's
+   order is used, as before. Datagrams use link framing kind 4
    (`[4][from port][to port][datagram]`) and reach the receive pump as the sender's virtual address. The embedded
    game-info route at datagram offset +13 is confined to that same sender address and source port.
 6. **After admission** the GNS transport (gns_transport, rule 25) carries the game's messages on the same P2P
@@ -105,6 +243,88 @@ checks are development evidence, not real-network acceptance of this release.
 
 ## Wire / agreement
 
-Rule 25 GnsTransport revision 4, values `{1, 1000, framing revision 3, 0}`. Framing 2 introduced the room datagram
-kind 4; framing 3 adds agreed lost-player input/cut messages (kinds 5/6). Survivors agree the lost guest's cut frame
-before removal; earlier revisions are refused by name. See [gns-transport.md](gns-transport.md).
+Rule 25 GnsTransport revision 6, values `{1, 1000, framing revision 4, 0}`. Framing 2 introduced the room datagram
+kind 4; framing 3 adds agreed lost-player input/cut messages (kinds 5/6); framing 4 (0.6) the party kinds 7/8. Survivors
+agree the lost guest's cut frame before removal; earlier revisions are refused by name (revision 5 was skipped: [online-party.md](online-party.md) section 2). See [gns-transport.md](gns-transport.md).
+
+0.6 round 7 adds presentation-only member reports (kind 7) and host tables (kind 8) on room tunnels, plus per-tunnel
+RTT/route sampling for the lobby cards: [online-party.md](online-party.md). They never admit, ready, kick or start;
+they are why rule 25 is revision 6 / framing 4.
+
+
+## Native menu bridge
+
+See [online-menus.md](online-menus.md#native-host-setup-and-automatic-admission-round-6)
+for the state/flow table, LC nodes, ABI addresses and the pending G/V procedure.
+`host_native` accepts the confirmed native name (1..31 bytes), maximum and
+campaign/Danger Room choice. These set only existing v2 metadata fields.
+Difficulty/load-image selection stays native; no unrecognized broker field is
+added. `joinable=false` is sent with host, kept through posting, then an existing
+presence update enables it after actual native Host activation. Repeated
+activation does not post again. The accepted game mode is retained between
+native setup and the first loaded world, where the ordinary live world reader
+would otherwise still report the old menu mode.
+
+`admission_target(ticket,address)` requires the current room generation,
+authenticated broker room, installed certificate, ICE readiness and a connected
+host tunnel whose identity passed the existing GNS callback check. It returns
+no address on failure. Native menu discovery suppresses master records even
+after native hello binds the transport, and raw UDP game-info replies cannot
+seed the room table. The established native admission/Ready/JIP handlers still
+own membership and play. Intentional Leave drops queued datagrams, callbacks,
+room listener/roster and old-generation worker results before later attempts.
+Rules 25/26, their revisions/values, framing and release identities are unchanged.
+Any distinct future peer-visible contract still **needs a rule id** (the room roster, link kind 12, is the coordinator
+exception of 2026-11-01 described at the top).
+
+### Started private rooms with DROP-IN off (fix AN2)
+
+What `joinable` does at the deployed broker (lc-online-broker, `rooms.py` `resolve` / SPEC 3.2-3.4): it is the
+host-controlled gate for NEW `resolve` calls only. False answers `room_not_joinable` before the joiner becomes a member,
+so the joiner never learns the host or reaches it; an existing member's re-resolve stays idempotent. It is also a flag on
+public `list_rooms` / HTTPS list rows (in-progress and non-joinable public rooms stay listed). It changes nothing else:
+`players` stays server-derived from membership, `max_players` is enforced separately (`room_full`, checked after the
+joinable gate), `in_progress` is informational, private rooms are never listed, and admission into the game stays the
+host's native admission (rule 26).
+
+So a private room, which no list shows, could only give the joiner the retry text ("Not taking players right now. Try
+again soon.") once DROP-IN off made it unjoinable - fix AN's list explanation cannot see it. Fix AN2 changes only the
+advertisement (`online_browser_core::advertised_drop_in`): after the start a **private** room advertises the drop-in
+used by `joinable()` as `late_join_enabled() || join_in_progress::installed()`. With rule 26 installed and DROP-IN off,
+the code join resolves, opens the room tunnel, discovers the host and asks for native admission; the host's
+`LateJoinPolicyV1` refusal (0x609970, before any participant is allocated; tagged 0x1c `LCLJ` body flushed before the
+disconnect, fixes AC/AF) answers it, and the joiner shows `lc_notice_started` on the Code screen and leaves the room
+(one refusal per attempt; a new attempt needs a new code entry). **Public** rooms keep following the host's choice, so
+their list row / Browse ("No joining once the game starts") stay truthful and fix AN explains their broker refusal.
+A free seat, native posting (`joinable=false` until actual Host activation), a full room and a build without the
+installed refusal keep `joinable=false` exactly as before; DROP-IN on is unchanged. The host log's listing update reads
+`... in progress, joinable, N of M players (private, DROP-IN off: the host refuses the join itself)`.
+
+While the refused joiner is resolved it is a broker member for a moment (its `peer_joined` / `peer_left` bracket the
+attempt; the host's status `players` and the broker's foreign-seat count include it until it leaves), exactly like any
+code join the host refuses in the lobby. It takes no game seat, gets no image, and never enters the lockstep.
+
+### Relay-only route verification
+
+The candidate mask alone is insufficient with the native ICE implementation:
+its candidate-pair and triggered-check paths can still choose a direct pair.
+With `Route=relay`, the room adapter checks the route flag before accepting a
+Connected callback and before each room tick drains/sends tunnel traffic. A
+non-relayed (or unreadable) route is closed, retries on that tunnel stop, and a
+clear relay-only refusal is written to the log and online status. Established
+routes are checked again so a later direct route is refused too. A refused member
+does not disconnect an established room from its broker or stop healthy members
+and Party processing; only an unadmitted guest aborts its pending join. Ordinary
+`Route=any` behavior is unchanged. This is refusal of an unsupported selected
+route, not proof of successful TURN allocation.
+
+A UDP send error such as WSAENETUNREACH does not identify the failing local
+interface. Native ICE uses an individually bound socket per local interface and
+matches TURN server and socket address families before allocation. Diagnosing a
+remaining allocation failure requires live transport evidence; the room must not
+silently present a direct connection as a successful relay-only session.
+
+
+Waiting admitted guests receive the host's existing reliable native departure (`0x2b`) on their authenticated, unbound room tunnel when the host ends its native session. Only the pinned host connection and the already validated host-left notice may classify that departure; other unbound game messages remain refused. Broker-only room closure still does not mean the host departed. Room connections use a 10,000 ms GNS connected receive timeout, matching the active session's native receive watchdog for a waiting guest with no bound host record.
+
+An authenticated host close with `relay-only requires TURN` before native admission stops connection retries and records `relay_unavailable`, whether or not GNS briefly reported Connected. The menu shows the builder's `lc_notice_relay` rather than waiting for the native discovery timeout. Regenerate LC menu assets together with this DLL to include that notice and the Party campaign summary.

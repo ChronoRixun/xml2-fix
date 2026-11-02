@@ -134,23 +134,24 @@ namespace virtual_pad
 			{
 				return;
 			}
+			// OFF preserves the previous once-a-second virtual-pad discovery too.
 			static std::mutex connected_mutex;
-			static std::vector<int> connected;
+			static std::vector<int> stock_connected;
 			static ULONGLONG next_check = 0;
-			int xinput_index = -1;
+			std::vector<int> connected;
+			if (xinput_pad::connections_cached()) connected = xinput_pad::connected_indices();
+			else
 			{
 				std::lock_guard lock(connected_mutex);
-				const ULONGLONG now = GetTickCount64();
+				const auto now = GetTickCount64();
 				if (now >= next_check)
 				{
-					connected = xinput_pad::connected_indices(); // four XInputGetState calls: once a second, not per read
+					stock_connected = xinput_pad::connected_indices();
 					next_check = now + 1000;
 				}
-				if (index < static_cast<int>(connected.size()))
-				{
-					xinput_index = connected[index];
-				}
+				connected = stock_connected;
 			}
+			const int xinput_index = index >= 0 && index < static_cast<int>(connected.size()) ? connected[index] : -1;
 			if (xinput_index >= 0 && !xinput_pad::read_raw(xinput_index, out))
 			{
 				out = {};

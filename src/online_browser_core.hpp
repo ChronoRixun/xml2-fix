@@ -20,6 +20,207 @@ namespace online_browser_core
 	constexpr std::size_t zone_max = 48;          // zone and zone_name (broker: 48 characters / 192 bytes)
 	constexpr std::size_t name_max = 48;          // name (broker: 48 characters / 192 bytes)
 	constexpr std::uint32_t presence_interval_ms = 5000;
+	constexpr std::size_t list_max = 50;
+	constexpr std::uint32_t lookup_interval_ms = 2000, list_refresh_ms = 10000, request_timeout_ms = 10000;
+	enum class operation { none, list, host, resolve };
+	struct launch_preset { operation action = operation::none; std::string code, name; bool public_room = false; };
+	enum class phase { idle, authenticating, listing, hosting, resolving, room, canceling, leaving, retry_wait, error, refused };
+	struct ticket {
+		std::uint64_t request = 0, room = 0;
+		bool operator==(const ticket&) const = default;
+	};
+	struct public_room {
+		std::string code, name, host_name, version, zone, mode;
+		int players = -1, max_players = 4;
+		bool joinable = true, in_progress = false, password = false;
+		bool max_players_known = false; // absence is a display default, not evidence of a free seat
+	};
+	struct client_view {
+		phase state = phase::idle;
+		operation action = operation::none;
+		ticket generation;
+		std::vector<public_room> rows;
+		std::string error, code, room_name;
+		std::string error_detail; // presentation only: version_mismatch's build token, or trusted room_not_joinable context
+		bool stale = false, authenticated = false, list_known = false;
+		bool public_room = false, room_metadata_known = false;
+	};
+	inline bool integer(const online_room_core::value& v, int low, int high, int& out) {
+		if (v.t != online_room_core::value::type::number || v.text.empty() ||
+			v.text.find_first_not_of("0123456789") != std::string::npos || v.text.size() > 9) return false;
+		const auto n = std::strtol(v.text.c_str(), nullptr, 10);
+		if (n < low || n > high) return false;
+		out = int(n); return true;
+	}
+	// All-or-nothing parse: never clip an identity, partially publish a list,
+	// silently discard duplicate rooms, or invent absent optional metadata.
+	inline bool public_rooms(const online_room_core::line& msg, std::vector<public_room>& out) {
+		using namespace online_room_core;
+		if (!msg.valid || msg.text("op") != "list_rooms_ok") return false;
+		const auto& array = msg["rooms"];
+		if (array.t == value::type::list && array.items.empty()) { out.clear(); return true; }
+		if (array.t != value::type::other || array.text.empty() || array.text.front() != '[') return false;
+		std::vector<public_room> next;
+		std::set<std::string> codes;
+		std::size_t i = 1;
+		for (;;) {
+			detail::space(array.text, i);
+			if (i >= array.text.size()) return false;
+			if (array.text[i] == ']') break;
+			const auto start = i;
+			if (!json_value(array.text, i)) return false;
+			const auto row = parse(array.text.substr(start, i - start));
+			public_room r;
+			r.code = row.text("code");
+			if (!row.valid || r.code.size() != 8 || join_code(r.code) != r.code || !codes.insert(r.code).second || next.size() == list_max) return false;
+			auto text = [&](const char* key, std::string& dest, std::size_t bound) {
+				const auto& v = row[key];
+				if (v.t == value::type::missing) return true;
+				if (v.t != value::type::string || v.text.size() > bound) return false;
+				dest = v.text; return true;
+			};
+			auto flag = [&](const char* key, bool& dest) {
+				const auto& v = row[key];
+				if (v.t == value::type::missing) return true;
+				if (v.t != value::type::boolean) return false;
+				dest = v.text == "true"; return true;
+			};
+			if (!text("name", r.name, 192) || !text("host_display_name", r.host_name, 128) || !text("version_token", r.version, 32) ||
+				!text("zone_name", r.zone, 192) || !text("game_mode", r.mode, 32) || !flag("joinable", r.joinable) ||
+				!flag("in_progress", r.in_progress) || !flag("password_protected", r.password)) return false;
+			if (row["players"].t != value::type::missing && !integer(row["players"], 0, 4, r.players)) return false;
+			if (row["max_players"].t != value::type::missing && !integer(row["max_players"], 1, 4, r.max_players)) return false;
+			r.max_players_known = row["max_players"].t != value::type::missing;
+			if (r.players > r.max_players) return false;
+			next.push_back(std::move(r));
+			detail::space(array.text, i);
+			if (i < array.text.size() && array.text[i] == ',') { ++i; continue; }
+			if (i < array.text.size() && array.text[i] == ']') break;
+			return false;
+		}
+		out = std::move(next); return true;
+	}
+
+	// A fresh public list can explain a resolve refusal using existing protocol-2 fields. Unknown/private/missing/full
+	// rows cannot explain the host's drop-in policy. This is a candidate only: occupancy can change before presence.
+	inline bool started_room_refusal(const std::string& code, const online_room_core::line& msg) {
+		std::vector<public_room> rows;
+		if (!public_rooms(msg, rows)) return false;
+		for (const auto& row : rows) if (row.code == code)
+			return row.in_progress && !row.joinable && row.max_players_known && row.players >= 1 && row.players < row.max_players;
+		return false;
+	}
+
+	// A single outstanding user operation; the runtime closes the old worker
+	// connection on cancellation/timeout because protocol v2 has no request IDs.
+	// Limiter/backoff survive Back, cancel, reconnect and room re-entry.
+	class client_state {
+		client_view view_;
+		std::uint32_t started_ = 0, sent_ = 0, refreshed_ = 0, failed_ = 0, backoff_ = 0;
+		bool sent_once_ = false, listed_once_ = false, issued_ = false;
+		std::string refused_code_; // explanatory lists inside the original resolve's timeout/generation
+		enum class refusal_phase { first, settling, confirming };
+		refusal_phase refusal_phase_ = refusal_phase::first;
+		std::uint32_t refusal_seen_ = 0;
+	public:
+		const client_view& view() const { return view_; }
+		bool pending() const { return view_.state == phase::authenticating || view_.state == phase::listing || view_.state == phase::hosting || view_.state == phase::resolving; }
+		bool may_lookup(std::uint32_t now) const {
+			return (!sent_once_ || std::uint32_t(now - sent_) >= lookup_interval_ms) && (!backoff_ || std::uint32_t(now - failed_) >= backoff_);
+		}
+		// Milliseconds until the shared limiter/backoff lets a new request start (0: now). The same arithmetic as may_lookup.
+		std::uint32_t retry_in(std::uint32_t now) const {
+			std::uint32_t wait = 0;
+			if (sent_once_ && std::uint32_t(now - sent_) < lookup_interval_ms) wait = lookup_interval_ms - std::uint32_t(now - sent_);
+			if (backoff_ && std::uint32_t(now - failed_) < backoff_) { const auto b = backoff_ - std::uint32_t(now - failed_); if (b > wait) wait = b; }
+			return wait;
+		}
+		bool begin(operation op, std::uint32_t now, bool authenticated = false) {
+			if (op == operation::none || pending() || view_.state == phase::room || !may_lookup(now)) return false;
+			++view_.generation.request;
+			if (op != operation::list) { ++view_.generation.room; view_.room_name.clear(); view_.room_metadata_known = false; }
+			view_.action = op; view_.error.clear(); view_.error_detail.clear(); view_.code.clear(); issued_ = false; refused_code_.clear();
+			view_.authenticated = authenticated;
+			view_.state = authenticated ? active_phase() : phase::authenticating;
+			started_ = now;
+			// Reserve budget before authentication so reconnect spam cannot bypass it.
+			sent_ = now; sent_once_ = true;
+			return true;
+		}
+		phase active_phase() const { return view_.action == operation::list ? phase::listing : view_.action == operation::host ? phase::hosting : phase::resolving; }
+		bool authenticated(ticket t) {
+			if (t != view_.generation || view_.state != phase::authenticating) return false;
+			view_.authenticated = true; view_.state = active_phase(); return true;
+		}
+		bool issue() { if (!pending() || !view_.authenticated || issued_) return false; issued_ = true; return true; }
+		bool accepts(ticket t, operation op) const { return t == view_.generation && view_.action == op && view_.state == active_phase() && issued_; }
+		bool explaining_refusal() const { return !refused_code_.empty(); }
+		bool explain_refusal(ticket t, const std::string& code) {
+			if (!accepts(t, operation::resolve) || explaining_refusal() || code.size() != 8 || online_room_core::join_code(code) != code) return false;
+			refused_code_ = code; refusal_phase_ = refusal_phase::first; return true;
+		}
+		bool confirm_refusal(std::uint32_t now) {
+			// Broker occupancy changes before the host's paced presence. Allow its 5 s interval plus the 500 ms
+			// browser observation cadence (rounded up to 6 s) before asking again; never extend the 10 s attempt.
+			if (!explaining_refusal() || expired(now) || refusal_phase_ != refusal_phase::settling || std::uint32_t(now-refusal_seen_) < presence_interval_ms+1000) return false;
+			refusal_phase_ = refusal_phase::confirming; return true;
+		}
+		void refusal_listed(ticket t, const online_room_core::line& msg, std::uint32_t now) {
+			if (!accepts(t, operation::resolve) || !explaining_refusal() || refusal_phase_ == refusal_phase::settling) return;
+			if (expired(now)) { fail(t, "room_not_joinable", now); return; }
+			const bool started = started_room_refusal(refused_code_, msg);
+			if (started && refusal_phase_ == refusal_phase::first) {
+				refusal_phase_ = refusal_phase::settling; refusal_seen_ = now; return;
+			}
+			fail(t, "room_not_joinable", now);
+			if (started) detail(t, "session_started");
+		}
+		bool listed(ticket t, const online_room_core::line& msg, std::uint32_t now) {
+			if (!accepts(t, operation::list)) return false;
+			std::vector<public_room> rows;
+			if (!public_rooms(msg, rows)) { fail(t, "malformed_reply", now); return false; }
+			view_.rows = std::move(rows); view_.stale = false; view_.list_known = true; view_.state = phase::idle;
+			refreshed_ = now; listed_once_ = true; backoff_ = 0; return true;
+		}
+		bool joined(ticket t, operation op, const std::string& code, const std::string& name = {}) {
+			if (!accepts(t, op) || explaining_refusal() || online_room_core::join_code(code) != code || code.size() != 8) return false;
+			view_.state = phase::room; view_.code = code; view_.room_name = name; backoff_ = 0; return true;
+		}
+		void fail(ticket t, const std::string& error, std::uint32_t now) {
+			if (t != view_.generation) return;
+			if (view_.state == phase::room) { disconnected(error, now); return; }
+			// One failure per generation: a duplicate or late report of the same request neither replaces the cause nor grows the backoff.
+			if (view_.state == phase::retry_wait || view_.state == phase::error || view_.state == phase::refused) return;
+			// The resolve was already refused. Failure of the optional explanation must keep that first cause,
+			// including timeout, malformed list, disconnect, queue overflow and service rate limiting.
+			view_.error = explaining_refusal() ? "room_not_joinable" : error; refused_code_.clear();
+			view_.error_detail.clear(); view_.stale = listed_once_; view_.authenticated = false;
+			failed_ = now; backoff_ = backoff_ ? (backoff_ >= 30000 ? 60000 : backoff_ * 2) : 2000;
+			if (error == "rate_limited" && backoff_ < 10000) backoff_ = 10000;
+			view_.state = phase::retry_wait;
+		}
+		// Presentation detail for the failure just recorded (ignored for a stale ticket or outside a failure).
+		void detail(ticket t, const std::string& text) { if (t == view_.generation && view_.state == phase::retry_wait) view_.error_detail = text; }
+		void refuse(const std::string& error) {
+			if (view_.state == phase::room) { disconnected(error, 0); return; }
+			view_.error = error; view_.error_detail.clear(); refused_code_.clear(); view_.state = phase::refused;
+		}
+		void metadata(const std::string& name, bool public_room) { view_.room_name = name; view_.public_room = public_room; view_.room_metadata_known = true; }
+		void disconnected(const std::string& error, std::uint32_t now) {
+			if (view_.state != phase::room) { fail(view_.generation, error, now); return; }
+			view_.authenticated = false; view_.error = error; view_.stale = true;
+		}
+		bool expired(std::uint32_t now) const { return pending() && std::uint32_t(now - started_) >= request_timeout_ms; }
+		bool refresh_due(std::uint32_t now) const { return !pending() && view_.state != phase::room && may_lookup(now) && (!listed_once_ || std::uint32_t(now - refreshed_) >= list_refresh_ms); }
+		void cancel(bool leave = false) {
+			if (view_.state == phase::room && !leave) return; // only intentional Leave releases a committed room
+			++view_.generation.request; ++view_.generation.room;
+			view_.state = leave ? phase::leaving : phase::canceling;
+			view_.authenticated = false; view_.code.clear(); view_.error.clear(); view_.error_detail.clear(); refused_code_.clear(); view_.stale = listed_once_;
+			view_.room_name.clear(); view_.room_metadata_known = false;
+		}
+		void stopped() { if (view_.state == phase::canceling || view_.state == phase::leaving) view_.state = phase::idle; }
+	};
 
 	inline std::string trim(const std::string& text)
 	{
@@ -40,6 +241,10 @@ namespace online_browser_core
 			out += ch;
 		}
 		return trim(out);
+	}
+	inline bool valid_room_name(const std::string& text) {
+		const auto value = trim(text);
+		return value.size() <= room_name_max && room_name(value) == value;
 	}
 	// UTF-8 text cut to `max_chars` code points, never inside one; control characters and broken sequences dropped.
 	inline std::string clip_utf8(const std::string& text, std::size_t max_chars)
@@ -105,6 +310,18 @@ namespace online_browser_core
 		void observe(const game_view& g) { if (g.session && !menu_zone(g.zone)) started = true; }
 	};
 	inline bool joinable(bool started, bool drop_in, int players, int max_players) { return players < max_players && (!started || drop_in); }
+	// The `drop_in` that joinable() advertises to the broker (fix AN2). The broker's `joinable` gates only new `resolve`
+	// calls (refused with `room_not_joinable` before the joiner is a member or reaches the host) and is a flag on the
+	// public list rows; it decides no admission. A PUBLIC room follows the host's admission choice, so its list row and
+	// Browse stay truthful and fix AN explains the broker refusal from that row. A PRIVATE room is never listed, so a
+	// refused code join could only show the retry text; while the host's own started-session refusal is installed (rule 26:
+	// the native admission at 0x609970 refuses before any participant exists and sends the tagged 0x1c, fix AF), it stays
+	// resolvable after the start with drop-in off, and that refusal gives the joiner the specific notice. Free seats,
+	// native posting and the host's admission decision are unchanged.
+	inline bool advertised_drop_in(bool public_room, bool late_join_enabled, bool host_refusal_installed)
+	{
+		return late_join_enabled || (!public_room && host_refusal_installed);
+	}
 
 	// The metadata this host's room should carry now. `last` is what it carried until now (public, version token and
 	// max players never change; the zone stays while the host is in the menus between levels).

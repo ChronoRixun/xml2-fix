@@ -1,4 +1,7 @@
 #pragma once
+#include <Windows.h>
+
+#include <optional>
 
 // The fix presents every XInput-capable pad as a Logitech Dual Action (see pad_profile.hpp)
 // and builds its DirectInput state from XInput in that controller's exact layout, so every
@@ -11,6 +14,19 @@ namespace pad_profile
 
 namespace gamepad_fix
 {
+	// [Input] CacheDeviceScan, configured before any DirectInput object exists.
+	void cache_device_scan(bool enabled);
+
+	// Wine's (Proton's, CrossOver's) version: its ntdll exports wine_get_version. nullptr on Windows.
+	const char* wine_version();
+
+	// [Input] CacheDeviceScan: the ini's value when it sets a valid one; otherwise on, except under Wine, where it
+	// defaults to off (docs/controller-scan-cache.md, "Re-entry, bounded wait and Wine/Proton").
+	inline bool cache_device_scan_choice(const std::optional<bool> configured, const bool wine)
+	{
+		return configured.value_or(!wine);
+	}
+
 	// The controller to present. Defaults to pad_profile::logitech_dual_action.
 	void use_profile(const pad_profile::profile& profile);
 
@@ -20,4 +36,8 @@ namespace gamepad_fix
 	// Hooks a freshly created DirectInput object (IDirectInput, 2, 7 or 8; A or W) and the devices it creates;
 	// its device lists and CreateDevice also serve the virtual pads ([Test] VirtualPads, virtual_pad.hpp).
 	void hook_direct_input(void* direct_input);
+
+	// Actual post-scan gameplay GUIDs (GUID_NULL for empty slots). Retains a
+	// physical pad's XInput slot while it is attached, across list compaction.
+	void update_attached(const GUID* instances, unsigned count);
 }

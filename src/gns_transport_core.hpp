@@ -10,13 +10,109 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <iterator>
+#include <utility>
 #include <vector>
 
 namespace gns_transport_core
 {
+	// Outbound migration policy. A bound link can stage new messages while its
+	// earlier native reliable queue drains; delivery must wait for that drain.
+	enum class outbound_lane { native, held, service, game };
+	inline outbound_lane handoff_lane(bool bound, bool switched) {
+		return !bound ? outbound_lane::native : switched ? outbound_lane::game : outbound_lane::held;
+	}
+	inline outbound_lane handoff_lane(bool bound,bool switched,std::uint8_t opcode) {
+		if (!bound) return outbound_lane::native;
+		// Native transport service (ACK/sequence receipt and ping/reply) is
+		// independent of ordered gameplay. Holding it can deadlock both old
+		// reliable queues. A bound peer already accepts these GNS game frames.
+		if (opcode==0x0a || opcode==0x0f || opcode==0x10 || opcode==0x11) return outbound_lane::service;
+		return switched ? outbound_lane::game : outbound_lane::held;
+	}
+	// 0x611550's original entry stack: return address, participant index,
+	// reason for that participant, reason for everyone else, one-byte flag.
+	// 0x2b carries index / chosen reason / flag, padded to 12 bytes.
+	struct removal_notice
+	{
+		std::uint32_t caller, index, lost, others, flag;
+	};
+	inline removal_notice read_removal_notice(const std::uint32_t* frame)
+	{
+		return {frame[0], frame[1], frame[2], frame[3], frame[4] & 0xffu};
+	}
+
+    // 0x6133a0 saves ESI/EDI, then pushes four arguments for 0x611550.
+    // At the latter entry its own caller return is word 7, even with FPO.
+    // The helper can blame any participant on either peer; the index does not
+    // establish this PC's role or whether the blamed record is local.
+    inline std::uint32_t self_drop_parent(const std::uint32_t* frame,std::size_t words) {
+        return frame && words>=8 && frame[0]==0x6133ce && frame[1]<4 ? frame[7] : 0;
+    }
+
+	// Observation only: native checksum lists are indexed by the 0x2e sender's
+	// participant index. Read the first sample without advancing the list iterator.
+	struct checksum_head {
+		std::uint32_t count = 0, hash = 0;
+		std::uint16_t frame = 0;
+		bool readable = false, present = false;
+	};
+	template<class Reader> checksum_head read_checksum_head(Reader& read, std::uintptr_t manager, unsigned index) {
+		checksum_head out;
+		if (index >= 4) return out;
+		const auto list = manager + 0xf0 + 0x10 * index;
+		if (!read(list + 0xc, &out.count, sizeof out.count)) return out;
+		if (!out.count) { out.readable = true; return out; }
+		std::uint32_t node = 0, sample = 0;
+		if (!read(list, &node, sizeof node) || !node ||
+		    !read(node + 0x10, &sample, sizeof sample) || !sample ||
+		    !read(sample, &out.frame, sizeof out.frame) ||
+		    !read(sample + 4, &out.hash, sizeof out.hash)) return out;
+		out.readable = out.present = true; // A zero hash is a real sample, though arbitration ignores it.
+		return out;
+	}
+
+	inline bool room_ui_pump_needed(bool initialized, bool requested) { return initialized || requested; }
+	// Identity/certificate handoff is local to an idle GNS context. IO provides
+	// get_identity, reset_identity and close_listener; no native/game state here.
+	template<class Identity> class room_identity_lifecycle {
+		Identity native_{};
+		bool saved_ = false, room_mode_ = false, owns_identity_ = false;
+	public:
+		template<class IO> bool remember_native(IO& io) {
+			if (!saved_) saved_ = io.get_identity(native_);
+			return saved_;
+		}
+		template<class IO> bool synchronize(bool requested, const Identity* room, bool idle, bool committed_room, IO& io) {
+			if (!saved_ || (requested && !room)) return false;
+			Identity current{};
+			if (!io.get_identity(current)) return false;
+			const bool identity_change = requested ? current != *room : owns_identity_;
+			if (identity_change || room_mode_ != requested) {
+				// Recheck immediately before touching listener/cert/identity. A
+				// successful can_start() in an earlier frame is not authority.
+				if (!idle || committed_room) return false;
+				io.close_listener();
+				if (identity_change) io.reset_identity(requested ? *room : native_);
+				owns_identity_ = requested; room_mode_ = requested;
+			}
+			return true;
+		}
+	};
 	inline bool hello_due(bool connector, bool bound, std::uint32_t now, std::uint32_t last)
 	{
 		return connector && !bound && (last == 0 || now - last >= 250);
+	}
+	// Fix AS follow-up (live-060zo-reg item 7): a room member's native link can be found before its room connection is up
+	// (ICE / TURN may finish after the game's discovery). The link then waits for that connection and binds over it when it
+	// comes up - before, it was closed at once and the pair stayed on the tunnelled stock socket for the whole session,
+	// without the GNS-only controls (a lost participant's input union and agreed cut frame, kinds 5/6). After the wait the
+	// link gives up as before.
+	constexpr std::uint32_t room_link_wait_ms = 30000;
+	enum class room_link { adopt, wait, give_up };
+	constexpr room_link room_link_step(bool connection_up, std::uint32_t waited_ms)
+	{
+		return connection_up ? room_link::adopt : waited_ms >= room_link_wait_ms ? room_link::give_up : room_link::wait;
 	}
 	// One whole game message: the native header's opcode (+0x10), reliable flag (+0xe) and body (+0, length +8).
 	struct message
@@ -31,11 +127,105 @@ namespace gns_transport_core
 	constexpr bool fragment_opcode(std::uint8_t opcode) { return opcode == 0x12 || opcode == 0x13; }
 
 	// GNS payload framing: one kind byte, then for a game message the opcode and the body.
-	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6 };
+	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6, join_boundary = 10, newcomer_lost = 11 };
+	constexpr std::uint32_t keepalive_ms = 100; // flush_link and unbound room tunnels use the same heartbeat
 	constexpr std::uint32_t hello_magic = 0x31534e47; // "GNS1"
 	constexpr std::size_t hello_size = 1 + 4 + 4 + 2;
 	// A stock 0x50a datagram carries at most a 0x505 reliable body (opcode, length and sequence excluded).
 	constexpr std::size_t max_game_body = 0x505, max_datagram_body = 1500;
+	// AQ3: a reliable control frame, separate from native gameplay dispatch. The host publishes a decision even
+	// when no newcomer is admitted (mask 0), so a guest can wait BEFORE loading and before that frame's world gate.
+	inline std::vector<std::uint8_t> join_boundary(std::uint16_t frame, std::uint8_t seats)
+	{
+		return {std::uint8_t(kind::join_boundary), std::uint8_t(frame), std::uint8_t(frame >> 8), seats, 0xa3};
+	}
+	inline bool join_boundary_authorized(bool bound, bool reliable, int sender_index)
+	{
+		return bound && reliable && sender_index == 0;
+	}
+	struct join_boundary_queue
+	{
+		std::deque<std::pair<std::uint16_t, std::uint8_t>> decisions;
+		void push(std::uint16_t frame, std::uint8_t seats)
+		{
+			for (auto& d : decisions) if (d.first == frame) { d.second = seats; return; }
+			if (decisions.size() == 8) decisions.pop_front();
+			decisions.emplace_back(frame, seats);
+		}
+		bool take(std::uint16_t frame, std::uint8_t& seats)
+		{
+			for (auto i = decisions.begin(); i != decisions.end(); ++i) if (i->first == frame)
+			{
+				seats = i->second;
+				decisions.erase(decisions.begin(), std::next(i));
+				return true;
+			}
+			return false;
+		}
+	};
+
+	// p060fix/AR: a newcomer of the admission in progress was lost before the cohort restart (live-060zj ZJ-7j/7j2: the
+	// host removed the killed joiner natively 20 s after its loss, just before its own restart, while the lobby guest
+	// removed it by its own 8.5 s cut-frame timeout INSIDE its restart - after resetgame, before the mode-2 load - and
+	// ended on the native pause/ready screen with no checksum). ONE host decision, reliable and ordered on each host
+	// link before the native 0x2b and the restart's 0x26: [11, lost index, newcomers still joining (mask), 0xa4]. Every
+	// other peer removes that participant before its own restart begins (at once when its zone runs, at the latest at
+	// the restart entry), so every peer restarts from the one image with the same participants.
+	constexpr std::size_t newcomer_lost_size = 4;
+	inline std::vector<std::uint8_t> newcomer_lost(std::uint8_t index, std::uint8_t remaining)
+	{
+		return {std::uint8_t(kind::newcomer_lost), index, std::uint8_t(remaining & 0x0e & ~(1u << (index & 3))), 0xa4};
+	}
+	inline bool newcomer_lost_authorized(bool bound, bool reliable, int sender_index) { return join_boundary_authorized(bound, reliable, sender_index); }
+	// A non-host PC's record of the admission's newcomers (session indexes 1..3, bit per index) until its restart entry.
+	// admitted: the host's accepted boundary mask, the mesh newcomers and the host's decisions - this PC never removes
+	// one of them by its own cut-frame timeout before its restart (the host decides); decided: the host's decisions
+	// not yet carried out here; applied: carried out (a repeated decision is ignored).
+	struct newcomer_ledger
+	{
+		std::uint8_t admitted = 0, decided = 0, applied = 0;
+		static std::uint8_t bit(int index) { return index >= 1 && index <= 3 ? std::uint8_t(1u << index) : std::uint8_t(0); }
+		void admit(std::uint8_t mask) { admitted |= std::uint8_t(mask & 0x0e); }
+		bool decide(int index)
+		{
+			const auto b = bit(index);
+			if (!b) return false;
+			admitted |= b;
+			if ((applied | decided) & b) return false;
+			decided |= b;
+			return true;
+		}
+		bool own_removal_allowed(int index) const { const auto b = bit(index); return !b || !((admitted | decided) & b); }
+		bool must_remove(int index) const { return (decided & bit(index)) != 0; }
+		void removed(int index) { const auto b = bit(index); decided &= std::uint8_t(~b); applied |= b; }
+		// This PC's restart begins (or its session ends): the decisions still to carry out, then a fresh ledger.
+		std::uint8_t restart_entry() { const auto left = decided; admitted = decided = applied = 0; return left; }
+	};
+	// The host's decisions sent in the admission in progress (review P1: never a stale bit from an earlier admission).
+	// A bit counts only while the admission still lists that index as one of its newcomers; otherwise it is dropped
+	// and the removal is classified afresh. reset(): every end of an admission (restart entry, no-restart, session end).
+	struct host_decisions
+	{
+		std::uint8_t sent = 0;
+		bool already(int index, bool admission_lists_it)
+		{
+			const auto b = newcomer_ledger::bit(index);
+			if (!(sent & b)) return false;
+			if (admission_lists_it) return true;
+			sent &= std::uint8_t(~b); // an earlier admission's decision: not this one
+			return false;
+		}
+		void record(int index) { sent |= newcomer_ledger::bit(index); }
+		void reset() { sent = 0; }
+	};
+	// The host's classification of a participant's removal (p060fix/AR): a newcomer of the admission in progress lost
+	// before the restart was announced (0x26 not broadcast, no restart begun) is removed at once after the decision went
+	// out; anything else keeps the ordinary paths (agreed cut frame, native watchdog, native leave).
+	enum class newcomer_loss { ordinary, before_restart };
+	inline newcomer_loss classify_newcomer_loss(bool host, bool admission_newcomer, bool restart_begun)
+	{
+		return host && admission_newcomer && !restart_begun ? newcomer_loss::before_restart : newcomer_loss::ordinary;
+	}
 
 #define GNS_TRANSPORT_OPCODE_VALIDATOR 1
 	using opcode_length_validator = bool(*)(std::uint8_t opcode, std::size_t length);
@@ -171,6 +361,18 @@ namespace gns_transport_core
 		}
 		else if (p.k == kind::keepalive && size == 1)
 			p.valid = true;
+		else if (p.k == kind::join_boundary && size == 5)
+		{
+			p.frame = std::uint16_t(data[1] | (std::uint16_t(data[2]) << 8));
+			p.index = data[3]; // newcomer seat mask (0 means an ordinary area load)
+			p.valid = data[4] == 0xa3 && (p.index & ~0x0eu) == 0;
+		}
+		else if (p.k == kind::newcomer_lost && size == newcomer_lost_size)
+		{
+			p.index = data[1];
+			p.frame = data[2]; // the newcomers still joining (mask)
+			p.valid = data[3] == 0xa4 && p.index >= 1 && p.index <= lost_index_max && (data[2] & ~0x0eu) == 0 && !(data[2] & (1u << p.index));
+		}
 		else if (p.k == kind::datagram && size >= datagram_header && size - datagram_header <= max_datagram_body)
 		{
 			std::memcpy(&p.port, data + 1, 2);

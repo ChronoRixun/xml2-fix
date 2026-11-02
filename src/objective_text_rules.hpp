@@ -7,12 +7,17 @@
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+#include "save_layout_view.hpp"
 
 namespace objective_text_rules
 {
 	constexpr std::size_t text_capacity = 160; // native description char[160]
+	// the retail array and index byte; the module reads the installed layout's (save_layout_view::objectives(), W2-L-10)
 	constexpr std::uint32_t state_bytes = 0x72b118;
 	constexpr std::size_t index_offset = 0x1a9;
+	static_assert(state_bytes == save_layout_view::retail_objectives.state_bytes && index_offset == save_layout_view::retail_objectives.index_offset);
+	// one text per global objective index: the widest layout's table (W2 1024; RETAIL / E10A2 use indices 0..255)
+	constexpr std::size_t text_entries = save_layout_view::w2_objectives_shape.objectives;
 	constexpr std::size_t description_offset = 0xe0;
 	constexpr std::uint32_t attribute_parser = 0x488890;
 	constexpr std::uint32_t attribute_call = 0x489a2f;
@@ -36,18 +41,18 @@ namespace objective_text_rules
 
 	struct texts
 	{
-		std::array<std::array<char, text_capacity>, 256> entries{};
-		void reset(std::uint8_t index) noexcept { entries[index].fill(0); }
-		void attribute(std::uint8_t index, std::string_view key, std::string_view value) noexcept
+		std::array<std::array<char, text_capacity>, text_entries> entries{};
+		void reset(std::uint32_t index) noexcept { if (index < text_entries) entries[index].fill(0); }
+		void attribute(std::uint32_t index, std::string_view key, std::string_view value) noexcept
 		{
-			if (!same_field(key, "updatedescription")) return;
+			if (!same_field(key, "updatedescription") || index >= text_entries) return;
 			reset(index);
 			const auto n = std::min(value.size(), text_capacity - 1);
 			if (n) std::memcpy(entries[index].data(), value.data(), n);
 		}
-		const char* select(std::uint8_t index, std::uint8_t state, const char* original) const noexcept
+		const char* select(std::uint32_t index, std::uint8_t state, const char* original) const noexcept
 		{
-			return (state & 0x40) && entries[index][0] ? entries[index].data() : original;
+			return index < text_entries && (state & 0x40) && entries[index][0] ? entries[index].data() : original;
 		}
 	};
 

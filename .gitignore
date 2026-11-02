@@ -1,5 +1,9 @@
 /build/
+/.build/
 /dist/
+/native/
+/logs/native/
+/temp/
 .vs/
 *.user
 

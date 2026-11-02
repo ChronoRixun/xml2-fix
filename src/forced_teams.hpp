@@ -1,4 +1,5 @@
 #pragma once
+#include "stats_layout.hpp"
 
 #include <Windows.h>
 
@@ -42,3 +43,5 @@ namespace forced_teams
 	// before XMen2.exe's own code does - from DllMain (see exports.cpp).
 	void install(HMODULE game);
 }
+
+namespace forced_teams { inline void register_stats_layout(){stats_layout::register_consumer(stats_layout::consumer::forced_teams);} }

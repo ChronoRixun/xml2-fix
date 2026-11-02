@@ -100,6 +100,42 @@ fixture is distributed. Tests cover valid/refused profiles, actor and attack-kin
 scoping, damage types, integer-RNG delegation, disabled features and actual
 execution of the generated construction stub.
 
+## The receive side and the cap (`ReceiveRounding`, `DamageCap`; gameplay rule 41)
+
+`Rounding=xml1` covers the bonuses of the damage function (`0x453a60`). Two more of the first game's integer steps
+sit elsewhere, and each has a key of its own:
+
+| key | X-Men Legends I | this engine | change |
+| --- | --- | --- | --- |
+| `ReceiveRounding = xml1` | the damage receive (`0x45260`) keeps the hit's damage as an integer (+0x94) and converts after each stage, `0x45517`-`0x45558`: d = trunc(max(damage - defense, 0)); damage = trunc(d x scale) (`_ftol` `0x1a41f0` -> `0x3439c4`: round toward zero, the low 32 bits) | the receive (`0x437490`) keeps a float (+0x9c) through both stages, `0x437a54`-`0x437a7c`: damage = max(damage - defense, 0) x scale. 10 with a flat defense of 0.5 and a scale of 0.5 (an officer-aura-style fraction) is 4 there and 4.75 here | `0x437a54` (`fld dword [esi+0x9c]`) and `0x437a75` (`fmul dword [esp+0x10]; mov ecx,[esi]`) become calls (+ nop) to two stubs: the first loads the damage and truncates it (XML1's field is an integer), the second truncates the clamped difference, multiplies by the scale and truncates again, then replays `mov ecx,[esi]`. Each truncation is x87 `fistp` under a round-toward-zero control word, keeping the low 32 bits as `_ftol`'s `eax`; registers, flags, the control word and the x87 depth are kept |
+| `DamageCap = xml1` | a hit's damage is capped at **32,000** (`0x5ce0d`: `cmp eax,0x7d00; jle; mov eax,0x7d00`) | at **1,000,000** (`0x453bfb`: `fcom dword [0x685bf4]` ... `fld dword [0x685bf4]`) | the two operands (`0x453bfd`, `0x453c0c`) point at a 32000.0f of the fix's; the constant at `0x685bf4` stays (other code reads it). Only a greater value is replaced, as in both games |
+
+Absent, empty or `xml2` writes nothing (the bytes stay the game's); any other value is logged and leaves the part
+as it is, but makes rule 41 unverified, which closes host and join. The guards are the receive run
+`0x437a54`-`0x437a81`, the cap run `0x453bfb`-`0x453c0f` and the constant `0x685bf4`; no other module writes them
+(`[Balance]`'s own damage-function sites end at `0x453bcb`; rule 16's receive site starts at `0x437a9d`).
+
+Lockstep peers compute every hit, so either key registers **gameplay rule 41** (`ReceiveRounding/DamageCap`,
+revision 1, `{receive installed ? 1 : 0, cap installed ? 32000 : 0, 0, 0}`), requested only: absent adds no entry and
+the released record is unchanged. A PC with either key and one without refuse each other naming `41 ReceiveRounding/DamageCap`.
+
+Tests: `xml2_balance_parity_test <XMen2.exe> <default.xbe>` runs both games' code side by side. It reads XML1's
+receive run, its `_ftol` pair and its cap run from the owner's `default.xbe` (checked by SHA-256) and XMen2.exe's
+receive and cap runs from the owner's exe (checked against the guards), relocates only their constants and calls,
+and executes them: the reviewer's example (10, 0.5, 0.5: XML1 4, retail 4.75, the rule 4), then every whole damage
+0..600 and five larger ones over ten defenses and twelve scales, in both the 24-bit precision the D3D8 device sets and
+53-bit. The rule equals XML1 on every case (72,180 of 72,180 in each precision) where retail differs on about 90 %,
+and a fractional damage is XML1's for its truncation. The cap equals XML1's on whole numbers from -40,000 to 8.4
+million. Registers, the x87 depth and the control word are checked after every call.
+
+`scripts/prove_balance_install.py` proves the keys install at run time: DllMain runs against the retail image in the
+synthetic host (`tools/union_host`, no game) with the port's own `[Balance]`, and every byte changed in XMen2.exe is
+read back. The ten `[Balance]` sites are written, the strength (`0x453b6e`), mind (`0x453b67`, `0x5e0afa`) and
+might/rounding (`0x453bc7`) calls land inside `dinput.dll`, and the log names 0.1 / 0.1 / 0.05 / xml1; `Rounding=xml1`
+alone writes the same four calls and nothing else of `[Balance]`; `[Balance]` absent writes none; the two parity keys
+add exactly their four sites and one agreement rule; and against an older build's DLL the same ini writes the same
+addresses (rule 16's revision 14 (items 19-22) sites apart).
+
 ## Saves
 
 Nothing is stored: max health, every damage number and every hit chance are computed when needed. Stats, levels and
@@ -112,7 +148,8 @@ health is re-applied clamped to the current maximum (`HeroHealthPerBody` changes
 
 Every machine computes health and damage from its own ini, so all peers need the same `[Balance]`. The port's
 builder gives a balance build its own `[Online] GameVersion` (`X1.1`), so lobbies of builds with and without the
-keys never mix.
+keys never mix. `ReceiveRounding` and `DamageCap` are also gameplay rule 41 (above), so a difference in them is
+refused by name.
 
 ## Logging
 

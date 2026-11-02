@@ -11,9 +11,11 @@
 // XMen2.exe reads the keyboard through its own DirectInput 8 device (GUID_SysKeyboard,
 // c_dfDIKeyboard, GetDeviceState(256) every frame; the engine's window messages aren't used),
 // created with DISCL_FOREGROUND, so it goes dead when another window has the focus. With the
-// pipe on, that device's SetCooperativeLevel becomes DISCL_BACKGROUND | DISCL_NONEXCLUSIVE, and
-// every state the game reads has the pipe's keys OR-ed in. The real keyboard still only counts
-// while the game has the focus, so typing in another window stays there.
+// pipe on, unfocused GetDeviceState reads return zero state plus pipe keys without
+// polling the physical keyboard. A focused player copy retains its physical keys.
+// NoActivate agent copies always return pipe-only state, even if focused. The
+// game's original cooperative flags stay unchanged; synthetic reads succeed while
+// unfocused/unacquired. With both test keys off the player input path is unchanged.
 //
 // That keyboard drives every screen, the Advanced Options panel (options_menu.hpp) included: its
 // widgets handle WM_KEYUP, but the panel's per-frame input function (0x619070) makes those from

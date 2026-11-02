@@ -65,10 +65,17 @@ namespace display
 	void set_frame_rate(const frame_rate_rules::cap& setting);
 	bool set_vsync(std::optional<bool> on);
 	void set_run_in_background(bool on);
+	// Accept synchronizes the restart override and subsequent native settings reads; no device reset.
+	void set_resolution(unsigned width, unsigned height);
 
 	// For the test pipe's screenshots: `hook` runs on the game's render thread with its
 	// IDirect3DDevice8 just before every Present. Set before install().
 	void set_frame_hook(void (*hook)(void* device));
+
+	// p060fix/AQ2: `draw` runs on the game's render thread with its IDirect3DDevice8 just before every Present, ahead
+	// of the frame hook (so screenshots include what it draws): the join hold's on-screen message (hold_overlay.hpp).
+	// Set before install() to have the device hooked for it in every display mode.
+	void set_overlay(void (*draw)(void* device));
 
 	// Creates and resets the device without multisampling (a multisampled back buffer can't be
 	// copied). Set before install(); `why` goes in the log.
@@ -87,4 +94,11 @@ namespace display
 	// (X,Y: the point the engine got) or "error ...". The real cursor is never read or moved.
 	void enable_test_pointer();
 	std::string test_pointer(unsigned message, int x, int y);
+	// The pipe's `chars`: one WM_CHAR (1-255) to the engine's window procedure on the window's thread, the way a real
+	// keyboard's character reaches the game's text entry. Same switch and window as test_pointer; "ok" or "error ...".
+	std::string test_char(unsigned character);
+	// While the fix's window procedure is handing the engine a client-point mouse message (a real one or the test
+	// pointer's), on that thread: the point in the engine's screen pixels (after the conversion above) and the engine's
+	// screen size it divides by. False at any other time. The co-op menus' hit boxes use it for pixel-exact bar edges.
+	bool pointer_pixel(int& x, int& y, int& screen_width, int& screen_height);
 }

@@ -297,7 +297,7 @@ namespace display_rules
 	// The Video options list. The game lists every adapter mode of at least 640x480, one entry per
 	// width x height, sorted ascending, into a table of `cap` fixed slots. This does the same from
 	// the adapter's modes and adds the desktop size and the forced resolution, so they can be
-	// picked; when there are too many, the smallest go. (resolution_rules::build_list adds the
+	// picked; when there are too many, the smallest non-forced sizes go. (resolution_rules::build_list adds the
 	// sizes each display mode can offer beyond the adapter's, and sets `cap` from the table in use.)
 	inline std::vector<d3d8::display_mode> curate_modes(const std::vector<d3d8::display_mode>& adapter_modes, const size& desktop,
 	                                                    const UINT refresh_rate, const std::optional<size>& extra, const size_t cap)
@@ -335,7 +335,17 @@ namespace display_rules
 		});
 		if (list.size() > cap)
 		{
-			list.erase(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(list.size() - cap));
+			// The panel searches for the current/forced resolution. Evicting it leaves
+			// the native value blank (060s: 1024x768 with a 20-slot modern mode list).
+			while (list.size() > cap)
+			{
+				auto discard = list.begin();
+				if (cap && extra && discard->width == extra->width && discard->height == extra->height)
+				{
+					++discard;
+				}
+				list.erase(discard);
+			}
 		}
 		return list;
 	}

@@ -1,3 +1,4 @@
+#include "actor_ai_layout.hpp"
 #include "xml1_turrets.hpp"
 #include "turret_rules.hpp"
 #include "mold_query.hpp"
@@ -24,6 +25,7 @@
 // authored placement, as the original's constructor does. Shots use the native projectile service
 // with the turret physent as the source.
 namespace xml1_turrets {
+void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::turrets);}
 namespace {
 using u32=std::uint32_t;
 using turret_rules::vec;
@@ -75,6 +77,7 @@ struct turret {
     std::array<u32,3> effects{};   // resolved muzzle / tracer / impact effect handles (zone group)
     bool effects_resolved=false;
     u32 fire_sound=0,rotate_sound=0,loop=0;   // resolved sounds; the rotate loop playing (0 = none)
+    vec authored_rest{};
 };
 std::vector<turret> turrets;
 struct flight{u32 handle=0,target=0;float last[3]{};float born=0;};
@@ -391,7 +394,7 @@ void start_loop(turret& t,void* self){
 }
 // A zone change or a clock that went back: nothing learnt earlier in the process may delay binding
 // (turret_rules::binding), and a playing rotate loop is stopped (0x590780 ignores unknown handles).
-void forget(){for(auto& t:turrets){stop_loop(t);t.live=false;t.handle=0;t.effects_resolved=false;turret_rules::forget(t.b);}flights.clear();}
+void forget(){for(auto& t:turrets){stop_loop(t);t.live=false;t.handle=0;t.s={};t.effects={};t.effects_resolved=false;t.fire_sound=0;t.rotate_sound=0;t.spec.rest=t.authored_rest;turret_rules::forget(t.b);}flights.clear();loaded_files.clear();}
 void update(float time){
     const char* current=reinterpret_cast<const char*>(0x72a758);
     if(std::strncmp(current,zone,sizeof zone)!=0||turret_rules::clock_went_back(time,last_time)){
@@ -493,10 +496,41 @@ u32 fnv(const std::vector<std::string>& all){
 }
 }
 bool requested(){return was_requested;}
+std::uint32_t installed_process_hook(){return installed?static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&process_hook)):0u;}
+void cohort_epoch(float time){
+    if(!installed)return;
+    forget();
+    std::strncpy(zone,reinterpret_cast<const char*>(0x72a758),sizeof zone-1);zone[sizeof zone-1]=0;
+    last_time=time;
+    for(auto& t:turrets)t.s=turret_rules::spawn(time);
+    logger::write("xml1 turrets: cohort epoch at %.3f - %u placement(s), deadlines reset, bindings/targets/bursts/flights cleared",time,unsigned(turrets.size()));
+}
+digest probe_digest(unsigned index_bits){
+    digest d;d.hash=2166136261u;
+    const u32 mask=(1u<<((index_bits>=1&&index_bits<=16)?index_bits:8))-1;
+    const auto word=[&](u32 v){for(unsigned i=0;i<4;++i){d.hash^=(v>>(i*8))&255;d.hash*=16777619u;}};
+    const auto value=[&](float v){u32 bits;std::memcpy(&bits,&v,4);word(bits);};
+    const auto text=[&](const auto& str){for(unsigned char c:str){d.hash^=c;d.hash*=16777619u;}word(0);};
+    word(installed);if(!installed)return d;
+    d.placements=u32(turrets.size());d.flights=u32(flights.size());
+    text(std::string_view(zone));value(last_time);word(d.placements);
+    for(const auto& t:turrets){
+        text(t.spec.zone);text(t.spec.instance);word(t.live);d.live+=t.live?1u:0u;word(t.handle?((t.handle&mask)+1):0);
+        word(t.s.mode);value(t.s.acquire_due);value(t.s.rotate_due);value(t.s.fire_due);value(t.s.acquire_set);value(t.s.rotate_set);
+        value(t.s.seen);value(t.s.last_seen);value(t.s.pause);word(t.s.sweep_back);for(float f:t.s.aim)value(f);
+        word(t.s.target?((t.s.target&mask)+1):0);word(t.s.burst);word(t.s.emitter);value(t.s.last_trace);
+        value(t.b.next_bind);value(t.b.trace_at);word(t.b.rest_taken);for(float f:t.spec.rest)value(f);
+        word(t.effects_resolved);word(t.loop!=0);word(t.fire_sound!=0);word(t.rotate_sound!=0);
+    }
+    word(d.flights);for(const auto& f:flights){word(f.handle?((f.handle&mask)+1):0);word(f.target?((f.target&mask)+1):0);for(float v:f.last)value(v);value(f.born);}
+    word(u32(loaded_files.size()));for(const auto& file:loaded_files)text(file);
+    return d;
+}
 xml1_capability_rules::registration capability(){
     return xml1_capability_rules::turrets(was_requested,installed,static_cast<std::uint32_t>(turrets.size()),fnv(lines));
 }
 void install(HMODULE game){
+    actor_ai::register_consumer(actor_ai::consumer::turrets);
     was_requested=ini::flag(L"Game",L"Xml1Turrets",false);installed=false;
     if(!was_requested)return;
     trace=ini::flag(L"Test",L"TurretTrace",false);
@@ -508,7 +542,7 @@ void install(HMODULE game){
         const auto text=ini::text(L"Xml1Turrets",key);
         const auto spec=text?turret_rules::parse(*text):std::nullopt;
         if(!spec){logger::write("xml1 turrets: placement %d malformed; turrets stay inert",i);turrets.clear();lines.clear();return;}
-        turrets.push_back({*spec});lines.push_back(*text);
+        turrets.push_back({*spec});turrets.back().authored_rest=spec->rest;lines.push_back(*text);
     }
     constexpr std::array<limits_rules::guard,36> guards{{
         {native_process,"83c104e9","scheduler dispatch thunk"},
@@ -547,7 +581,7 @@ void install(HMODULE game){
         {0x69d1f8,"f0175900","sound system loop slot"},
         {0x69d220,"80075900","sound system stop slot"},
         {0x5917f0,"5356578bf98a87aed000","sound loop"}}};
-    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
+    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),actor_ai::guard(g.va,g.hex,actor_ai::installed()))){
         logger::write("xml1 turrets: guard failed %08X (%s); turrets stay inert",g.va,g.what);turrets.clear();lines.clear();return;}
     if(at<u32>(reinterpret_cast<const void*>(process_slot),0)!=native_process||at<u32>(reinterpret_cast<const void*>(0x4b2fe8),0)!=scheduler_vtable){
         logger::write("xml1 turrets: scheduler dispatch slot differs; turrets stay inert");turrets.clear();lines.clear();return;}

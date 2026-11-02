@@ -1,3 +1,4 @@
+#include "e4_observe.hpp"
 #include "solo_mode.hpp"
 #include "solo_mode_rules.hpp"
 #include "game_version.hpp"
@@ -194,12 +195,15 @@ namespace solo_mode
 					{
 						void* camera = fn<getter_t>(camera_getter)();
 						if (!camera || at<u32>(camera, 0) != camera_vtable) return false;
-						if (!at<visible_t>(at<const void*>(camera, 0), camera_visible_slot)(camera, nullptr, position, regroup_view_margin, nullptr)) { refused = 3; return false; }
+						const auto visible = at<visible_t>(at<const void*>(camera, 0), camera_visible_slot);
+						if (!e4_observe::native_call("solo:camera visibility", [&] { return visible(camera, nullptr, position, regroup_view_margin, nullptr); })) { refused = 3; return false; }
 					}
-					at<reset_t>(at<const void*>(nav, 0), 4)(nav, nullptr);
+					const auto reset = at<reset_t>(at<const void*>(nav, 0), 4);
+					e4_observe::native_call("solo:navigator reset", [&] { reset(nav, nullptr); });
 					// XMen2.exe's query takes a fourth argument: 1 skips the far-path (buoy) lookup the PC added
 					// (0x496556), leaving default.xbe's near search (0x90c50).
-					const int status = at<query_t>(at<const void*>(nav, 0), 0)(nav, nullptr, position, regroup_radius, regroup_steps, 1);
+					const auto query = at<query_t>(at<const void*>(nav, 0), 0);
+					const int status = e4_observe::native_call("solo:navigator query", [&] { return query(nav, nullptr, position, regroup_radius, regroup_steps, 1); });
 					if (checked < 4) { handles[checked] = at<u32>(peer, 0x1c); statuses[checked] = status; ++checked; }
 					if (status != regroup_reached)
 					{

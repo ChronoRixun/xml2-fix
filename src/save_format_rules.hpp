@@ -128,9 +128,27 @@ namespace save_format_rules
 		std::uint32_t wrapper;         // the buffer the game allocates around the payload
 		std::uint32_t description;     // the serializer's description text in the wrapper
 		std::uint32_t flag_offset;     // the wrapper's overflow/flag byte (retail 0x2fc44)
+		// W2 (docs/limits-wave2.md 3.1; the lcsave descriptor's fields, cross-checked below)
+		const char* layout_id = "RETAIL";     // the lcsave descriptor this profile is (lcsave::native_layout(layout_id)); selected by id
+		std::uint32_t state_record_size = 0x18;
+		std::uint32_t record_count = 5;
+		std::uint32_t item_head = 0x165;      // count, definition pairs, 3 + 6 dwords
+		std::uint32_t instance_head = 5;      // definition index + four bytes
+		std::uint32_t snapshot_size = 0x26c;
+		std::uint32_t side_count_offset = 0x4dc;   // the side-mission stack's count after two snapshots and a pad
+		std::uint32_t objectives = 300;       // snapshot objective bytes
+		std::uint32_t talent_multiplier = 100;
+		std::uint32_t zone_string_slots = 0x800, zone_arena = 0x3800;
 	};
 	inline constexpr native_profile retail_profile{"retail", 768, 256, 300, 768, 0x4808, 0x480c, 0x55d8, 0x55e0, 0x1afdc, 0x2fc00, 0x2fc00, 0x2fc78, 0x2fc04, 0x2fc44};
-	inline constexpr native_profile e10a2_profile{"E10A2", 4096, 1024, 1024, 1024, 0x18008, 0x1800c, 0x19b80, 0x19b88, 0x80c24, 0x200000, 0x200000, 0x200078, 0x200004, 0x200044};
+	inline constexpr native_profile e10a2_profile{"E10A2", 4096, 1024, 1024, 1024, 0x18008, 0x1800c, 0x19b80, 0x19b88, 0x80c24, 0x200000, 0x200000, 0x200078, 0x200004, 0x200044,
+		"E10A2"};
+	// W2: 8 records of 0x24388, manager 0x122190, the unchanged 0x200000 payload (limits-wave2.md 3.6 - 3.8)
+	inline constexpr native_profile w2_profile{"W2", 4096, 4096, 2048, 2048, 0x20008, 0x2000c, 0x24380, 0x24388, 0x122190, 0x200000, 0x200000, 0x200078, 0x200004, 0x200044,
+		"W2", 0x20, 8, 0x826, 6, 0x540, 0xa84, 1024, 200, 0x2000, 0x20000};
+	static_assert(4 + w2_profile.states * w2_profile.state_record_size + 4 + 4 + w2_profile.ordinals * 2 + 4 + w2_profile.dynamic * 2 + 4 + 4 + w2_profile.smart * 2 + 4 + 4 + 0x34c + 20 + 4 + 4 == w2_profile.record_size);
+	static_assert(w2_profile.record_count * w2_profile.record_size + 4 + 4 + w2_profile.snapshot_size + 4 + 4 == w2_profile.manager_size);
+	static_assert(2 * w2_profile.snapshot_size + 4 == w2_profile.side_count_offset && 2 * retail_profile.snapshot_size + 4 == retail_profile.side_count_offset);
 	static_assert(retail_profile.payload == stream_capacity && retail_profile.wrapper == stream_wrapper && retail_profile.description == stream_description);
 	static_assert(4 + e10a2_profile.states * 0x18 + 4 + 4 + e10a2_profile.ordinals * 2 + 4 + e10a2_profile.dynamic * 2 + 4 + 4 + e10a2_profile.smart * 2 + 4 + 4 + 0x34c + 20 + 4 + 4 == e10a2_profile.record_size);
 	static_assert(5 * e10a2_profile.record_size + (0x1afdc - 5 * 0x55e0) == e10a2_profile.manager_size);
@@ -148,6 +166,8 @@ namespace save_format_rules
 	              ordinal_write_displacement(retail_profile) == 0x480a);
 	static_assert(dynamic_list(e10a2_profile) == 0x18810 && dynamic_count(e10a2_profile) == 0x19014 && smart_list(e10a2_profile) == 0x19018 && smart_count(e10a2_profile) == 0x1981c &&
 	              ordinal_write_displacement(e10a2_profile) == 0x1800a);
+	static_assert(dynamic_list(w2_profile) == 0x22010 && dynamic_count(w2_profile) == 0x23014 && smart_list(w2_profile) == 0x23018 && smart_count(w2_profile) == 0x2401c &&
+	              ordinal_write_displacement(w2_profile) == 0x2000a);
 	constexpr std::size_t profile_size = 0x228;
 	constexpr std::size_t old_envelope = 0x84;           // 0x80 description + u32 length
 	constexpr std::size_t old_slot_file_size = old_envelope + stream_capacity;
@@ -469,7 +489,18 @@ namespace save_format_rules
 	// Required feature bits the running engine understands: bit 0 (ENTITY_LAYOUT_CONTIGUOUS10) only under the expanded
 	// native layout E10A2 (set once by save_format when the entity-capacity install prepares; plan section 4).
 	constexpr std::uint32_t lc_feature_entity_layout_contiguous10 = 1;
+	constexpr std::uint32_t lc_feature_native_w2 = 2;   // limits-wave2.md section 7: a W2 save a pre-W2 build cannot apply
+	// set once by save_format::use_native_profile: the installed lcsave descriptor's feature_bits (RETAIL 0, E10A2 1, W2 3)
 	inline std::uint32_t lc_known_required_features = 0;
+	constexpr std::uint32_t lc_feature_actor_capacity96 = 4; // E4 stage 2 ([Limits] Actors=96): written with 96 live actors
+	// Required bits this build implements behind an opt-in [Limits] setting (set once by save_format::use_native_profile:
+	// ACTOR_CAPACITY_96 when the fix carries the E4 core). A save that needs only such bits, switched off on this start,
+	// is refused naming the setting instead of "a newer build". W2 (bit 1) keeps its own rule in inspect.
+	inline std::uint32_t lc_setting_required_features = 0;
+	// [Limits] Actors=96 is in xml2-fix.ini but did not install this start (save_format::actor_capacity96_refused):
+	// the refusal then says why instead of "turn it on".
+	inline bool lc_actor_capacity96_requested = false;
+	inline std::string lc_actor_capacity96_failure;
 	constexpr std::uint8_t kind_campaign = 1;
 	constexpr std::uint8_t kind_profile = 2;
 	constexpr std::uint16_t section_required = 1;
@@ -506,6 +537,8 @@ namespace save_format_rules
 		std::uint32_t catalogue_revision = 0;
 		std::uint32_t writer_version = 0;
 		std::uint32_t optional_features = 0;   // header 0x14 (bit 0 KEYS; bits 1 / 2 the fifth-level catch-up)
+		bool needs_layout = false;             // needs_newer because of a known required bit whose layout is not installed (W2 bit 1)
+		std::uint32_t needs_settings = 0;      // needs_newer and every missing required bit is an opt-in setting this build has, off here
 		std::uint64_t campaign_serial = 0;
 		std::uint32_t save_sequence = 0;
 		std::uint64_t saved_at = 0;
@@ -613,6 +646,24 @@ namespace save_format_rules
 		{
 			out.status = file_status::needs_newer;
 			out.why = "required feature bits " + std::to_string(required);
+			const std::uint32_t missing = required & ~lc_known_required_features;
+			// a bit this build knows by name but whose layout is not installed (W2 section 7, "Named refusal")
+			if (missing == lc_feature_native_w2 && (lc_known_required_features & lc_feature_entity_layout_contiguous10))
+			{
+				out.needs_layout = true;
+				out.needs_settings = missing;
+				out.why = "this save needs the W2 save layout ([Limits] SaveLayout=w2); enable it or use the build that wrote it";
+			}
+			// only opt-in settings this build has and that are off on this start (Actors=96, with or without W2): both
+			// need the contiguous layout (EntityCapacity=1), so a build without it keeps the generic refusal
+			else if ((lc_known_required_features & lc_feature_entity_layout_contiguous10) &&
+			         (missing & ~(lc_setting_required_features | lc_feature_native_w2)) == 0 && (missing & lc_setting_required_features))
+			{
+				out.needs_settings = missing;
+				out.why += lc_actor_capacity96_requested ? " (Actors=96 did not install on this start" + (lc_actor_capacity96_failure.empty() ? std::string() : ": " + lc_actor_capacity96_failure) + ")"
+				                                         : std::string(" (Actors=96 is off on this start)");
+				if (missing & lc_feature_native_w2) out.why += " (SaveLayout=w2 is off on this start)";
+			}
 			return out;
 		}
 		if (sections < 1 || sections > lc_max_sections || table < lc_header_size || table > size ||
@@ -922,7 +973,8 @@ namespace save_format_rules
 			text = (from_backup ? "(restored from backup) " : "") + i.description;
 			break;
 		case file_status::needs_newer:
-			text = "(needs a newer version) " + i.description;
+			text = ((i.needs_settings & lc_feature_actor_capacity96) ? ((i.needs_settings & lc_feature_native_w2) ? "(needs Actors=96 + the W2 save layout) " : "(needs Actors=96) ")
+			        : i.needs_layout ? "(needs the W2 save layout) " : "(needs a newer version) ") + i.description;
 			break;
 		case file_status::wrong_kind:
 			text = "(not a campaign) " + i.description;
@@ -1140,8 +1192,9 @@ namespace save_format_rules
 
 	constexpr std::size_t tag_size = 52;
 	constexpr std::uint8_t tag_marker = 0x0a;
-	constexpr std::size_t item_head_size = 0x165;    // count byte, 160 pairs, 3 x u32, 6 x u32
-	constexpr std::size_t instance_fixed = 5;        // definition index, the four bytes
+	constexpr std::size_t item_head_size = 0x165;    // RETAIL / E10A2: count byte, 160 pairs, 3 x u32, 6 x u32 (W2: profile.item_head)
+	constexpr std::size_t instance_fixed = 5;        // RETAIL / E10A2: definition index, the four bytes (W2: profile.instance_head)
+	static_assert(retail_profile.item_head == item_head_size && e10a2_profile.item_head == item_head_size && retail_profile.instance_head == instance_fixed);
 	constexpr std::size_t enhancement_size = 6;      // u16 record, u32 value
 	constexpr std::size_t attributes_size = 0x18;
 	constexpr std::size_t heap_size = 0xa0;          // 19 entries x 8, bitmap, count
@@ -1164,8 +1217,9 @@ namespace save_format_rules
 	// Walks an old slot image (envelope + payload) up to the [CHARACTERSUNLOCKED] tag: the offset of every hero
 	// block's talent heap, in stream order. Nothing when the stream doesn't parse (the tag never comes, a count
 	// is out of range, the image is short).
-	inline std::optional<std::vector<hero_heap>> hero_heaps(const std::uint8_t* data, const std::size_t size)
+	inline std::optional<std::vector<hero_heap>> hero_heaps(const std::uint8_t* data, const std::size_t size, const native_profile& profile = retail_profile)
 	{
+		const std::size_t head_bytes = profile.item_head, fixed_bytes = profile.instance_head;   // the layout's heads
 		std::size_t p = old_envelope;
 		const auto need = [&](const std::size_t n) { return p + n <= size; };
 		const auto is_tag = [&](const char* text)
@@ -1175,11 +1229,11 @@ namespace save_format_rules
 		};
 		const auto skip_instance = [&]() -> bool
 		{
-			if (!need(instance_fixed))
+			if (!need(fixed_bytes))
 			{
 				return false;
 			}
-			p += instance_fixed;
+			p += fixed_bytes;
 			for (int list = 0; list < 3; ++list)
 			{
 				if (!need(4))
@@ -1201,11 +1255,11 @@ namespace save_format_rules
 			return std::nullopt;
 		}
 		p += tag_size;
-		if (!need(item_head_size + 4))
+		if (!need(head_bytes + 4))
 		{
 			return std::nullopt;
 		}
-		p += item_head_size;
+		p += head_bytes;
 		const std::uint32_t carried = rd32(data + p);
 		p += 4;
 		if (carried > max_instances)
@@ -1319,9 +1373,10 @@ namespace save_format_rules
 
 	// The play time of an old slot image (GAME block +0xd4): found through the hero blocks (the game block follows
 	// the unlocked list and the 22 restore records, whose equipment lists vary). Nothing when the image doesn't parse.
-	inline std::optional<float> old_play_time(const std::uint8_t* data, const std::size_t size)
+	inline std::optional<float> old_play_time(const std::uint8_t* data, const std::size_t size, const native_profile& profile = retail_profile)
 	{
-		const auto heaps = hero_heaps(data, size);
+		const std::size_t head_bytes = profile.item_head, fixed_bytes = profile.instance_head;
+		const auto heaps = hero_heaps(data, size, profile);
 		if (!heaps)
 		{
 			return std::nullopt;
@@ -1329,7 +1384,7 @@ namespace save_format_rules
 		// After the last hero block comes the tag, 600 bytes, the restore tag, the flag, 22 restore records.
 		std::size_t p = old_envelope;
 		// Re-walk: the cheapest is to find the [CHARACTERSUNLOCKED] tag after the last heap.
-		p = heaps->empty() ? old_envelope + tag_size + item_head_size : heaps->back().heap + heap_size;
+		p = heaps->empty() ? old_envelope + tag_size + head_bytes : heaps->back().heap + heap_size;
 		for (; p + tag_size <= size; ++p)
 		{
 			if (data[p] == tag_marker && std::memcmp(data + p + 1, "[CHARACTERSUNLOCKED]", 20) == 0)
@@ -1341,11 +1396,11 @@ namespace save_format_rules
 		const auto need = [&](const std::size_t n) { return p + n <= size; };
 		const auto skip_instance = [&]() -> bool
 		{
-			if (!need(instance_fixed))
+			if (!need(fixed_bytes))
 			{
 				return false;
 			}
-			p += instance_fixed;
+			p += fixed_bytes;
 			for (int list = 0; list < 3; ++list)
 			{
 				if (!need(4))
@@ -1455,9 +1510,10 @@ namespace save_format_rules
 
 	// Walks an old slot image (envelope + payload): every hero block and, when the restore bank's valid byte is set,
 	// every restore record but the reserved record 0. Nothing when the stream doesn't parse.
-	inline std::optional<hero_points_layout> hero_points_records(const std::uint8_t* data, const std::size_t size)
+	inline std::optional<hero_points_layout> hero_points_records(const std::uint8_t* data, const std::size_t size, const native_profile& profile = retail_profile)
 	{
-		const auto heaps = hero_heaps(data, size);
+		const std::size_t head_bytes = profile.item_head, fixed_bytes = profile.instance_head;
+		const auto heaps = hero_heaps(data, size, profile);
 		if (!heaps)
 		{
 			return std::nullopt;
@@ -1466,11 +1522,11 @@ namespace save_format_rules
 		const auto need = [&](const std::size_t n) { return p + n <= size; };
 		const auto skip_instance = [&]() -> bool
 		{
-			if (!need(instance_fixed))
+			if (!need(fixed_bytes))
 			{
 				return false;
 			}
-			p += instance_fixed;
+			p += fixed_bytes;
 			for (int list = 0; list < 3; ++list)
 			{
 				if (!need(4))
@@ -1525,7 +1581,7 @@ namespace save_format_rules
 		if (heaps->empty())
 		{
 			// no hero block: the tag follows the world items; find it as old_play_time does
-			p = old_envelope + tag_size + item_head_size;
+			p = old_envelope + tag_size + head_bytes;
 			while (p + tag_size <= size && !at_tag("[CHARACTERSUNLOCKED]"))
 			{
 				++p;

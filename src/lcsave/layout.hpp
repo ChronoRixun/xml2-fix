@@ -8,6 +8,7 @@
 
 #include "../entity_capacity_layout.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string_view>
 #include <utility>
@@ -31,6 +32,14 @@ namespace lcsave
 	constexpr u32 old_tag = 52;                     // marker, 50 text bytes, marker
 	constexpr u8 old_tag_marker = 0x0a;
 	constexpr u32 old_def_state_pairs = 160;
+	constexpr u32 old_snapshot_objectives = 300;    // retail snapshot objective bytes (index 300 is the never-written 301st byte)
+	// W2 (docs/limits-wave2.md section 3): the model below holds the widest layout's fields; every layout reads and
+	// writes its own widths (oldsave.cpp), retail being the special case
+	constexpr u32 max_definitions = 1024;
+	constexpr u32 max_snapshot_objectives = 1024;
+	constexpr u32 max_zone_string_slots = 0x2000;
+	constexpr u32 max_zone_arena = 0x20000;
+	constexpr u16 world_slot_none = 0xffff;           // the W2 state record's own slot field when it owns no world item
 	constexpr u32 old_talent_entries = 19;
 	constexpr u32 old_unlocked_slots = 298;
 	constexpr u32 old_restore_records = 22;
@@ -53,20 +62,22 @@ namespace lcsave
 	constexpr u8 power_usable = 1;          // bit 0 of a power slot's flag byte; also the byte of a slot the new file omits
 
 #pragma pack(push, 1)
-	// items section head (old 1.4) up to the carried-item count
+	// items section head (old 1.4) up to the carried-item count. A model, not a wire struct: the count is a byte
+	// (RETAIL / E10A2) or a u16 (W2), the pairs are the layout's `definitions`; pairs past them are 0.
 	struct OldItemHead
 	{
-		u8 def_count;
-		u8 def_state[old_def_state_pairs * 2];         // pairs {quantity, flag} by definition index
+		u16 def_count;
+		u8 def_state[max_definitions * 2];             // pairs {quantity, flag} by definition index
 		u32 tech_bits;
 		u32 health_items;
 		u32 energy_items;
 		u32 key_counts[6];                             // KEY1-3, KEYCARD1-3 by definition name
 	};
-	// item instance fixed head (old 1.5); then three lists of {u16 record, u32 value} with u32 counts
+	// item instance fixed head (old 1.5); then three lists of {u16 record, u32 value} with u32 counts. A model: the
+	// definition index is a byte (RETAIL / E10A2, 5-byte head) or a u16 (W2, 6-byte head).
 	struct OldInstanceHead
 	{
-		u8 definition;
+		u16 definition;
 		u8 name_a;                                     // instance+0x2c, 0xff = none
 		u8 name_b;                                     // instance+0x2d, 0xff = none
 		u8 special;                                    // instance+0x2f, 0xff = none
@@ -168,7 +179,8 @@ namespace lcsave
 		u8 flags_da;
 		u8 pad_db;
 	};
-	// mission snapshot (old 1.9)
+	// mission snapshot (old 1.9). A model: RETAIL / E10A2 carry 300 objective bytes, the 301st byte and a u16 pad
+	// (0x26c); W2 carries 1024 objective bytes and 3 pad bytes (0x540; the retail 301st byte is W2's objective 300).
 	struct OldSnapshot
 	{
 		char zone[0x40];
@@ -176,9 +188,10 @@ namespace lcsave
 		u32 pad_a0;
 		char seat_name[4][0x20];
 		u8 pad_124;
-		u8 objectives[300];
-		u8 objective_301;
-		u16 pad_252;
+		u8 objectives[max_snapshot_objectives];
+		u8 objective_301;                              // RETAIL / E10A2 only
+		u16 pad_252;                                   // RETAIL / E10A2 only
+		u8 pad_525[3];                                 // W2 only
 		f32 anchor_pos[3];
 		f32 anchor_orient[3];
 	};
@@ -212,15 +225,10 @@ namespace lcsave
 		u32 unlocked[16];                              // 5 x 3 dwords used + 1 pad dword each
 		u32 seen[16];
 	};
-	// zone string table (old 1.12)
-	struct OldZoneStrings
-	{
-		u32 generation;
-		u32 offsets[old_zone_string_slots];
-		u32 used;
-		u8 arena[old_zone_arena];
-	};
-	// entity state record (old 1.13)
+	// entity state record (old 1.13). A model: RETAIL / E10A2 records are 0x18 bytes with 3 x i16 positions at +0x12
+	// and a world-item slot in payload byte 0 (CInventoryEntity); W2 records are 0x20 bytes with a u16 world-item slot
+	// at +0x12 (0xffff = none, payload byte 0 then 0) and 3 x f32 at +0x14. The model keeps the positions as floats
+	// (an i16 is exact in an f32) and the W2 slot field; `world_slot` is 0xffff for a record read with an older layout.
 	struct OldStateRecord
 	{
 		u32 def_name;
@@ -228,7 +236,8 @@ namespace lcsave
 		u8 payload[8];
 		u8 flags_a;
 		u8 flags_b;
-		i16 position[3];
+		u16 world_slot = world_slot_none;
+		f32 position[3];
 	};
 	// profile (old 1.15)
 	struct OldHighScore
@@ -300,6 +309,22 @@ namespace lcsave
 	};
 #pragma pack(pop)
 
+	// zone string table (old 1.12): u32 generation, the slot offsets, u32 used, the arena. A model sized by the native
+	// layout it was read with / is written for (RETAIL / E10A2: 0x800 slots, 0x3800 arena = 0x5808 bytes; W2: 0x2000
+	// slots, 0x20000 arena = 0x28008 bytes); a table of one layout is never written as another.
+	struct OldZoneStrings
+	{
+		u32 generation = 0;
+		std::vector<u32> offsets;
+		u32 used = 0;
+		std::vector<u8> arena;
+
+		OldZoneStrings() : OldZoneStrings(old_zone_string_slots, old_zone_arena) {}
+		OldZoneStrings(u32 slots, u32 arena_bytes) : offsets(slots, 0), arena(arena_bytes, 0) {}
+		void clear() { generation = 0; used = 0; std::fill(offsets.begin(), offsets.end(), 0u); std::fill(arena.begin(), arena.end(), u8(0)); }
+		u32 bytes() const { return 8 + 4 * static_cast<u32>(offsets.size()) + static_cast<u32>(arena.size()); }
+	};
+
 	// zone record (old 1.13): u32 name handle, the state records, then this tail. The arrays are sized by the
 	// native layout the record was read with / is written for (NativeLayout below; retail: 256 / 300 / 768); a
 	// record of one layout is never written as another. Read and written field by field (oldsave.cpp).
@@ -331,13 +356,11 @@ namespace lcsave
 	constexpr u8 kind_campaign = 1, kind_profile = 2, kind_transfer = 3;
 	constexpr u32 optional_keys_present = 1;
 
-	static_assert(sizeof(OldItemHead) == 1 + 320 + 12 + 24);
-	static_assert(sizeof(OldInstanceHead) == 5 && sizeof(OldEnhElement) == 6);
+	static_assert(sizeof(OldEnhElement) == 6);
 	static_assert(sizeof(OldAttrScalars) == 0x18 && sizeof(OldTalentEntry) == 8 && sizeof(OldTalentHeapTail) == 8);
 	static_assert(sizeof(OldEquipTail) == 0x1c && sizeof(OldPowers) == 85 && sizeof(OldCostume) == 5);
-	static_assert(sizeof(OldGameBlock) == 0xdc && sizeof(OldSnapshot) == 0x26c && sizeof(OldSideTail) == 8);
+	static_assert(sizeof(OldGameBlock) == 0xdc && sizeof(OldSideTail) == 8);
 	static_assert(sizeof(OldDrCourse) == old_dr_course_bytes && sizeof(OldReview) == 128);
-	static_assert(sizeof(OldZoneStrings) == 0x5808 && sizeof(OldStateRecord) == 0x18);
 	static_assert(sizeof(OldProfileHead) + old_high_scores * sizeof(OldHighScore) + sizeof(OldProfileTail) == old_profile_payload);
 	static_assert(sizeof(OldScriptVar) == 16);
 	static_assert(sizeof(NewHeader) == new_header_size && sizeof(NewSectionEntry) == new_section_entry_size);
@@ -354,17 +377,45 @@ namespace lcsave
 	// manager 0x80c24, payload 0x200000, usable end 0x200000, wrapper 0x200078, no origin trailer). The zone string
 	// table (0x800 slots, 0x3800 arena) and the fog (0x34c) are the same in both (layouts.json changes neither).
 	constexpr u32 feature_entity_layout_contiguous10 = 1;      // header required_features bit 0: typed ids are ten-bit tokens
-	constexpr u32 known_required_features = feature_entity_layout_contiguous10;   // every required bit this code implements
+	constexpr u32 feature_native_w2 = 2;                       // bit 1 NATIVE_W2: the file cannot be applied by a pre-W2 build (W2 section 7)
+	// amended 10-27 by the coordinator: bit 2 because bit 1 is NATIVE_W2
+	constexpr u32 feature_actor_capacity96 = 4;
+	constexpr u32 known_required_features = feature_entity_layout_contiguous10 | feature_native_w2
+#ifdef XML2_E4_CORE
+	    | feature_actor_capacity96
+#endif
+	    ; // only a build implementing Stage 2 recognizes its feature bit
 	constexpr u32 typed_generation_max = entity_capacity_layout::generation_max;   // 0x3fff: the largest minted generation
 	constexpr u32 transfer_chunk = 200;                        // the largest chunk of a 47/48 campaign transfer
-	constexpr u32 native_manager_records = 5;
-	constexpr u32 native_mission_bytes = sizeof(OldSnapshot);  // 0x26c
+	constexpr u32 native_manager_records = 5;                  // RETAIL / E10A2 (W2: 8, the descriptor's record_count)
+	constexpr u32 native_mission_bytes = 0x26c;                // RETAIL / E10A2 snapshot (W2: 0x540, the descriptor's snapshot_size)
 	constexpr u32 native_wrapper_slack = 0x78;                 // the wrapper the game allocates: payload + description/cursor words
+
+	// The structural parameters of one layout (docs/limits-wave2.md section 3.1). make_native_layout computes the
+	// record, manager and stream offsets from them.
+	struct NativeShape
+	{
+		const char* id;
+		u32 feature_bits, index_bits;
+		u32 states, ordinals, dynamic, smart;
+		u32 payload;
+		u32 record_count = native_manager_records;
+		u32 state_record_size = 0x18;
+		bool float_positions = false;          // W2: 3 x f32 at record +0x14; else 3 x i16 at +0x12
+		u32 zone_string_slots = old_zone_string_slots, zone_arena = old_zone_arena;
+		u32 definitions = old_def_state_pairs, definition_index_bytes = 1, def_count_bytes = 1;
+		u32 enhancement_records = 512, attached_enhancements = 375;
+		u32 instances = 256, world_slots = 150, world_slot_bytes = 1;
+		u32 objectives = 300, objectives_per_act = 75, objective_files = 25;
+		u32 snapshot_objectives = old_snapshot_objectives, snapshot_size = native_mission_bytes;
+		u32 talent_multiplier = 100, talent_pool = 100;
+		u32 loader_placements = 1024;
+	};
 
 	struct NativeLayout
 	{
-		const char* id;             // "RETAIL" / "E10A2"
-		u32 feature_bits;           // the required_features marker this layout writes / accepts (0 or bit 0)
+		const char* id;             // "RETAIL" / "E10A2" / "W2"
+		u32 feature_bits;           // the required_features bits this layout's writer may set / its reader accepts (0, bit 0, bits 0-1)
 		u32 index_bits;             // 8 retail, 10 contiguous
 		u32 states, ordinals, dynamic, smart;
 		u32 record_count;
@@ -376,8 +427,23 @@ namespace lcsave
 		u32 payload, usable_end, origin_trailer_bytes, wrapper, envelope, slot_size;
 		u32 zone_string_slots, zone_arena, fog_bytes;
 		u32 transfer_chunks;
+		// W2 (docs/limits-wave2.md 3.1): the stream structures' widths and the engine tables they index
+		u32 state_record_size;      // 0x18 / 0x20
+		bool float_positions;       // positions 3 x f32 at +0x14 (W2) or 3 x i16 at +0x12
+		u32 world_slot_bytes;       // 1: the slot is payload byte 0; 2: its own u16 at +0x12 (0xffff none)
+		u32 definitions, definition_index_bytes, def_count_bytes;
+		u32 enhancement_records, attached_enhancements;
+		u32 instances, world_slots;
+		u32 objectives, objectives_per_act, objective_files;
+		u32 snapshot_objectives, snapshot_size, side_block;   // side_block: 2 frames + pad + count
+		u32 talent_multiplier, talent_pool;
+		u32 zone_strings_size;      // the saved table: 8 + 4 x slots + arena
+		u32 item_head_size;         // count, pairs, tech / health / energy, 6 key counts
+		u32 instance_fixed;         // the instance head before its three lists
+		u32 loader_placements;      // the zone loader's placement arrays (runtime, not saved; census C2)
 
 		constexpr bool contiguous() const { return (feature_bits & feature_entity_layout_contiguous10) != 0; }
+		constexpr bool w2() const { return (feature_bits & feature_native_w2) != 0; }
 		// (offset, length) of transfer chunk `index` of the payload; the last chunk is short; {0, 0} outside
 		constexpr std::pair<u32, u32> chunk_bounds(u32 index) const
 		{
@@ -386,19 +452,22 @@ namespace lcsave
 			return {off, payload - off < transfer_chunk ? payload - off : transfer_chunk};
 		}
 		constexpr u32 record_offset(u32 index) const { return index < record_count ? records_offset + index * record_size : 0; }
+		// the engine talent id of a talent-file position: owner_plus1 = stats index + 1 (0 for a shared talent)
+		constexpr u32 talent_id(u32 owner_plus1, u32 position) const { return owner_plus1 * talent_multiplier + position; }
 	};
 
-	constexpr NativeLayout make_native_layout(const char* id, u32 feature_bits, u32 index_bits, u32 states, u32 ordinals, u32 dynamic, u32 smart, u32 payload)
+	constexpr NativeLayout make_native_layout(const NativeShape& s)
 	{
 		NativeLayout n{};
-		n.id = id; n.feature_bits = feature_bits; n.index_bits = index_bits;
-		n.states = states; n.ordinals = ordinals; n.dynamic = dynamic; n.smart = smart; n.record_count = native_manager_records;
-		u32 p = 4 + states * static_cast<u32>(sizeof(OldStateRecord)) + 4;   // pad word after the states
+		n.id = s.id; n.feature_bits = s.feature_bits; n.index_bits = s.index_bits;
+		n.states = s.states; n.ordinals = s.ordinals; n.dynamic = s.dynamic; n.smart = s.smart; n.record_count = s.record_count;
+		n.state_record_size = s.state_record_size; n.float_positions = s.float_positions; n.world_slot_bytes = s.world_slot_bytes;
+		u32 p = 4 + s.states * s.state_record_size + 4;              // pad word after the states
 		n.state_count = p; p += 4;
-		n.ordinals_offset = p; p += 2 * ordinals + 4;
-		n.dynamic_offset = p; p += 2 * dynamic + 4;
+		n.ordinals_offset = p; p += 2 * s.ordinals + 4;
+		n.dynamic_offset = p; p += 2 * s.dynamic + 4;
 		n.dynamic_count = p; p += 4;
-		n.smart_offset = p; p += 2 * smart + 4;
+		n.smart_offset = p; p += 2 * s.smart + 4;
 		n.smart_count = p; p += 4;
 		n.fog = p; p += old_fog_bytes;
 		n.conversation = p; p += 5 * 4;
@@ -406,25 +475,79 @@ namespace lcsave
 		n.flag = p; p += 4;                                                   // flag byte + 3 pad bytes
 		n.record_size = p;
 		n.records_offset = 0;
-		u32 m = native_manager_records * p + 4;
+		u32 m = s.record_count * p + 4;
 		n.manager_count = m; m += 4;
-		n.mission = m; m += native_mission_bytes;
+		n.mission = m; m += s.snapshot_size;
 		n.manager_flag = m; m += 4;
 		n.manager_time = m; m += 4;
 		n.manager_size = m;
-		n.payload = payload; n.usable_end = payload; n.origin_trailer_bytes = 0; n.wrapper = payload + native_wrapper_slack;
-		n.envelope = old_envelope; n.slot_size = old_envelope + payload;
-		n.zone_string_slots = old_zone_string_slots; n.zone_arena = old_zone_arena; n.fog_bytes = old_fog_bytes;
-		n.transfer_chunks = (payload + transfer_chunk - 1) / transfer_chunk;
+		n.payload = s.payload; n.usable_end = s.payload; n.origin_trailer_bytes = 0; n.wrapper = s.payload + native_wrapper_slack;
+		n.envelope = old_envelope; n.slot_size = old_envelope + s.payload;
+		n.zone_string_slots = s.zone_string_slots; n.zone_arena = s.zone_arena; n.fog_bytes = old_fog_bytes;
+		n.transfer_chunks = (s.payload + transfer_chunk - 1) / transfer_chunk;
+		n.definitions = s.definitions; n.definition_index_bytes = s.definition_index_bytes; n.def_count_bytes = s.def_count_bytes;
+		n.enhancement_records = s.enhancement_records; n.attached_enhancements = s.attached_enhancements;
+		n.instances = s.instances; n.world_slots = s.world_slots;
+		n.objectives = s.objectives; n.objectives_per_act = s.objectives_per_act; n.objective_files = s.objective_files;
+		n.snapshot_objectives = s.snapshot_objectives; n.snapshot_size = s.snapshot_size; n.side_block = 2 * s.snapshot_size + 8;
+		n.talent_multiplier = s.talent_multiplier; n.talent_pool = s.talent_pool;
+		n.zone_strings_size = 8 + 4 * s.zone_string_slots + s.zone_arena;
+		n.item_head_size = s.def_count_bytes + 2 * s.definitions + 12 + 24;
+		n.instance_fixed = s.definition_index_bytes + 4;
+		n.loader_placements = s.loader_placements;
 		return n;
+	}
+	// the positional form (the RETAIL / E10A2 shapes: every W2 field at its retail value)
+	constexpr NativeLayout make_native_layout(const char* id, u32 feature_bits, u32 index_bits, u32 states, u32 ordinals, u32 dynamic, u32 smart, u32 payload)
+	{
+		NativeShape s{id, feature_bits, index_bits, states, ordinals, dynamic, smart, payload};
+		return make_native_layout(s);
 	}
 	constexpr NativeLayout retail_layout = make_native_layout("RETAIL", 0, 8, old_zone_states, old_zone_ordinals, old_zone_dynamic, old_zone_smart, old_payload);
 	constexpr NativeLayout e10a2_layout = make_native_layout("E10A2", feature_entity_layout_contiguous10, 10, 4096, 1024, 1024, 1024, 0x200000);
-	// the descriptor by id ("RETAIL", "E10A2"); nullptr otherwise
+	// W2 (docs/limits-wave2.md section 3, frozen): 8 zone records of 4096 / 4096 / 2048 / 2048, 0x20-byte state records
+	// with f32 positions and a u16 world-item slot, u16 definition index / count with 1024 pairs, 1024-byte snapshot
+	// objectives (0x540), 8192-slot / 0x20000-byte zone strings, hero-talent multiplier 200, the pools of section 2
+	constexpr NativeShape w2_shape()
+	{
+		NativeShape s{"W2", feature_entity_layout_contiguous10 | feature_native_w2, 10, 4096, 4096, 2048, 2048, 0x200000};
+		s.record_count = 8; s.state_record_size = 0x20; s.float_positions = true;
+		s.zone_string_slots = 0x2000; s.zone_arena = 0x20000;
+		s.definitions = 1024; s.definition_index_bytes = 2; s.def_count_bytes = 2;
+		s.enhancement_records = 4096; s.attached_enhancements = 4096;
+		s.instances = 1024; s.world_slots = 1024; s.world_slot_bytes = 2;
+		s.objectives = 1024; s.objectives_per_act = 127; s.objective_files = 64;
+		s.snapshot_objectives = max_snapshot_objectives; s.snapshot_size = 0x540;
+		s.talent_multiplier = 200; s.talent_pool = 256;
+		return s;
+	}
+	constexpr NativeLayout w2_layout = make_native_layout(w2_shape());
+	// the descriptor by id ("RETAIL", "E10A2", "W2"); nullptr otherwise
 	constexpr const NativeLayout* native_layout(std::string_view id)
 	{
-		return id == "RETAIL" ? &retail_layout : id == "E10A2" ? &e10a2_layout : nullptr;
+		return id == "RETAIL" ? &retail_layout : id == "E10A2" ? &e10a2_layout : id == "W2" ? &w2_layout : nullptr;
 	}
+
+	// W2 sections 3.6 / 3.7 / 3.8 against the design's numbers
+	static_assert(w2_layout.state_count == 0x20008 && w2_layout.ordinals_offset == 0x2000c && w2_layout.dynamic_offset == 0x22010 &&
+	              w2_layout.dynamic_count == 0x23014 && w2_layout.smart_offset == 0x23018 && w2_layout.smart_count == 0x2401c &&
+	              w2_layout.fog == 0x24020 && w2_layout.conversation == 0x2436c && w2_layout.time_stamp == 0x24380 &&
+	              w2_layout.flag == 0x24384 && w2_layout.record_size == 0x24388 && w2_layout.record_size == 148360);
+	static_assert(w2_layout.manager_count == 0x121c44 && w2_layout.mission == 0x121c48 && w2_layout.manager_flag == 0x122188 &&
+	              w2_layout.manager_time == 0x12218c && w2_layout.manager_size == 0x122190 && w2_layout.manager_size == 1188240);
+	static_assert(w2_layout.payload == 0x200000 && w2_layout.usable_end == 0x200000 && w2_layout.wrapper == 0x200078 &&
+	              w2_layout.transfer_chunks == e10a2_layout.transfer_chunks && w2_layout.side_block == 0xa88 && w2_layout.snapshot_size == 0x540);
+	static_assert(w2_layout.zone_strings_size == 0x28008 && retail_layout.zone_strings_size == 0x5808 && e10a2_layout.zone_strings_size == 0x5808);
+	static_assert(w2_layout.item_head_size == 0x826 && retail_layout.item_head_size == 0x165 && e10a2_layout.item_head_size == 0x165);
+	static_assert(w2_layout.instance_fixed == 6 && retail_layout.instance_fixed == 5 && e10a2_layout.instance_fixed == 5);
+	static_assert(retail_layout.side_block == 0x4e0 && e10a2_layout.side_block == 0x4e0);
+	// the snapshot model holds the widest layout: 0x125 + 1024 objective bytes + 3 pad = 0x528, then 6 floats = 0x540
+	static_assert(0x125 + max_snapshot_objectives + 3 + 24 == w2_layout.snapshot_size && 0x125 + 300 + 1 + 2 + 24 == native_mission_bytes);
+	// the talent id space (section 4.7): position < M, the largest id (296 + 2) x M - 1 fits the saved u16, M in 101..219
+	static_assert(w2_layout.talent_multiplier >= 101 && w2_layout.talent_multiplier <= 219 && 298u * w2_layout.talent_multiplier - 1 <= 0xffff);
+	// the bounded stream (section 3.8): every count at its W2 ceiling fits the unchanged payload
+	static_assert(10 * old_tag + 2086 + 8 + 1024 * (6 + 12 + 4) + 4096 * 6 + 21 * 303 + 5287 + 4974 + (3 * 0x540 + 8) + (4 + 0x2000 * 4 + 4 + 0x20000) +
+	              (4 + 8 * 0x24388) == 1421114 && 1421114 < 0x200000);
 
 	// the descriptors against round6/layouts.json "native_save" (E10A2) and its "retail_import" block (RETAIL)
 	static_assert(retail_layout.state_count == 18440 && retail_layout.ordinals_offset == 18444 && retail_layout.dynamic_offset == 18960 &&

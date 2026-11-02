@@ -32,7 +32,7 @@ namespace broker_tls
 		bool credentials_valid_ = false, context_valid_ = false, ready_ = false;
 		void reset();
 	public:
-		client() = default;
+		client() { SecInvalidateHandle(&context_); }
 		~client();
 		client(const client&) = delete;
 		client& operator=(const client&) = delete;

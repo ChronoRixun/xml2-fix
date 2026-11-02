@@ -30,6 +30,23 @@ namespace save_core_rules
  constexpr std::uint32_t capture_incomplete=0x00000001;
  constexpr std::uint32_t capture_unobserved=0x00000002;
  constexpr bool ordinal_fits(std::uint32_t ordinal,std::uint32_t ordinals=256){ return ordinal>=1 && ordinal<=ordinals; }
+ // The restore hook freezes a zone record's ordinal map (layout ordinals x u16) into a fixed DLL static before it
+ // remaps any slot. The map holds the largest installed layout's ordinals: sized for E10A2 (1024) it took W2's
+ // 4096-entry copy and overran 0x1800 bytes of the neighbouring statics (the card message pointer, the ledger, the
+ // zone_strings table) during every zone reconstruction. A layout larger than the map is refused, never copied.
+#ifdef XML2_TEST_LEGACY_RESTORE_MAP
+ inline constexpr std::size_t restore_map_entries=1024; // red test only: 651011f's E10A2-sized map, unbounded copy
+ inline constexpr bool restore_map_bounded=false;
+#else
+ inline constexpr std::size_t restore_map_entries=std::max({save_format_rules::retail_profile.ordinals,
+  save_format_rules::e10a2_profile.ordinals,save_format_rules::w2_profile.ordinals});
+ inline constexpr bool restore_map_bounded=true;
+#endif
+ template<class Copy> bool freeze_restore_map(std::uint16_t* map,std::size_t capacity,const void* source,std::uint32_t ordinals,Copy&& copy)
+ {
+  if(restore_map_bounded && ordinals>capacity) return false;
+  return copy(map,source,static_cast<std::size_t>(ordinals)*2);
+ }
  constexpr bool capacity_fits(std::uint32_t demand,std::uint32_t live,std::uint32_t cap)
  { return live<=cap && demand<=cap-live; }
  inline std::string folded(std::string text)
@@ -130,7 +147,7 @@ namespace save_core_rules
  }};
  // The compare each capture bound bridge replays under the installed native profile. Every immediate and every record
  // displacement is the profile's (deviation 13, plan section 10): the retail bytes are the guard, never the replay.
- //   0x41a427 cmp ecx,0x3800              zone string arena (not part of the entity layout: retail)
+ //   0x41a427 cmp ecx,zone_arena          zone string arena of the installed profile
  //   0x466659 cmp ecx,states              ECX = the record's state count
  //   0x46668a cmp eax,dynamic             EAX = the dynamic list count
  //   0x4666e7 cmp esi,states              ESI = the record's state count again (NOT the smart bound)
@@ -143,6 +160,7 @@ namespace save_core_rules
   auto put=[&](std::size_t at,std::uint32_t v){std::memcpy(out.data()+at,&v,4);};
   switch(site.va)
   {
+  case 0x41a427: put(2,p.zone_arena); break;
   case 0x466659: put(2,p.states); break;
   case 0x46668a: put(1,p.dynamic); break;
   case 0x4666e7: put(2,p.states); break;

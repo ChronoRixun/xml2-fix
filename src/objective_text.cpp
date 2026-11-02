@@ -17,7 +17,16 @@ namespace objective_text
 
 		// The allocation callback runs before attributes, including on act reload
 		// and save restoration. Clear just this slot: an act can load several files.
-		void __cdecl reset_slot(unsigned index) noexcept { table.reset(static_cast<std::uint8_t>(index)); }
+		void __cdecl reset_slot(unsigned index) noexcept { table.reset(index); }
+
+		// the global index of a loaded objective record and the state array, from the installed layout (W2-L-10)
+		std::uint32_t record_index(const std::uint8_t* record)
+		{
+			const auto& layout = save_layout_view::objectives();
+			const auto* pool = layout.pool_address ? reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(layout.pool_address)) : nullptr;
+			if (layout.wide_index && !pool) return 0xffff;
+			return save_layout_view::objective_index(layout, record, pool);
+		}
 
 		std::string_view bounded(const char* text, std::size_t limit) noexcept
 		{
@@ -33,7 +42,7 @@ namespace objective_text
 			{
 				if (same_field(bounded(key, 32), "updatedescription"))
 				{
-					const auto index = *(static_cast<std::uint8_t*>(record) + index_offset);
+					const auto index = record_index(static_cast<const std::uint8_t*>(record));
 					table.attribute(index, "updatedescription", bounded(value, text_capacity - 1));
 					return;
 				}
@@ -47,8 +56,10 @@ namespace objective_text
 			const auto* original = reinterpret_cast<const char*>(record + description_offset);
 			__try
 			{
-				const auto index = record[index_offset];
-				const auto state = reinterpret_cast<const std::uint8_t*>(state_bytes)[index];
+				const auto& layout = save_layout_view::objectives();
+				const auto index = record_index(record);
+				if (index >= layout.objectives) return original;
+				const auto state = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(layout.state_bytes))[index];
 				return table.select(index, state, original);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return original; }
@@ -119,45 +130,49 @@ namespace objective_text
 		}
 	}
 
+	namespace
+	{
+		bool build(patch_transaction::contribution& c, HMODULE game, bool w2)
+		{
+			if (!ini::flag(L"Game", L"ObjectiveDescriptions", false)) return false;
+			if (reinterpret_cast<std::uintptr_t>(game) != 0x400000 || !retail_bytes())
+			{
+				logger::write("objective descriptions: unsupported executable; original descriptions retained");
+				return false;
+			}
+			const auto parser = branch<5>(attribute_call, reinterpret_cast<DWORD>(&attribute_hook), true);
+			const auto allocation = branch<6>(allocate_site, reinterpret_cast<DWORD>(&allocate_stub));
+			const auto journal = branch<6>(journal_site, reinterpret_cast<DWORD>(&journal_stub));
+			const auto primary = branch<12>(primary_site, reinterpret_cast<DWORD>(&primary_stub));
+			c.owner = "objective_text";
+			// every guard of the module; the four hooked sites are guarded on exactly the bytes they overwrite, so a
+			// contributor that also expects the allocation site 0x489a01 (the W2 pool relocation) unions with this one
+			for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), "objective descriptions"});
+			c.writes.push_back({attribute_call, {parser.begin(), parser.end()}, "objective descriptions: attribute parser"});
+			if (!w2) c.writes.push_back({allocate_site, {allocation.begin(), allocation.end()}, "objective descriptions: allocation"});
+			c.writes.push_back({journal_site, {journal.begin(), journal.end()}, "objective descriptions: journal"});
+			c.writes.push_back({primary_site, {primary.begin(), primary.end()}, "objective descriptions: primary"});
+			c.publish = [] { logger::write("objective descriptions: enabled; journal completion text follows the saved completion bit"); };
+			c.abandon = [] { logger::write("objective descriptions: the transaction did not commit; original descriptions retained"); };
+			return true;
+		}
+	}
+
+	bool contribute(patch_transaction::transaction& t, HMODULE game)
+	{ return contribute(t, game, false); }
+	void reset(unsigned index) noexcept { reset_slot(index); }
+	bool contribute(patch_transaction::transaction& t, HMODULE game, bool w2)
+	{
+		patch_transaction::contribution c;
+		return build(c, game, w2) && t.add(std::move(c));
+	}
+
 	void install(HMODULE game)
 	{
-		if (!ini::flag(L"Game", L"ObjectiveDescriptions", false)) return;
-		if (reinterpret_cast<std::uintptr_t>(game) != 0x400000 || !retail_bytes())
-		{
-			logger::write("objective descriptions: unsupported executable; original descriptions retained");
-			return;
-		}
-		const auto parser = branch<5>(attribute_call, reinterpret_cast<DWORD>(&attribute_hook), true);
-		const auto allocation = branch<6>(allocate_site, reinterpret_cast<DWORD>(&allocate_stub));
-		const auto journal = branch<6>(journal_site, reinterpret_cast<DWORD>(&journal_stub));
-		const auto primary = branch<12>(primary_site, reinterpret_cast<DWORD>(&primary_stub));
-		struct patch { DWORD site; const std::uint8_t* bytes; std::size_t size; };
-		patch patches[] = {{attribute_call, parser.data(), parser.size()},
-		                   {allocate_site, allocation.data(), allocation.size()},
-		                   {journal_site, journal.data(), journal.size()},
-		                   {primary_site, primary.data(), primary.size()}};
-		// Acquire all pages before any hook is written. Allocation and parser
-		// share one page; primary and secondary journal loops occupy two others.
-		const DWORD pages[] = {attribute_call & ~DWORD(0xfff),
-		                       journal_site & ~DWORD(0xfff), primary_site & ~DWORD(0xfff)};
-		DWORD protections[3]{};
-		DWORD ignored = 0;
-		for (unsigned i = 0; i < 3; ++i)
-		{
-			if (VirtualProtect(reinterpret_cast<void*>(pages[i]), 0x1000,
-			                   PAGE_EXECUTE_READWRITE, &protections[i])) continue;
-			for (unsigned j = 0; j < i; ++j)
-				VirtualProtect(reinterpret_cast<void*>(pages[j]), 0x1000, protections[j], &ignored);
-			logger::write("objective descriptions: could not protect all hook pages; disabled");
-			return;
-		}
-		for (const auto& p : patches)
-		{
-			std::memcpy(reinterpret_cast<void*>(p.site), p.bytes, p.size);
-			FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(p.site), p.size);
-		}
-		for (unsigned i = 0; i < 3; ++i)
-			VirtualProtect(reinterpret_cast<void*>(pages[i]), 0x1000, protections[i], &ignored);
-		logger::write("objective descriptions: enabled; journal completion text follows the saved completion bit");
+		patch_transaction::transaction own;
+		if (!contribute(own, game)) return;
+		const auto outcome = own.commit();
+		if (outcome != patch_transaction::outcome::committed)
+			logger::write("objective descriptions: %s (%s); original descriptions retained", patch_transaction::name(outcome), own.report().c_str());
 	}
 }

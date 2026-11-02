@@ -474,7 +474,7 @@ namespace lcsave::detail
 				flags.push(I(s.flags_a));
 				flags.push(I(s.flags_b));
 				Value pos = L();
-				for (const auto p : s.position) pos.push(I(p));
+				for (const auto p : s.position) pos.push(I(static_cast<std::int64_t>(p)));   // a retail file: i16 positions
 				states.push(Value::dict({{"list", I(kind)}, {"ordinal", I(ordinal)}, {"definition", Tx(zone_string(strings, s.def_name))},
 					{"instance", Tx(zone_string(strings, s.inst_name))}, {"flags", flags}, {"position", pos},
 					{"payload", Tx(hex(s.payload, 8))}}));

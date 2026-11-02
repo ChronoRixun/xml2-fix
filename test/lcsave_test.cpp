@@ -758,14 +758,17 @@ static std::string tables_json(const Tables& tables)
 }
 
 extern int vector_failures;
+int run_rebuilt_corpus(const fs::path&, const fs::path&, const fs::path&, bool);
 void run_vectors(const fs::path& scratch);
 void run_fuzz(const fs::path& scratch, int iterations, const std::vector<std::vector<std::uint8_t>>& extra_old);
 void fuzz_core(const Tables& tables, const std::vector<std::vector<std::uint8_t>>& olds, int iterations, const char* label);
 
 int main(int argc, char** argv)
 {
+	std::setvbuf(stdout, nullptr, _IONBF, 0);   // progress survives a crash
 	std::map<std::string, std::string> args;
 	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
+	if (args.count("--rebuilt")) return run_rebuilt_corpus(args["--rebuilt"], args["--data"], args["--out"], args["--enabled"] == "1");
 	if (args.count("--oracle-negative"))
 	{
 		const bool accepted = oracle_accepts_wrong_associations();

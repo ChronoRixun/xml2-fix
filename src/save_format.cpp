@@ -1,5 +1,8 @@
 #define _CRT_RAND_S
+#include "e4_observe.hpp"
 #include "save_format.hpp"
+#include "item_capacity.hpp"
+#include "native_save_layout.hpp"
 #include "patch_transaction.hpp"
 
 #include "save_format_rules.hpp"
@@ -60,7 +63,10 @@ namespace save_format
 
 		bool enabled = false;         // [Save] Format=lc and every guard matched
 		native_profile layout_profile = retail_profile; // chosen before the contribution; immutable after publication
+		native_profile published_profile = retail_profile;
+		bool layout_vetoed = false;   // use_native_profile refused a profile (unknown or mismatching descriptor)
 		const lcsave::NativeLayout* native_layout = &lcsave::retail_layout; // the lcsave descriptor matching layout_profile
+		lcsave::NativeLayout actor_native_layout{};
 		lcsave::TypedRegistry typed_registry;        // the build's typed entity-id registry, when verified against the scripts
 		bool typed_registry_verified = false;
 		std::string typed_registry_reason;             // why legacy (feature-0) loads refuse when it is not
@@ -98,7 +104,11 @@ namespace save_format
 		std::uint8_t campaign_origin = 0;
 		lcsave::ZoneCaptureMetadata* capturing = nullptr;
 		void* restore_record = nullptr;
-		std::array<std::uint16_t,1024> original_restore_map{}; // layout_profile.ordinals entries in use
+		// The frozen ordinal map: every installed layout's ordinals (W2 4096). 1024 entries took W2's 8 KB copy into the
+		// statics after it (game_message, the ledger, zone_strings) at every zone reconstruction (save_core_rules.hpp).
+		std::array<std::uint16_t,save_core_rules::restore_map_entries> original_restore_map{};
+		static_assert(save_core_rules::restore_map_bounded && original_restore_map.size()>=save_format_rules::w2_profile.ordinals &&
+		              original_restore_map.size()>=save_format_rules::e10a2_profile.ordinals && original_restore_map.size()>=save_format_rules::retail_profile.ordinals);
 		std::atomic<unsigned> numbered_seen{0}, captures_seen{0}, capture_failures{0}, identity_resets{0}, resets_seen{0}, native_loads_completed{0};
 		using capture_t = bool(__fastcall*)(void*, void*, const char*, int, float);
 		using native_load_t = void(__fastcall*)(void*, void*, void*, int);
@@ -628,6 +638,11 @@ namespace save_format
 				fail_closed("the save tables of this build don't verify: " + error);
 				return;
 			}
+			if (native_layout->w2() && !lcsave::validate_talent_positions(tables, *native_layout, error))
+			{
+				fail_closed("the build's talent positions do not fit W2: " + error);
+				return;
+			}
 			// Prepare content identity before the front end can enter an online session.
 			// Captures and overwrite preflight use a nonblocking change check, never a tree scan.
 			const auto digest_start = GetTickCount64();
@@ -711,7 +726,7 @@ namespace save_format
 			std::string talent_error;
 			if (!lcsave::missing_talents(image, tables, adds, talent_error, *native_layout)) return false;
 			if (adds.empty()) return true;
-			const auto heaps = hero_heaps(image.data(), image.size());
+			const auto heaps = hero_heaps(image.data(), image.size(), layout_profile);
 			if (!heaps)
 			{
 				logger::write("save format: the stream's hero blocks don't parse - no talent added");
@@ -849,7 +864,7 @@ namespace save_format
 				              static_cast<unsigned long>(optional_features));
 				return true;
 			}
-			const auto layout = hero_points_records(image.data(), image.size());
+			const auto layout = hero_points_records(image.data(), image.size(), layout_profile);
 			if (!layout)
 			{
 				logger::write("save format: class growth: the stream's hero records don't parse");
@@ -909,7 +924,7 @@ namespace save_format
 				}
 				return true;
 			}
-			const auto layout = hero_points_records(image.data(), image.size());
+			const auto layout = hero_points_records(image.data(), image.size(), layout_profile);
 			if (!layout)
 			{
 				logger::write("save format: fifth-level catch-up: the stream's hero records don't parse");
@@ -981,14 +996,20 @@ namespace save_format
 			return {}; // never label a truncated name as verified
 		}
 
+		// the live zone-string table (retail object at 0xa26c30): its slot count, arena and field offsets are the installed
+		// layout's (RETAIL / E10A2 0x800 / 0x3800; W2 0x2000 / 0x20000, the table then in the W2 install's DLL backing,
+		// whose address the install publishes here; RE-14)
+		address zone_strings_object = 0xa26c30;
 		std::string record_zone(void* record)
 		{
 			std::uint32_t handle=0, offset=0, used=0;
 			if (!record || !try_copy(&handle,record,4)) return {};
 			const auto slot=handle&0x00ffffff;
-			if (!slot || slot>=2048 || !try_copy(&used,in_game(0xa26c30+0x2004),4) || used>0x3800 ||
-			    !try_copy(&offset,in_game(0xa26c30+4+slot*4),4) || offset>=used) return {};
-			return save_core_rules::folded(game_text(static_cast<const char*>(in_game(0xa26c30+0x2008+offset))));
+			const auto slots=native_layout->zone_string_slots, arena=native_layout->zone_arena;
+			const auto table=zone_strings_object;
+			if (!slot || slot>=slots || !try_copy(&used,in_game(table+4+slots*4),4) || used>arena ||
+			    !try_copy(&offset,in_game(table+4+slot*4),4) || offset>=used) return {};
+			return save_core_rules::folded(game_text(static_cast<const char*>(in_game(table+8+slots*4+offset))));
 		}
 
 		bool entity_names(void* entity,std::string& definition,std::string& instance)
@@ -1105,7 +1126,8 @@ namespace save_format
 			{
 				// Freeze the reconstructed model map before changing any actual ordinal slot. Otherwise an
 				// earlier remap could overwrite the source needed by a later identical-name placement.
-				if (!try_copy(original_restore_map.data(),static_cast<const std::uint8_t*>(record)+layout_profile.ordinal_map,layout_profile.ordinals*2))
+				if (!save_core_rules::freeze_restore_map(original_restore_map.data(),original_restore_map.size(),static_cast<const std::uint8_t*>(record)+layout_profile.ordinal_map,
+				                                         layout_profile.ordinals,[](void* to,const void* from,std::size_t n){return try_copy(to,from,n);}))
 				{core_lifetime.write_blocked=true;return true;}
 				restore_record=record;
 			}
@@ -1161,7 +1183,7 @@ namespace save_format
 		{
 			__try
 			{
-				reinterpret_cast<native_load_t>(in_game(game_load))(game,nullptr,buffer,mode);return true;
+				e4_observe::native_call("save:native load", [&] { reinterpret_cast<native_load_t>(in_game(game_load))(game,nullptr,buffer,mode); });return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER){return false;}
 		}
@@ -1218,15 +1240,7 @@ namespace save_format
 		{
 			lcsave::NativeLoadDemand demand;
 			if (!lcsave::native_load_demand(image,demand,error,*native_layout)) return false;
-			std::uint32_t attached=0,instances=0,pointer=0;
-			if (!try_copy(&pointer,in_game(0x717b30),4) || !pointer || !try_copy(&attached,in_game(pointer+0x239c),4) ||
-			    !try_copy(&pointer,in_game(0x72a524),4) || !pointer || !try_copy(&instances,in_game(pointer+0x3854),4))
-			{error="native item/attached pool occupancy cannot be read";return false;}
-			if (!save_core_rules::capacity_fits(demand.instances,instances,256))
-			{error="native item-instance free capacity (256) is insufficient";return false;}
-			if (!save_core_rules::capacity_fits(demand.attached_enhancements,attached,375))
-			{error="native attached-enhancement free capacity (375) is insufficient";return false;}
-			return true;
+			return item_capacity::preflight(demand.instances,demand.attached_enhancements,demand.world_items,*native_layout,error);
 		}
 		// CORE-END
 
@@ -1251,7 +1265,7 @@ namespace save_format
 				              save_content_guards::verify_keys(previous.bytes,why);
 				if (usable)
 				{
-					const auto check = kind == kind_profile ? lcsave::new_to_old_profile(previous.bytes,tables) : lcsave::new_to_old_stream(previous.bytes,tables,*native_layout,typed_registry_verified ? &typed_registry : nullptr);
+					const auto check = kind == kind_profile ? lcsave::new_to_old_profile(previous.bytes,tables,*native_layout) : lcsave::new_to_old_stream(previous.bytes,tables,*native_layout,typed_registry_verified ? &typed_registry : nullptr);
 					usable = check.ok;
 					why = check.error;
 				}
@@ -1304,7 +1318,7 @@ namespace save_format
 			context.zone_captures=cached_captures;
 			context.origin=kind==kind_campaign?campaign_origin:0;
 			context.require_capture_metadata=kind==kind_campaign;
-			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context) : lcsave::old_stream_to_new(image, tables, context, *native_layout);
+			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context, *native_layout) : lcsave::old_stream_to_new(image, tables, context, *native_layout);
 			if (!result.ok)
 			{
 				// CORE-BEGIN: retain the actual refused campaign stream while its image is alive.
@@ -1386,7 +1400,8 @@ namespace save_format
 			}
 			if (file.info.status == file_status::needs_newer)
 			{
-				refuse("this save needs a newer version of XML2 Fix (" + file.info.why + ")");
+				logger::write("save format: newer save refused (%s)",file.info.why.c_str());
+				refuse(save_guard_rules::newer_save_message(file.info));
 				return false;
 			}
 			if (file.info.status == file_status::wrong_kind)
@@ -1408,7 +1423,7 @@ namespace save_format
 				if (!decision.ok) { refuse(decision.reason); return false; }
 				if (decision.migrate_typed_fields && !typed_registry_verified) { refuse("legacy save needs the typed entity-id registry: " + typed_registry_reason); return false; }
 			}
-			auto result = kind == kind_profile ? lcsave::new_to_old_profile(file.bytes, tables) : lcsave::new_to_old_stream(file.bytes, tables, *native_layout, typed_registry_verified ? &typed_registry : nullptr, &migration);
+			auto result = kind == kind_profile ? lcsave::new_to_old_profile(file.bytes, tables, *native_layout) : lcsave::new_to_old_stream(file.bytes, tables, *native_layout, typed_registry_verified ? &typed_registry : nullptr, &migration);
 			if (kind == kind_campaign && result.ok && native_layout->contiguous())
 			{
 				typed_translated.fetch_add(migration.translated); typed_nulled.fetch_add(migration.normalized_to_null);
@@ -1793,7 +1808,8 @@ namespace save_format
 			{
 				void* game = reinterpret_cast<game_getter_t>(in_game(game_getter))();
 				const auto* vtable = at<const std::uint8_t*>(game, 0);
-				at<serialize_t>(vtable, 0x208)(game, nullptr, base);
+				const auto serialize = at<serialize_t>(vtable, 0x208);
+				e4_observe::native_call("save:serializer", [&] { serialize(game, nullptr, base); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -1975,6 +1991,12 @@ namespace save_format
 		{
 			return "ok " + status();
 		}
+		if (verb == "layout")
+		{
+			if(!rest.empty())return "error save layout takes no arguments";
+			const auto detail=native_save_layout::status();
+			return detail.empty()?"layout "+std::string(installed_profile().layout_id):detail;
+		}
 		if (!enabled)
 		{
 			return "error the LC save mode is off ([Save] Format isn't lc, or a guard didn't match)";
@@ -2049,15 +2071,49 @@ namespace save_format
 		return installation_failure;
 	}
 
+	// The profile and the lcsave descriptor of one layout agree field for field (limits-wave2.md 3.9; W2-L-02 / L-03).
+	constexpr bool profile_matches(const native_profile& p, const lcsave::NativeLayout& n)
+	{
+		return p.states == n.states && p.ordinals == n.ordinals && p.dynamic == n.dynamic && p.smart == n.smart && p.state_count == n.state_count &&
+		       p.ordinal_map == n.ordinals_offset && p.time_stamp == n.time_stamp && p.record_size == n.record_size && p.manager_size == n.manager_size &&
+		       p.usable_end == n.usable_end && p.payload == n.payload && p.wrapper == n.wrapper && p.state_record_size == n.state_record_size &&
+		       p.record_count == n.record_count && p.item_head == n.item_head_size && p.instance_head == n.instance_fixed && p.snapshot_size == n.snapshot_size &&
+		       p.side_count_offset == n.side_block - 4 && p.objectives == n.snapshot_objectives && p.talent_multiplier == n.talent_multiplier &&
+		       p.zone_string_slots == n.zone_string_slots && p.zone_arena == n.zone_arena && dynamic_list(p) == n.dynamic_offset &&
+		       dynamic_count(p) == n.dynamic_count && smart_list(p) == n.smart_offset && smart_count(p) == n.smart_count;
+	}
+	static_assert(profile_matches(retail_profile, lcsave::retail_layout) && profile_matches(e10a2_profile, lcsave::e10a2_layout) &&
+	              profile_matches(w2_profile, lcsave::w2_layout));
+	static_assert(!profile_matches(w2_profile, lcsave::e10a2_layout) && !profile_matches(e10a2_profile, lcsave::w2_layout));
+
+	void publish_zone_strings(std::uint32_t address) { zone_strings_object = address; }
+
 	void use_native_profile(const native_profile& chosen)
 	{
 		if (contributed) return;
+		// by identity, never by a size (W2 and E10A2 share the payload, the usable end and the wrapper): the descriptor named
+		// by the profile, vetoed when it is unknown or disagrees with the profile (the LC seam then refuses to start)
+		const auto* layout = lcsave::native_layout(chosen.layout_id ? chosen.layout_id : "");
+		if (!layout || !profile_matches(chosen, *layout))
+		{
+			installation_failure = std::string("native save layout ") + (chosen.layout_id ? chosen.layout_id : "(none)") +
+				(layout ? " disagrees with its lcsave descriptor" : " has no lcsave descriptor");
+			logger::write("save format: %s - the LC seam is not installed", installation_failure.c_str());
+			layout_vetoed = true;
+			return;
+		}
 		layout_profile = chosen;
-		native_layout = chosen.usable_end == e10a2_profile.usable_end ? &lcsave::e10a2_layout : &lcsave::retail_layout;
-		lc_known_required_features = native_layout->contiguous() ? lc_feature_entity_layout_contiguous10 : 0;
+		native_layout = layout;
+		lc_known_required_features = layout->feature_bits;   // RETAIL 0, E10A2 1, W2 3
+#ifdef XML2_E4_CORE
+		static_assert(lcsave::feature_actor_capacity96 == lc_feature_actor_capacity96);
+		lc_setting_required_features = lc_feature_actor_capacity96; // this fix carries [Limits] Actors=96 (E4 core)
+#endif
 	}
 
-	const native_profile& installed_profile() { return layout_profile; }
+	void actor_capacity96_refused(const std::string& why){lc_actor_capacity96_requested=true;lc_actor_capacity96_failure=why;}
+	void enable_actor_capacity96(){actor_native_layout=*native_layout;actor_native_layout.feature_bits|=lcsave::feature_actor_capacity96;native_layout=&actor_native_layout;lc_known_required_features=native_layout->feature_bits;}
+	const native_profile& installed_profile() { return published_profile; }
 
 	void install(const HMODULE game)
 	{
@@ -2081,6 +2137,11 @@ namespace save_format
 		if (!chosen.set || chosen.value == mode::off)
 		{
 			return false; // no key: the game's own format, nothing patched
+		}
+		if (layout_vetoed)
+		{
+			reject_install(installation_failure);
+			return false;
 		}
 		// Default denial also covers any future early return before successful installation.
 		installation_failure = "required LC save/trivia hooks were not installed";
@@ -2216,6 +2277,7 @@ namespace save_format
 		{
 			(void)memory;
 			enabled = true;
+			published_profile = layout_profile;
 			installation_failure.clear();
 			logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
 			logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");

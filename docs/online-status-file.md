@@ -50,6 +50,16 @@ or until the screen name is known). A joiner's come from the room it resolved.
 | `tls_pin_mismatch` | the broker's TLS certificate fails `BrokerPin` (or, without a pin, the system's trust), or the broker's CA is not the one this build pins. |
 | `internal` | anything else (no retail executable, imports missing, an invalid broker answer, a build without GNS). |
 
+## Party block (contract v1.6 proposal, 0.6 round 7)
+
+`v` stays 1. After `updated` the fix appends `party` (change `generation`, separate `attempt` counter, attempt
+state/error, this PC's phase, the last host-table generation, a <= 4-row roster of valid-UTF-8 names without ping or
+address) and `process` (pid + creation time, so a
+reader can tell a crashed earlier run's file). The v1 keys keep their bytes and meaning; the released launchers
+(0.4.0-rc.1 .. 0.5.0-beta.2, main) read the new line exactly like the v1 line (`scripts/test_status_readers.mjs`).
+In-game Host/Join/Retry write the file too (role from the first operation). Format, write rules and what the
+launcher must change: [online-party.md](online-party.md#9-online-statusjson-additive-block-contract-v16-proposal).
+
 ## In the menus
 
 Host: Play Online -> Host -> New Campaign / Load Saved Campaign. The room opens when the game's network layer starts
@@ -62,3 +72,12 @@ listed (the two server-browsing callbacks' games-table allocations, 0x605d55 and
 5-byte calls, one transaction), so the list shows the room's game only. Seen live before this: the list showed the
 room's host twice (room + master list) and the joiner picked the master copy, which joins by the real address around
 the room (plain UDP, no NAT traversal or relay). Connect by IP with any non-address text (e.g. `0`) still joins the room.
+
+
+Fix AN keeps `room_not_joinable` mapped to `room_closed` for both transient and started/drop-in-off refusals. A fresh public
+listing may select the more specific in-game scene; that presentation detail adds no status field or error id.
+Fix AN2: a started private room with DROP-IN off is no longer refused by the broker (it stays resolvable while the host's
+started refusal is installed); that join resolves and then ends at the host's native refusal (in-game notice
+`lc_notice_started`), so the status file no longer shows `room_closed` for it - the same path as 060y's host refusal and any
+other host-side admission refusal. No status field or error id is added. See
+[the client decision rule](online-menus.md#code-refusal-after-the-session-started-fix-an).

@@ -10,6 +10,10 @@ namespace gameplay_agreement
  // A rule whose effective state does not fit four words also binds the SHA-256 of its complete canonical data
  // (docs/gameplay-agreement.md, "Rule details"); null = none (the record then hashes as before).
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified,const std::array<std::uint8_t,32>* detail);
+ // A table-dependent installer may settle after DLL startup. Until all holds
+ // resolve, commit_verified() leaves the record unfrozen and online closed.
+ void defer_finalization();
+ void resume_finalization();
  // Experimental gameplay awaiting an assigned ID must never negotiate as stock.
  void reject_unregistered_rule(const char* name);
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified);
@@ -25,9 +29,15 @@ namespace gameplay_agreement
  bool prepare(HMODULE game);
  bool finalize(HMODULE game);
  bool contributed();
+ // The rule names the most recent settings refusal gave (e.g. "DeathRule, GnsTransport"), or "" when none was known. Read-only.
+ const char* refusal_rules();
+ // Moves on every refusal dialog (LAN browsing of other hosts included): rules are trusted only when it moved during the caller's attempt.
+ std::uint32_t refusal_serial();
  void show_install_failure();
  int receive_request(void* event);
  int receive_reply(void* event);
  int receive_info(void* event);
  int receive_ack(void* event);
+ // True while the host lobby `menu` is showing a host notice in place of its ONLINE_ADVICE paragraph.
+ bool host_notice_showing(void* menu);
 }

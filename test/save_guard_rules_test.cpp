@@ -30,6 +30,90 @@ std::vector<std::uint8_t> get(const std::string& p)
 
 int main()
 {
+    auto future=fixture(kind_campaign,writer_version(1,5,0,writer_kind_fix));
+    future[10]=lc_format_major;
+    const auto set_word=[&](unsigned at,std::uint32_t value){for(unsigned n=0;n<4;++n)future[at+n]=static_cast<std::uint8_t>(value>>(n*8));};
+    set_word(0x10,8);set_word(0x84,crc32(future.data(),0x84));
+    auto newer=inspect(future.data(),future.size(),kind_campaign);
+    CHECK(newer.status==file_status::needs_newer);
+    CHECK(newer_save_message(newer)=="This save was made by a newer Legends Classic build - update to load it");
+    CHECK(newer.why=="required feature bits 8");
+    const auto player_message=message_with_reason("Unable to load",newer_save_message(newer),256);
+    CHECK(player_message.find("update to load it")!=std::string::npos&&player_message.find("feature bits")==std::string::npos);
+    newer.needs_layout=true;newer.why="enable [Limits] SaveLayout=w2";
+    CHECK(newer_save_message(newer)==newer.why);
+
+    // Opt-in settings switched off (082f 13d): a save needing only bits this build has behind a setting names the
+    // setting; bits this build does not know keep the newer-build text. Each combination: player text + slot label.
+    {
+        const std::string generic="This save was made by a newer Legends Classic build - update to load it";
+        const std::string actors="This save was made with 96 actors turned on. Turn on Actors=96 ([Limits] in xml2-fix.ini) and restart to load it.";
+        const std::string actors_w2="This save was made with 96 actors and the W2 save layout turned on. Turn on Actors=96 and SaveLayout=w2 ([Limits] in xml2-fix.ini) and restart to load it.";
+        const std::string failed="This save was made with 96 actors turned on. Actors=96 is in xml2-fix.ini but did not start (missing prerequisite [Limits] ActorPools=124); fix that and restart to load it.";
+        const std::string failed_w2="This save was made with 96 actors and the W2 save layout turned on. Actors=96 is in xml2-fix.ini but did not start (missing prerequisite [Limits] ActorPools=124); fix that, turn on SaveLayout=w2 ([Limits] in xml2-fix.ini) and restart to load it.";
+        const std::string w2="this save needs the W2 save layout ([Limits] SaveLayout=w2); enable it or use the build that wrote it";
+        struct row { std::uint32_t known, settings, required; bool requested; std::string text, label; };
+        const std::vector<row> rows{
+            {3,4,7,false,actors,"(needs Actors=96) "},             // 082f W2, Actors line absent: the live 13d case
+            {1,4,5,false,actors,"(needs Actors=96) "},             // E10A2 build, E10A2 + Actors save
+            {1,4,7,false,actors_w2,"(needs Actors=96 + the W2 save layout) "},
+            {3,4,7,true,failed,"(needs Actors=96) "},              // Actors=96 set, refused at startup
+            {1,4,7,true,failed_w2,"(needs Actors=96 + the W2 save layout) "},
+            {1,4,3,false,w2,"(needs the W2 save layout) "},        // W2 alone: the named W2 refusal, unchanged
+            {5,4,7,false,w2,"(needs the W2 save layout) "},        // Actors on, W2 off
+            {3,4,0xf,false,generic,"(needs a newer version) "},    // bit 3 is unknown here: a newer build
+            {3,4,0xb,false,generic,"(needs a newer version) "},
+            {3,4,0x13,false,generic,"(needs a newer version) "},
+            {0,4,7,false,generic,"(needs a newer version) "},      // retail layout: bit 0 is not a setting here
+            {0,4,4,false,generic,"(needs a newer version) "},
+            {3,0,7,false,generic,"(needs a newer version) "},      // a build without the E4 core: 0x4 is a newer build's
+        };
+        const auto known_before=lc_known_required_features;const auto settings_before=lc_setting_required_features;
+        for(const auto& r:rows)
+        {
+            lc_known_required_features=r.known;lc_setting_required_features=r.settings;
+            lc_actor_capacity96_requested=r.requested;lc_actor_capacity96_failure=r.requested?"missing prerequisite [Limits] ActorPools=124":"";
+            auto file=future;set_word(0x10,r.required);set_word(0x84,crc32(future.data(),0x84));std::swap(file,future);
+            const auto i=inspect(file.data(),file.size(),kind_campaign);
+            const auto text=newer_save_message(i);
+            const auto label=slot_text(i,false);
+            const bool ok=i.status==file_status::needs_newer&&text==r.text&&label==r.label;
+            CHECK(ok);
+            if(!ok) std::cerr<<"  known "<<r.known<<" settings "<<r.settings<<" required "<<r.required<<": "<<text<<" | "<<label<<" | "<<i.why<<"\n";
+            const auto dialog=message_with_reason("Load failed!",text,card_message_size);
+            CHECK(dialog=="Load failed! - "+r.text&&dialog.size()+1<=card_message_size&&dialog.find("feature bits")==std::string::npos);
+            CHECK(r.text==w2 ? i.why==w2 : i.why.find("required feature bits "+std::to_string(r.required))==0); // the log line keeps the bits (W2: its named reason, unchanged)
+        }
+        // A save this build can apply is not refused (the header-only fixture then fails its section table).
+        for(const std::uint32_t known:{7u,5u})
+        {
+            lc_known_required_features=known;lc_setting_required_features=4;lc_actor_capacity96_requested=false;
+            auto file=future;set_word(0x10,known);set_word(0x84,crc32(future.data(),0x84));std::swap(file,future);
+            CHECK(inspect(file.data(),file.size(),kind_campaign).status!=file_status::needs_newer);
+        }
+        // The refused file is untouched: reading and naming it changes nothing, and a save over it keeps it as .newer.
+        lc_known_required_features=3;lc_setting_required_features=4;lc_actor_capacity96_requested=false;lc_actor_capacity96_failure.clear();
+        const auto dir=std::filesystem::temp_directory_path()/("lc-actors-"+std::to_string(GetCurrentProcessId()));
+        std::filesystem::create_directories(dir);
+        auto sections=guard_fixture::campaign_sections("synthetic 96-actor save");
+        const auto current=guard_fixture::container(kind_campaign,sections);
+        auto actor_save=current;
+        std::memcpy(actor_save.data()+0x10,guard_fixture::le32(7).data(),4);
+        std::memcpy(actor_save.data()+0x84,guard_fixture::le32(crc32(actor_save.data(),0x84)).data(),4);
+        const auto path=(dir/"saveslot9.lcsave").string();
+        put(path,actor_save);
+        std::vector<std::uint8_t> read;std::string error;
+        CHECK(save_format_rules::read_file(path,read,error)&&read==actor_save);
+        const auto refused=inspect(read.data(),read.size(),kind_campaign);
+        CHECK(refused.status==file_status::needs_newer&&newer_save_message(refused)==actors&&get(path)==actor_save&&!std::filesystem::exists(path+".newer"));
+        CHECK(protected_source(refused,inspect(current.data(),current.size(),kind_campaign)));
+        lc_known_required_features=3;
+        CHECK(write_lc_atomically(path,current,error)&&get(path+".newer")==actor_save&&get(path)==current);
+        std::filesystem::remove_all(dir);
+        lc_known_required_features=known_before;lc_setting_required_features=settings_before;
+        lc_actor_capacity96_requested=false;lc_actor_capacity96_failure.clear();
+    }
+
 	const auto old_writer = writer_version(1,4,0,writer_kind_fix);
 	CHECK(newer_writer(writer_version(1,5,0,writer_kind_fix), old_writer));
 	CHECK(newer_writer(writer_version(1,5,0,writer_kind_import), old_writer));

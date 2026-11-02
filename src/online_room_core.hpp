@@ -6,11 +6,13 @@
 // for room members, and the certificate blob GNS's SetCertificate takes. No Windows, GNS or game calls here, so
 // test/online_room_test.cpp drives it directly.
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -125,6 +127,20 @@ namespace online_room_core
 			{
 				const char c = s[i++];
 				if (c == '"') return true;
+				if (static_cast<unsigned char>(c) < 0x20) return false;
+				if (static_cast<unsigned char>(c) >= 0x80) {
+					const auto first = static_cast<unsigned char>(c);
+					const unsigned count = first >= 0xc2 && first <= 0xdf ? 2 : first >= 0xe0 && first <= 0xef ? 3 : first >= 0xf0 && first <= 0xf4 ? 4 : 0;
+					if (!count || i + count - 1 > s.size()) return false;
+					std::uint32_t cp = first & (count == 2 ? 31 : count == 3 ? 15 : 7);
+					for (unsigned n = 1; n < count; ++n) {
+						const auto next = static_cast<unsigned char>(s[i++]);
+						if ((next & 0xc0) != 0x80) return false;
+						cp = (cp << 6) | (next & 63);
+					}
+					if (cp < (count == 2 ? 0x80u : count == 3 ? 0x800u : 0x10000u) || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return false;
+					out.append(s, i - count, count); continue;
+				}
 				if (c != '\\') { out += c; continue; }
 				if (i >= s.size()) return false;
 				const char e = s[i++];
@@ -148,6 +164,7 @@ namespace online_room_core
 						std::uint32_t c2;
 						if (hex4(s, i + 2, c2) && c2 >= 0xdc00 && c2 < 0xe000) { c1 = 0x10000 + ((c1 - 0xd800) << 10) + (c2 - 0xdc00); i += 6; }
 					}
+					if (c1 >= 0xd800 && c1 < 0xe000) return false;
 					utf8(out, c1);
 					break;
 				}
@@ -173,10 +190,68 @@ namespace online_room_core
 			return false;
 		}
 	}
+	// Validate the complete grammar before extracting fields. In particular,
+	// duplicate keys, trailing data, broken nested values and numeric prefixes
+	// must never become a valid authentication or room response.
+	inline bool json_value(const std::string& s, std::size_t& i, unsigned depth = 0)
+	{
+		using namespace detail;
+		space(s, i);
+		if (depth > 16 || i == s.size()) return false;
+		if (s[i] == '"') { std::string text; return string(s, i, text); }
+		if (s[i] == '{' || s[i] == '[')
+		{
+			const bool object = s[i++] == '{';
+			const char end = object ? '}' : ']';
+			std::set<std::string> keys;
+			space(s, i);
+			if (i < s.size() && s[i] == end) { ++i; return true; }
+			for (;;)
+			{
+				if (object) {
+					std::string key;
+					space(s, i);
+					if (!string(s, i, key) || !keys.insert(key).second) return false;
+					space(s, i);
+					if (i == s.size() || s[i++] != ':') return false;
+				}
+				if (!json_value(s, i, depth + 1)) return false;
+				space(s, i);
+				if (i == s.size()) return false;
+				if (s[i] == end) { ++i; return true; }
+				if (s[i++] != ',') return false;
+			}
+		}
+		for (const auto* literal : {"true", "false", "null"}) {
+			const std::string word(literal);
+			if (s.compare(i, word.size(), word) == 0) { i += word.size(); return true; }
+		}
+		if (s[i] == '-') ++i;
+		if (i == s.size() || s[i] < '0' || s[i] > '9') return false;
+		if (s[i] == '0') ++i;
+		else while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+		if (i < s.size() && s[i] == '.') {
+			const auto first = ++i;
+			while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+			if (first == i) return false;
+		}
+		if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+			++i;
+			if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+			const auto first = i;
+			while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+			if (first == i) return false;
+		}
+		return true;
+	}
 	inline line parse(const std::string& s)
 	{
 		using namespace detail;
 		line out;
+		std::size_t checked = 0;
+		if (s.size() > 16384 || !json_value(s, checked)) return out;
+		space(s, checked);
+		if (checked != s.size()) return out;
 		std::size_t i = 0;
 		space(s, i);
 		if (i >= s.size() || s[i] != '{') return out;
@@ -220,7 +295,7 @@ namespace online_room_core
 						if (i < s.size() && s[i] == ']') { ++i; break; }
 						return out;
 					}
-				if (!strings) { i = start; if (!skip(s, i)) return out; v = value{}; v.t = value::type::other; }
+				if (!strings) { i = start; if (!skip(s, i)) return out; v = value{}; v.t = value::type::other; v.text = s.substr(start, i - start); }
 			}
 			else if (c == '{') { const std::size_t start = i; if (!skip(s, i)) return out; v.t = value::type::other; v.text = s.substr(start, i - start); } // raw object text (parse() it again for its fields)
 			else
@@ -308,44 +383,190 @@ namespace online_room_core
 	}
 
 #define ONLINE_ROOM_HARDENING_CORE 1
-	// ---- virtual addresses: broker order gives every PC the same stable, ungrindable assignment ----
+	// ---- virtual addresses: the HOST's room history gives every PC the same stable, ungrindable assignment ----
 	constexpr std::uint32_t virtual_net = 0x0a4d0000, virtual_mask = 0xffff0000;
 	constexpr bool is_virtual(std::uint32_t host_order) { return (host_order & virtual_mask) == virtual_net; }
 	constexpr std::uint32_t virtual_address(std::size_t slot) { return slot >= 1 && slot <= 0xffff ? virtual_net | std::uint32_t(slot) : 0; }
+	// Fix AS: a member's address is its place in the HOST's room history - the host .1, then every identity in the order
+	// the host first saw it join. A member that leaves keeps its entry (inactive); a returning identity gets its old
+	// address back; a new one appends. The broker's resolve_ok lists only the members present NOW (broker join order,
+	// leavers removed), so a joiner cannot rebuild that history from it: numbering that list 1..n gave the joiner another
+	// map than every PC already in the room whenever someone had left before (RR-1: the newcomer called r1 10.77.0.3,
+	// everyone else 10.77.0.4). The host's map is also the one its game hands out (the native session tells each member
+	// the others' addresses as the host sees them), so it is the one to agree on: a joiner's map starts PROVISIONAL (only
+	// the host's .1 is known - the host is always the history's first entry), the host sends its roster on the room
+	// connection (roster_kind: the history with active flags, stamped with the broker generation it has applied), and the
+	// joiner adopts it and replays the broker membership events it saw after that stamp. Every member adopts the host's
+	// roster the same way (lobby or late join, first join or rejoin), and the host sends it again after every membership
+	// change, so every PC holds the host's map.
+	constexpr std::size_t roster_capacity = 64; // distinct identities one room can see (an address each, never reused)
+	constexpr std::uint8_t roster_kind = 12, roster_wire = 1;
+	constexpr std::size_t roster_header = 7, roster_row = 9; // kind, wire, gen (u32 LE), count; key (8 bytes) + flags per row
+	struct roster_row_t { std::string id; bool active = true; };
+	inline bool roster_key(const std::string& id, std::uint8_t (&out)[8])
+	{
+		if (!valid_identity(id)) return false;
+		auto nibble = [](char c) { return std::uint8_t(c <= '9' ? c - '0' : c - 'a' + 10); };
+		for (int i = 0; i < 8; ++i) out[i] = std::uint8_t(nibble(id[8 + 2 * i]) * 16 + nibble(id[9 + 2 * i]));
+		return true;
+	}
+	inline std::vector<std::uint8_t> encode_roster(long long gen, const std::vector<roster_row_t>& rows)
+	{
+		std::vector<std::uint8_t> out;
+		if (rows.empty() || rows.size() > roster_capacity) return out;
+		const auto g = std::uint32_t(gen < 0 ? 0 : gen > 0xffffffffll ? 0xffffffffll : gen);
+		out = {roster_kind, roster_wire, std::uint8_t(g), std::uint8_t(g >> 8), std::uint8_t(g >> 16), std::uint8_t(g >> 24), std::uint8_t(rows.size())};
+		for (const auto& r : rows)
+		{
+			std::uint8_t key[8];
+			if (!roster_key(r.id, key)) return {};
+			out.insert(out.end(), key, key + 8);
+			out.push_back(r.active ? 1 : 0);
+		}
+		return out;
+	}
+	// Strict: the exact size for its count, a known wire, flags 0/1 only. The content rules are room_roster::adopt's.
+	inline bool decode_roster(const std::uint8_t* data, std::size_t size, long long& gen, std::vector<roster_row_t>& rows)
+	{
+		rows.clear();
+		if (!data || size < roster_header || data[0] != roster_kind || data[1] != roster_wire) return false;
+		const std::size_t count = data[6];
+		if (!count || count > roster_capacity || size != roster_header + count * roster_row) return false;
+		gen = (long long)(std::uint32_t(data[2]) | (std::uint32_t(data[3]) << 8) | (std::uint32_t(data[4]) << 16) | (std::uint32_t(data[5]) << 24));
+		static const char hex[] = "0123456789abcdef";
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const auto* row = data + roster_header + i * roster_row;
+			if (row[8] > 1) { rows.clear(); return false; }
+			std::string id = "legends:";
+			for (int k = 0; k < 8; ++k) { id += hex[row[k] >> 4]; id += hex[row[k] & 15]; }
+			rows.push_back({id, row[8] == 1});
+		}
+		return true;
+	}
 	class room_roster
 	{
 		struct entry { std::string id; std::uint32_t address; bool active = true; };
+		struct event { long long gen; bool joined; std::string id; };
 		std::vector<entry> entries_;
-	public:
-		bool reset(const std::vector<std::string>& ids)
+		std::vector<event> since_;     // broker membership events newer than the last host roster adopted (replayed on the next)
+		long long gen_ = 0;            // the newest broker room generation applied
+		long long adopted_ = -1;       // the stamp of the last host roster adopted (-1 = none)
+		long long floor_ = 0;          // events up to this generation were dropped from since_: an older roster cannot be replayed
+		bool confirmed_ = true;        // the addresses are the host's (always on the host itself)
+		static constexpr std::size_t since_cap = 64;
+		bool apply(const std::string& id, bool joined)
 		{
-			if (ids.empty()) return false;
-			room_roster next;
-			for (const auto& id : ids) if (!next.join(id)) return false;
-			*this = std::move(next);
-			return true;
-		}
-		bool join(const std::string& id)
-		{
-			if (!valid_identity(id)) return false;
 			for (auto& e : entries_)
 				if (e.id == id)
 				{
-					if (!e.active && active_size() >= 4) return false;
+					if (!joined) { const bool was = e.active; e.active = false; return was; }
+					if (e.active) return false;
+					if (active_size() >= 4) return false;
 					e.active = true;
 					return true;
 				}
-			if (active_size() >= 4) return false;
-			const auto address = virtual_address(entries_.size() + 1);
-			if (!address) return false;
+			if (!joined) return false;
+			if (active_size() >= 4 || entries_.size() >= roster_capacity) return false;
+			const auto address = confirmed_ ? virtual_address(entries_.size() + 1) : 0u;
+			if (confirmed_ && !address) return false;
 			entries_.push_back({id, address, true});
 			return true;
 		}
-		void leave(const std::string& id) { for (auto& e : entries_) if (e.id == id) e.active = false; }
+		bool event_in(long long gen, bool joined, const std::string& id)
+		{
+			if (!valid_identity(id)) return false;
+			if (gen > 0 && gen <= gen_) return false; // already applied (a host roster that included it, or a repeat)
+			if (since_.size() >= since_cap) { floor_ = std::max(floor_, since_.front().gen); since_.erase(since_.begin()); }
+			since_.push_back({gen, joined, id});
+			if (gen > gen_) gen_ = gen;
+			return apply(id, joined);
+		}
+	public:
+		// The host's own room (host_ok) and the tests: the given order is the history, confirmed.
+		bool reset(const std::vector<std::string>& ids, long long gen = 0)
+		{
+			if (ids.empty()) return false;
+			room_roster next;
+			for (const auto& id : ids) if (!valid_identity(id) || !next.apply(id, true)) return false;
+			next.gen_ = gen;
+			*this = std::move(next);
+			return true;
+		}
+		// A joiner's resolve_ok: the broker's present members (host first, at most four). Only the host's .1 is known until
+		// the host's roster arrives (adopt) or, from a host build without one, assume_broker_order().
+		bool provisional(const std::vector<std::string>& ids, long long gen)
+		{
+			if (ids.empty() || ids.size() > 4) return false;
+			room_roster next;
+			next.confirmed_ = false;
+			for (const auto& id : ids) if (!valid_identity(id) || !next.apply(id, true)) return false;
+			next.entries_.front().address = virtual_address(1);
+			next.gen_ = gen;
+			*this = std::move(next);
+			return true;
+		}
+		// Broker peer_joined / peer_left (gen 0 = the line carried none). True when it changed the membership.
+		bool join(const std::string& id, long long gen = 0) { return event_in(gen, true, id); }
+		bool leave(const std::string& id, long long gen = 0) { return event_in(gen, false, id); }
+		struct adopt_result { bool ok = false; bool changed = false; const char* why = ""; };
+		// The host's roster (decode_roster's rows, stamped gen): the history in the host's order, addresses 1..n. Then the
+		// broker events this PC saw after that stamp are replayed in their order, so a roster that lags this PC's broker
+		// stream ends at the map the host reaches with the same events; one that leads it covers the events still on their
+		// way, which are skipped by their generation when they arrive.
+		adopt_result adopt(const std::vector<roster_row_t>& rows, long long gen, const std::string& host, const std::string& self)
+		{
+			adopt_result r;
+			if (rows.empty() || rows.size() > roster_capacity) { r.why = "empty or oversized"; return r; }
+			if (rows.front().id != host || !rows.front().active) { r.why = "not led by the room's host"; return r; }
+			if (adopted_ >= 0 && gen < adopted_) { r.why = "older than the roster already adopted"; return r; }
+			if (gen < floor_) { r.why = "older than the membership events this PC still holds"; return r; }
+			room_roster next;
+			std::set<std::string> seen;
+			std::size_t active = 0;
+			for (std::size_t i = 0; i < rows.size(); ++i)
+			{
+				if (!valid_identity(rows[i].id) || !seen.insert(rows[i].id).second) { r.why = "a malformed or repeated identity"; return r; }
+				active += rows[i].active;
+				next.entries_.push_back({rows[i].id, virtual_address(i + 1), rows[i].active});
+			}
+			if (active > 4) { r.why = "more than four active members"; return r; }
+			next.gen_ = gen;
+			for (const auto& e : since_)
+				if (e.gen == 0 || e.gen > gen) { next.apply(e.id, e.joined); if (e.gen > next.gen_) next.gen_ = e.gen; }
+			if (!next.contains(self)) { r.why = "this PC is not an active member in it"; return r; }
+			r.changed = !confirmed_ || next.entries_.size() != entries_.size();
+			for (std::size_t i = 0; !r.changed && i < entries_.size(); ++i)
+				r.changed = entries_[i].id != next.entries_[i].id || entries_[i].address != next.entries_[i].address || entries_[i].active != next.entries_[i].active;
+			for (const auto& e : since_) if (e.gen > gen) next.since_.push_back(e);
+			next.adopted_ = gen;
+			next.floor_ = floor_;
+			*this = std::move(next);
+			r.ok = true;
+			return r;
+		}
+		// No roster from the host (a host build before Fix AS): the broker's order, as before - addresses 1..n.
+		void assume_broker_order()
+		{
+			for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].address = virtual_address(i + 1);
+			confirmed_ = true;
+			since_.clear();
+			adopted_ = gen_;
+		}
+		bool confirmed() const { return confirmed_; }
+		long long gen() const { return gen_; }
+		std::vector<roster_row_t> rows() const
+		{
+			std::vector<roster_row_t> out;
+			for (const auto& e : entries_) out.push_back({e.id, e.active});
+			return out;
+		}
 		void deactivate_all() { for (auto& e : entries_) e.active = false; }
-		void clear() { entries_.clear(); }
+		void clear() { *this = room_roster(); }
 		bool contains(const std::string& id) const { for (const auto& e : entries_) if (e.id == id && e.active) return true; return false; }
+		// 0 = no address (not in the history, or a joiner's provisional map before the host's roster).
 		std::uint32_t address(const std::string& id) const { for (const auto& e : entries_) if (e.id == id) return e.address; return 0; }
+		std::size_t size() const { return entries_.size(); }
 		std::size_t active_size() const { std::size_t n = 0; for (const auto& e : entries_) n += e.active; return n; }
 		std::vector<std::string> active_ids() const
 		{
@@ -606,4 +827,59 @@ namespace online_room_core
 			return "joining a room needs the LC save format ([Save] Format) installed, which checks the host's campaign before the game loads it";
 		return nullptr;
 	}
+	// A native session end queues its quit notices (0x10cc / 0x1106) on the room tunnel and clears the room in the same
+	// retail frame; closing the tunnel without lingering drops what is still queued, so peers saw "lost connection".
+	// The leave therefore waits for the transport tick that follows the arming: that tick's flush has already sent the
+	// notices when the next one starts. arm() while pending neither extends nor repeats it; an explicit leave disarms.
+	class leave_deferral
+	{
+		bool armed_ = false;
+		bool passed_ = false; // one transport tick has already run since arm()
+	public:
+		void arm() { if (!armed_) { armed_ = true; passed_ = false; } }
+		void disarm() { armed_ = passed_ = false; }
+		bool armed() const { return armed_; }
+		// Called once at the start of every transport tick; true exactly once, on the tick after the one that was running.
+		bool step()
+		{
+			if (!armed_) return false;
+			if (!passed_) { passed_ = true; return false; }
+			armed_ = passed_ = false;
+			return true;
+		}
+	};
+	// An established host connection ending counts after native link binding or
+	// successful guest admission (a late guest may have no host native record).
+	// Local Leave/Quit and an authenticated removal block loss for this room.
+	class host_loss_tracker
+	{
+        bool lost_ = false, blocked_ = false, admitted_ = false;
+    public:
+        void connected() { lost_ = false; }
+        bool admitted_session() const { return admitted_; }
+		// A late joiner has its local participant before a native host record/link
+		// exists. Its authenticated host tunnel still owns the admitted session.
+		void admitted() { admitted_ = true; }
+		void ended(bool transport_bound) { if ((transport_bound || admitted_) && !blocked_) lost_ = true; }
+        // The host's existing native 0x2b notice can arrive while its native
+        // reliable handler is delayed or no native host record exists. This
+        // explicit, authenticated signal is sufficient before that handler.
+        // A broker room notice alone never calls this method.
+        bool departure_notice(bool authenticated_host, bool transport_bound, bool reliable, std::uint8_t opcode,
+                              const std::uint8_t* body, std::size_t size) {
+            if (!authenticated_host || !reliable || opcode!=0x2b || !body || size!=12 ||
+                blocked_ || lost_ || (!transport_bound && !admitted_) || body[8]>1) return false;
+            const auto u32=[&](unsigned at) {
+                return std::uint32_t(body[at]) | (std::uint32_t(body[at+1])<<8) |
+                    (std::uint32_t(body[at+2])<<16) | (std::uint32_t(body[at+3])<<24);
+            };
+            const auto reason=u32(4);
+            if (u32(0)!=0 || (reason!=0x1106 && reason!=0x1107 && reason!=0x10cc)) return false;
+            lost_=true;return true;
+        }
+		void local_departure() { blocked_ = true; lost_ = false; }
+		void removed_by_host() { local_departure(); }
+		bool lost() const { return lost_; }
+		void reset() { lost_ = blocked_ = admitted_ = false; }
+	};
 }

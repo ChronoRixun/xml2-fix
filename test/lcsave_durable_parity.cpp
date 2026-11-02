@@ -3,7 +3,9 @@
 // The Phase A modes (tests/unit/export_lcsave_typed_vectors.py): e10a2-reverse (registry verifies; the E10A2
 // loader's stream, report and ledger note; the E10A2 saver's feature-1 rewrite; loading it again is idempotent and
 // the retail loader refuses it), refuse-downgrade, refuse-unknown, refuse-noregistry, refuse-stream and
-// registry-mismatch (each refused with the Python's exact reason, exposing no bytes).
+// registry-mismatch (each refused with the Python's exact reason, exposing no bytes); limits wave 2: w2-reverse (the
+// W2 loader's stream, the W2 saver's representable rewrite, idempotence, the E10A2 loader's stream of it) and w2-bit1
+// (the bit-1 save of a non-integral position, refused by name on E10A2, given back on W2).
 #include "lcsave.hpp"
 #include "keys.hpp"
 
@@ -73,6 +75,83 @@ namespace
 	}
 
 	template <typename Report>
+	// limits-wave2.md section 10 G1: the W2 column (tests/unit/export_lcsave_typed_vectors.py w2-reverse / w2-bit1)
+	bool run_w2_case(const fs::path& root, const fs::path& folder, const lcsave::Tables& tables, const std::vector<std::uint8_t>& input,
+		const std::string& mode, const std::string& name, std::uint32_t sequence, const Report& report)
+	{
+		(void)root;
+		const auto& w2 = lcsave::w2_layout;
+		const auto& e10 = lcsave::e10a2_layout;
+		std::string error, reason;
+		std::vector<std::uint8_t> registry_bytes;
+		if (!read_bytes(folder / "registry.txt", registry_bytes)) return report("cannot read registry.txt");
+		if (!lcsave::verify_registry(registry_bytes, (folder / "scripts").wstring(), reason)) return report("registry: " + reason);
+		lcsave::TypedRegistry registry;
+		if (!lcsave::load_typed_registry(registry_bytes, registry, error)) return report("registry: " + error);
+		lcsave::NewFileContext context;
+		context.saved_at = 0; context.writer_version = 0x01040000; context.writer = "XML2 Fix";
+		context.slot = 0; context.campaign_serial = 17; context.save_sequence = sequence;
+		context.retained_file = input; context.require_capture_metadata = true;
+		if (!lcsave::loaded_zone_metadata(input, tables, context.zone_captures, error, w2, &registry)) return report("W2 metadata: " + error);
+		auto first_difference = [](const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b)
+		{
+			std::size_t offset = 0;
+			while (offset < a.size() && offset < b.size() && a[offset] == b[offset]) ++offset;
+			return std::to_string(offset);
+		};
+		if (mode == "w2-reverse")
+		{
+			std::vector<std::uint8_t> expected_stream, expected_report, expected_saved, expected_e10;
+			if (!read_bytes(folder / "expected.w2.old", expected_stream) || !read_bytes(folder / "expected.report", expected_report) ||
+			    !read_bytes(folder / "expected.w2.lcsave", expected_saved) || !read_bytes(folder / "expected.e10a2.old", expected_e10))
+				return report("cannot read the W2 vector files");
+			lcsave::MigrationReport migration;
+			const auto translated = lcsave::new_to_old_stream(input, tables, w2, &registry, &migration);
+			if (!translated.ok) return report("W2 reverse: " + translated.error);
+			if (!write_and_verify(folder / "actual.w2.old", translated.bytes)) return report("actual.w2.old verification failed");
+			if (translated.bytes.size() != w2.slot_size) return report("W2 stream size " + std::to_string(translated.bytes.size()));
+			if (translated.bytes != expected_stream) return report("W2 native stream bytes differ from Python at " + first_difference(translated.bytes, expected_stream));
+			const std::string text(expected_report.begin(), expected_report.end());
+			const auto line0 = text.substr(0, text.find('\n'));
+			const auto rest = text.substr(text.find('\n') + 1);
+			const auto line1 = rest.substr(0, rest.find('\n'));
+			if (migration.line() != line0) return report("W2 migration report differs: " + migration.line() + " vs " + line0);
+			if (translated.ledger.find(line1) == std::string::npos) return report("W2 migration ledger note missing: " + line1);
+			const auto saved = lcsave::old_stream_to_new(translated.bytes, tables, context, w2);
+			if (!saved.ok) return report("W2 save: " + saved.error);
+			if (!write_and_verify(folder / "actual.w2.lcsave", saved.bytes)) return report("actual.w2.lcsave verification failed");
+			if (saved.bytes != expected_saved) return report("W2 save bytes differ from Python at " + first_difference(saved.bytes, expected_saved));
+			const auto decision = lcsave::decide_features(saved.bytes, w2);
+			if (!decision.ok || decision.required_features != 1) return report("a representable W2 save must carry bit 0 only");
+			if (!lcsave::representable(saved.bytes, tables, e10).empty()) return report("the probe marks a representable save");
+			const auto again = lcsave::new_to_old_stream(saved.bytes, tables, w2, &registry);
+			if (!again.ok || again.bytes != translated.bytes) return report("W2 LC -> native is not idempotent: " + again.error);
+			const auto older = lcsave::new_to_old_stream(saved.bytes, tables, e10, &registry);
+			if (!older.ok || older.bytes != expected_e10) return report("the E10A2 loader's stream of the W2 save differs: " + older.error);
+			std::cout << name << '\t' << mode << "\tPASS\t" << translated.bytes.size() << " stream bytes, " << saved.bytes.size() << " saved bytes\n";
+			return true;
+		}
+		std::vector<std::uint8_t> stream, expected_bit1, expected_error;
+		if (!read_bytes(folder / "input.w2.old", stream) || !read_bytes(folder / "expected.bit1.lcsave", expected_bit1) ||
+		    !read_bytes(folder / "expected.error", expected_error))
+			return report("cannot read the W2 bit-1 vector files");
+		const auto saved = lcsave::old_stream_to_new(stream, tables, context, w2);
+		if (!saved.ok) return report("W2 bit-1 save: " + saved.error);
+		if (!write_and_verify(folder / "actual.bit1.lcsave", saved.bytes)) return report("actual.bit1.lcsave verification failed");
+		if (saved.bytes != expected_bit1) return report("W2 bit-1 bytes differ from Python at " + first_difference(saved.bytes, expected_bit1));
+		const auto decision = lcsave::decide_features(saved.bytes, w2);
+		if (!decision.ok || decision.required_features != 3) return report("the bit-1 save must carry bits 0 | 1");
+		if (saved.ledger.find("NATIVE_W2 (required feature bit 1) set: ") == std::string::npos) return report("the ledger must name the rule");
+		const auto refused = lcsave::new_to_old_stream(saved.bytes, tables, e10, &registry);
+		if (refused.ok || !refused.bytes.empty() || refused.error != std::string(expected_error.begin(), expected_error.end()))
+			return report("the E10A2 loader must refuse the bit-1 save by name: " + refused.error);
+		const auto loads = lcsave::new_to_old_stream(saved.bytes, tables, w2, &registry);
+		if (!loads.ok || loads.bytes != stream) return report("the W2 loader must give the stream back: " + loads.error);
+		std::cout << name << '\t' << mode << "\tPASS\t" << saved.bytes.size() << " bit-1 bytes, refused on E10A2\n";
+		return true;
+	}
+
+	template <typename Report>
 	bool run_typed_case(const fs::path& root, const fs::path& folder, const fs::path& build, const std::string& mode, const std::string& name,
 		std::uint32_t sequence, const Report& report)
 	{
@@ -129,6 +208,7 @@ namespace
 			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
 			return true;
 		}
+		if (mode == "w2-reverse" || mode == "w2-bit1") return run_w2_case(root, folder, tables, input, mode, name, sequence, report);
 		// e10a2-reverse
 		std::vector<std::uint8_t> registry_bytes, expected_stream, expected_report, expected_feature1;
 		if (!read_bytes(folder / "registry.txt", registry_bytes) || !read_bytes(folder / "expected.e10a2.old", expected_stream) ||
@@ -199,7 +279,7 @@ namespace
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
 		// the Phase A typed entity-id / native layout vectors (tests/unit/export_lcsave_typed_vectors.py)
 		if (mode == "e10a2-reverse" || mode == "refuse-downgrade" || mode == "refuse-unknown" || mode == "refuse-noregistry" ||
-		    mode == "refuse-stream" || mode == "registry-mismatch")
+		    mode == "refuse-stream" || mode == "registry-mismatch" || mode == "w2-reverse" || mode == "w2-bit1")
 			return run_typed_case(root, folder, build, mode, name, sequence, report);
 		if (mode == "refuse-tables")
 		{
@@ -244,6 +324,18 @@ namespace
 					std::vector<std::uint8_t> metadata;
 					if (!read_bytes(folder / "expected.metadata", metadata) || actual != std::string(metadata.begin(), metadata.end()))
 						return report("reconstructed placement metadata differs from Python");
+					// zonecompat: which records apply, through which path (an equivalence row has no source hash and
+					// no fresh tail, a prefix row both)
+					if (fs::exists(folder / "expected.zones"))
+					{
+						std::string zones;
+						for (const auto& capture : captures)
+							zones += capture.zone + "\t" + lcsave::hex(capture.placement_sha1) + "\t" + lcsave::hex(capture.source_placement_sha1) +
+							         "\t" + std::to_string(capture.fresh_entities.size()) + "\n";
+						std::vector<std::uint8_t> expected_zones;
+						if (!read_bytes(folder / "expected.zones", expected_zones) || zones != std::string(expected_zones.begin(), expected_zones.end()))
+							return report("applied zone records differ from Python: " + zones);
+					}
 				}
 
 			}

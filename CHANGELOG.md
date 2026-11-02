@@ -1,5 +1,463 @@
 # Changelog
 
+## 1.11.0 - beta (Legends Classic 0.6.0-beta.1)
+
+XML2 Fix 1.11.0-beta.1 is the engine half of Legends Classic 0.6.0-beta.1 (content 30 / catalogue 8 / LC40).
+Windows file details show 1.11.0 for the DLL; the package and the release tag carry the beta suffix. It is a beta:
+the co-op parts were tested on one PC with two copies of the game and on two PCs at home, and still need wider
+testing (see "Known limitations"). Guard stays off by default.
+
+**Install.** Use Ultimate Legends' Beta channel, or copy `dinput.dll` into the Legends Classic game folder (the one
+with `XMen2.exe`). For a standalone 0.6.0-beta.1 build, the DLL must be in the output folder **before** Build or
+Rebuild: the default co-op screens check it while the build runs. A 1.10 game and a 1.11 game refuse each other at
+join.
+
+**For other X-Men Legends II setups.** The new screens, fonts and joining a game in progress are written by the
+Legends Classic builder (`[Online] Menus=1`, `[Online] LateJoin=1`). Without those settings the game keeps
+X-Men Legends II's own online menus and joins only in the lobby, and the controller, display, Discord and mod features work as before.
+
+**What's new: online co-op inside the game**
+
+- **Play Online** now opens the game's own co-op screens. **Host** opens a room: choose Public or Private, give it a
+  name, pick a new or saved campaign and choose whether friends may join after the start (**DROP-IN**). The room code
+  appears as soon as the room is open, with **Copy code**. **Join by code** takes a pasted or typed code, and
+  **Browse** lists public rooms with the host, campaign, player count and drop-in setting.
+- **The lobby** shows everyone who has joined. Players mark themselves Ready and the host starts when the group is
+  set. The host can also start alone.
+- **The Party screen** (the pause menu's Party row) shows who is playing and what each player is doing, keeps the
+  room code at hand for inviting more friends, and lets the host remove a player.
+- **Other ways** still opens X-Men Legends II's original online menus (LAN search, Connect by IP). The new screens and
+  their fonts are on by default; build with `--online-menus off` to keep the original menus.
+- Clear messages explain every connection problem on the screen where it happens, with **Retry** only where trying
+  again can help. When a room or player limit is reached, the message says what to do instead.
+
+**What's new: join a game in progress**
+
+- **Friends can join a game that has already started.** The newcomer waits on Joined Game while the others keep
+  playing; at the host's next area load everyone, the host included, reloads that area together and the newcomer
+  takes a free hero. That one load takes a little longer. Nobody appears in the middle of an area.
+- Joining a game in progress works with two, three and four players, at any exit and in areas with enemies: a
+  second or third friend joins a running game the same way, and two friends who are waiting at the same time both
+  come in at the same exit.
+- When a friend joins, the host and the other players wait up to 10 seconds on an "A player is joining..." message
+  instead of replaying a moment of play. The wait is `[Online] JoinHoldSeconds` in `xml2-fix.ini` (default 10, 0..15;
+  `0` turns it off); each PC uses its own value. If a join takes longer than the wait, play continues and the
+  friend comes in moments later.
+- If two friends are joining and one of them drops out, the other still gets in and everyone plays on: the host
+  decides once and every PC goes on without the friend who dropped. If the host drops out while a friend is
+  joining, the others see the host-left message.
+- Joining a game in progress is on by default. The host's **DROP-IN** setting turns it off for one room; a friend
+  who enters the code of a game that has started then is told that the session has started and to ask the host to
+  return to the lobby. A player who set `LateJoin=0` in `xml2-fix.ini` keeps that choice through a rebuild or repair.
+- In testing, admissions on one PC and on two PCs at home held through movement by both players and the walked exits
+  that followed, with every PC staying in step.
+
+**Co-op fixes since 0.5**
+
+- A lost connection to the room listing service no longer ends a healthy game during a long loading screen: players
+  already in keep playing, and new players cannot join until the host opens a new room.
+- When the host quits (even with a dead hero), crashes or loses the connection, guests see a host-left message with
+  working **Host again** and **Back to Online** buttons. A sudden crash can take about ten seconds to be noticed.
+- Guests stay connected while the host uses Team Management, and a player who leaves and rejoins gets the roster back.
+- Players can now leave a lobby or a game and others can still join: before this, after someone other than the most
+  recent player left, a new or returning player could lose the connection a minute after joining, taking another
+  player with them. In testing on two PCs with four players, after a player left the lobby (from the first, a middle
+  or the last place) or quit a game in progress, a returning or brand-new player joined, in the lobby or later in the
+  game, and everyone stayed connected and in step.
+  With three or four players, the guests now connect to each other the same way they connect to the host, and when
+  one player's game closes suddenly, the others agree that it left and play on.
+- Fixed a crash when starting with a guest, focus and input getting stuck when returning to Play Online, and
+  Party confirmations that swallowed the next Quit or Back.
+- Screens free their text, panels and model data when they close; repeated opening and closing kept memory use steady
+  in automated checks.
+- Ready, Start, lobby cards, badges, headings, prompts and the Copy code button were corrected; Browse, Retry and the
+  dialogs respond correctly to keyboard, controller and clicks, including on button edges and corners. Resolution keeps
+  its value at 4:3.
+- Relay-only connections refuse an unavailable relay instead of quietly connecting directly, and refusing one
+  connection no longer disturbs the healthy players in the room.
+- The flying carry attaches the carried character from the first frame.
+
+**Other fixes**
+
+- Steam Deck and other Linux PCs that run the game through Proton no longer stop on a black screen at start: every
+  XML2 Fix since 1.8.1 could wait there forever while it looked for controllers. Under Proton (Wine),
+  `[Input] CacheDeviceScan` now defaults to `0`, so controllers are found the way they were before 1.8.1; a setting
+  written in `xml2-fix.ini` is used as written, and Windows is unchanged.
+
+**Carried forward from 0.5**
+
+- **The first game's items, shops and drops.** All 116 X-Men Legends equipment pieces with their bonuses, the first
+  game's drop tables, the Forge tier by tier, the Healer's prices, the Grab Bag, selling and Danger Room rewards. Where
+  a bonus has no exact PC equivalent it is converted as closely as the PC game allows; the build's
+  `Docs\APPROXIMATIONS.md` lists each one.
+- **A bigger save format** with room for 1024 item definitions and 4096 item bonus records, more objectives, talents
+  and world items. Existing saves load and are converted.
+- **Phoenix's telekinesis** (hold power 1 to lift, move and throw an enemy) and **the flying carry** (Flight rank 3
+  for Phoenix, Rogue or Storm: hold Guard over an ally or enemy to pick them up, carry them for about 10 seconds and
+  throw them).
+- **Guard (Block / Grab) works as in beta 8.** The first game's grab rules and held blocking stay optional
+  (`--guard-decide xml1`) and off by default until they pass real-controller checks; `docs/RELEASE_GUARD.md`
+  describes how that default would change.
+
+These stay on by default, from the launcher and from the command line alike; options you turn off stay off.
+
+**How to update.** Use Ultimate Legends' Beta channel: update **XML2 Fix to 1.11.0-beta.1** and **the builder to
+0.6.0-beta.1**, then **Rebuild**, then **Play**. With the standalone builder, copy the matching `dinput.dll` into the
+output folder before you build (the co-op screens need it during the build).
+
+**Co-op needs the same version.** Everyone needs the same pair, content version 30 and the same gameplay settings,
+with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The item catalogue is unchanged from 0.5.
+
+**Back up your saves.** Copy `Documents\Activision\X-Men Legends\SaveLC` somewhere safe before updating. 0.6 keeps the
+0.5 save format; beta 8 and stable 0.4.0 cannot load these saves (they refuse them without changing them).
+
+**Known limitations**
+
+- Co-op was tested on one PC and on two PCs at home, with two, three and four players, including fights. Not
+  verified yet: playing through the relay (networks where a direct connection fails; relay connection failures are
+  still being investigated), four players on four separate PCs, long sessions, and joins over slow connections (if a
+  join takes longer than the wait, play continues and the friend comes in moments later).
+- If the host leaves or loses the connection, the session ends; there is no host takeover or automatic reconnect yet
+  (planned for 0.8). If a healthy host drops out unexpectedly, please keep `xml2-fix.log` from every PC: the cause is
+  not known yet.
+- Joining a game in progress happens only at the host's next area, never mid-area.
+- If the only friend who is joining drops out partway through, one of the players already in the game can be left
+  on the pause screen with every player shown as "Not Ready". That player has to leave and join again by code; the
+  others play on. This is being fixed for the next beta.
+- The new screens still need more checks with mouse, keyboard and controllers at 720p, 1080p and 4:3, over long
+  sessions (memory and graphics memory), and on the first opening of Party and the slower original screens. The
+  Play Online Back selection, Party status labels and the original Kick button's lettering are still being reviewed.
+- Phoenix's telekinesis can pick a nearby crate or nobody in a crowd or when she faces away. The flying carry ends if
+  the carried character hits a prop or wall or the carrier lands. Throws hurt enemies through collisions, not by
+  landing on the floor, and throw damage against resistant soldiers is still being judged.
+- The first Grab Bag course and some earlier campaign, appearance and button-prompt issues remain under review.
+- The optional 96-character limit and larger character pools (`[Limits] Actors=96`, `ActorPools=124`) stay off by
+  default; saves made with them on need them on to load.
+
+**What to test**
+
+- Host, Join by code and Browse with mouse, keyboard and controller; Ready, Start and Copy code; public and private
+  rooms; empty and long Browse lists; every message's buttons.
+- Join a game in progress on two PCs, then play through two more areas together; turn DROP-IN off and check the
+  refusal; leave and rejoin; remove a player from Party.
+- Every way the host can leave (Quit, dead hero, crash, lost connection) and the host-left buttons.
+- A relayed connection, four players on four separate PCs, a long session, and joining over a slow connection.
+- A real 0.5 campaign: load, play, save, quit and reload; shops and rewards; telekinesis and flying pickup.
+- The original online menus with `--online-menus off`, and a mismatched build or setting being refused with a clear
+  message.
+
+## 1.10.0 - <date TBD>
+
+1.10.0-beta.1 is the engine half of Legends Classic 0.5.0-beta.1 (the 0.4.2 line released as 0.5: content 29 /
+`LC38`). The 0.5.0-beta.1 builder writes the keys below for every build: `[Limits] SaveLayout=w2` with its companions,
+`[Game] Xml1Economy=1`, the wave 3 limits, `TelekinesisRule = xml1` and the flying carry (no `Xml1FlyingCarry = 0`);
+`GuardDecideRule` (the XML1 guard decide below), `[Limits] Actors` (E4 stage 2) and `ActorPools` stay opt-in and
+unwritten, so Guard is XML2's own Block / Grab, as in 1.9.0 (Owen's real-pad check of 082f: the decide refused the grabs
+the native Guard makes, and a refused press showed no block). A 1.10.0 PC and
+a 1.9.0 PC refuse each other at join (different builds and agreed rules), and a campaign saved with the W2 layout
+carries a save requirement bit that 1.9.0 refuses without touching the file. Detailed engine changes continue under 1.9.0 below; see the preserved 1.10.0 release notes for the shipped summary.
+
+## 1.9.0 - <date TBD>
+
+1.9.0-beta.1 is the port's beta 8 (Legends Classic 0.4.1-beta.1, content 28 / `LC37`): the first game's bosses, moves,
+grabs and damage rounding, the raised engine limits and the 4 GB exe, saved rooms kept across the beta 8 map edits,
+Colossus's charge hitting and the GRSO Officer's and Captain's guns and grenades (the builder's style-name fix). The
+Legends Classic 0.4.1-beta.1 builder writes every key below except `TelekinesisRule`, `GuardDecideRule` and
+`[Limits] ActorPools`, and writes `[Game] Xml1FlyingCarry = 0`: Phoenix's XML1 telekinesis, the XML1 guard decide and
+the flying carry are in progress for the next beta (switched off, not removed), and the actor pools stay opt-in. A
+1.9.0 PC and a 1.8.0 PC (beta 7 or stable) refuse each other at join. 1.9.0-beta.2 is beta 8's hotfix: the
+controller scan cache below (the once-a-second pause with a controller connected), with no gameplay rule or agreement
+byte changes, so beta.2 and beta.1 PCs play together and the 0.4.1-beta.1 build needs no Rebuild. The entries below
+are newest first.
+
+- **Readable refusals for opt-in settings** (082g, from the 082f live round). A save made with `[Limits] Actors=96`
+  (required bit 0x4) on a start where Actors=96 is off now says "This save was made with 96 actors turned on. Turn
+  on Actors=96 ([Limits] in xml2-fix.ini) and restart to load it." (slot list `(needs Actors=96)`), or why Actors=96
+  did not start when it is set; unknown bits keep the newer-build text; the file is untouched. A co-op joiner whose
+  host uses different gameplay settings now sees it on his own games list: the row in place of "No Games Found"
+  names the settings, and the dialog ("The host uses different gameplay settings: ... match them, restart the game
+  and join again.") is raised on the list's own update, where it is drawn (the dialog raised from the network receive
+  was set but not drawn). New optional agreement part `gameplay_agreement.games_list_notice`; no new message, field
+  or gameplay rule; the agreement record is unchanged.
+
+- **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; 1.9.0-beta.2 and 1.8.1,
+  [docs](docs/controller-scan-cache.md)). The retail zone timer (`0x6256E0`) asks for a DirectInput controller scan
+  about once a second (worker `0x618C90` -> `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured
+  170-900 ms, and with a pad connected it showed as a pause (Team Management's clouds). Controller enumerations are
+  now collected on a background worker and replayed from complete immutable snapshots on the caller's thread through
+  the existing spoof and virtual-pad callbacks (order, structure size, bytes, HRESULT and DIENUM_STOP preserved). Raw
+  Input topology is compared every 250 ms, with a 30-second safety rescan; a cold query still waits for its first
+  complete list (the startup scan, main-menu input, libIGDisplay's one-shot count). XInput slots are discovered on
+  XInput's own worker once a second and after a failed read; frames read only the selected slot.
+  `CacheDeviceScan=0` restores the previous enumeration and discovery paths. New native fixtures
+  `xml2_controller_scan_cache_test` and `xml2_xinput_connections_test`. Owner live check on the beta 8 candidate
+  080i: the pause is gone with a pad connected.
+
+- **Resident stats: gameplay rule 50** (`[Limits] ResidentStats=320`; candidate). Raises outer CStats and NPC
+  payload pools together to 320; hero payloads stay 22. Admission checks payload availability before allocation,
+  with native fallback and once-per-definition refusal logs. All 275 ledger rows, moved consumers and agreement
+  `{320,22,320,1}` install atomically. Absent or 31 preserves stock writes/agreement. Native saves are compatible
+  for the same 21 resident heroes; live RV3/RV3b acceptance remains pending. See `docs/resident-stats.md`.
+
+- **Motion pool: gameplay rule 51** (`[Limits] MotionPool=22528`; candidate). Raises the 500-record
+  native motion pool to 22,528 with all three lazy allocations, all bitmap clears and the generated 82-row
+  ledger applied together. Owners admit clips 0..175; longer lists are refused and logged once per owner
+  lifetime. Four readers return the native fallback outside the valid list. The published ActorSlots bound
+  must fit and the pool must not exist yet. Absent or 500 preserves stock bytes and agreement; other values
+  refuse online. The test pipe reports motion peak and refusals. Live RV4 acceptance remains pending.
+
+
+- **Character sound cache: gameplay rule 49** (`[Limits] CharSounds=127`; 1.9.0-beta.1). Raises the
+  16-record cache to 127 so a seventeenth live sound directory keeps its own sounds. Six address edits and both
+  getter/teardown bounds commit together; the published actor capacity must be below 127. Absent or 16 keeps stock
+  bytes and no agreement entry; other values refuse online. `CHAR_SOUNDS` on the test pipe reports peak occupancy,
+  refusals and empty-sounddir actors. Native fixtures verified; live RV1 acceptance pending.
+
+- **Address space (E12).** The Legends Classic build's `XMen2.exe` is large-address-aware (4 GB on 64-bit Windows and
+  Wine/Proton). The fix logs `address space: laa on|off; 2 GB guard ...` at start and, with the flag on, keeps the
+  64 KB block below 2 GB reserved, so no allocation can straddle 0x80000000 (a D3DX8 mip-filter loop linked into the
+  exe, cgD3D8.dll and libIGGfx.dll compares pointers signed and only misbehaves for a buffer across that line). The
+  test pipe's `status` adds `memory laa on; top ...; above 2 GB n MB; private n MB; highest ...; 2 GB guard on`;
+  `memory high <MB>` (test pipe only) reserves the free space below 2 GB except <MB> for a controlled high-address
+  test. An unhandled crash writes one `crash: exception ... at ... (module+offset), writing/reading 0x...; laa on;
+  ...` line to `xml2-fix.log`, then the crash goes on as before. Nothing is refused: with the flag off it only logs.
+  The `limits: address space - LAA ...` line stays.
+
+- **Saves keep the zones you already cleared across definition-only map edits** (1.9.0-beta.1, the save reader,
+  [docs](docs/lcsave-library.md)). The reader dropped every saved zone record whose map file hash changed unless an
+  append-only prefix row covered it, so beta 8's heaviness tags (65 maps, nothing moved or renumbered) would reset
+  visited zones: enemies, pickups, doors and one-time scenes back. It now also accepts the builder's full-length
+  equivalence rows (`Data/lcsave/zone-prefix.lcm`, format unchanged) and reads such a record exactly as an
+  unchanged map's. New offline gate `scripts/zone_records_gate.py` (target `lcsave_zone_records`): per zone, real
+  saves apply at least as many records on the candidate as on stable.
+- `[Limits] ParticleScratch=40` clamps all eleven particle operations to the
+  manager's 40 shared scratch records, preventing overruns with larger arrays.
+  Logs once per array address and exposes per-operation peaks and clamp counts
+  through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
+  agreement. [Details](docs/particle-scratch.md).
+- **Effect library capacity and primitives per effect**: `[Limits] EffectTemplates=512`
+  raises both native 220-entry tables together (221..2048); gameplay rule 55
+  `EffectFiles`. `[Limits] PrimitivesPerEffect=32` raises the ten-primitive bound
+  (11..32), retaining the original record and first ten pointers with additional
+  pointers in DLL spill storage; rule 58 `PrimitivesPerEffect`. Lock-on and
+  multipart use the published effect layout. Both shared bitmap helpers remain
+  native for other containers. Missing/stock keys preserve the existing patch
+  and agreement record. See [effect templates](docs/effect-templates.md) and
+  [primitives per effect](docs/primitives-per-effect.md).
+- **More primitive definitions and effect vectors for converted content and graphics
+  mods.** `[Limits] PrimitiveDefs=2048` (817..8192, stock 816) and
+  `EffectVectors=4096` (711..16384, stock 710) enlarge the native pools with generated
+  retail-byte ledgers and independent transactions. Native allocation, refusal,
+  reuse and teardown remain; vectors keep their 84 presets and 16-bit IDs.
+  Rules 56 and 57 advertise the installed capacities; absent/stock keys change no
+  game bytes or agreement entries. Status adds `prim defs` and `vectors` counters.
+  [Primitive definitions](docs/primitive-defs.md), [vectors](docs/effect-vectors.md).
+- **Shared fighting-style and event manager headroom** (`[Limits] FightStyles=64`, `StyleEvents=4096`; [styles](docs/fight-styles.md), [events](docs/style-events.md)). Styles accept 20..127; events accept 1065..8192, with stock 19/1064 when absent. Both keys use one guarded allocation layout and transaction. Four bitmap clear caves make styles above 32 reusable through unload/destruction. Rule 35 stays revision 1 through 32 and becomes revision 2 above 32; new rule 53 covers events. Legacy style-only byte plans through 32 and absent-key behavior are preserved. Retail native lifecycle tests include both bitmap words, full-pool refusals and event generation reuse. Live campaign/multiplayer validation remains pending.
+- **FightMove headroom and clean exhaustion refusal** (`[Limits] FightMoves=1024`,
+  333..2048; [docs](docs/fight-moves.md)). Expands the native 332-record pool using
+  a generated operand ledger, and refuses before allocation when the pool or a
+  style's 150-node map is full. Reports pool/map refusals and aliasing observations.
+  Rule 54 revision 1 records the capacity. MoveTriggers sizes and validates its
+  side arrays through the published descriptor, retaining rule 37 revision 1 and
+  its exact existing patch plan when FightMoves is absent. Native fixtures include
+  a retail allocation-333 corruption control, guarded boundaries, map preservation,
+  recycling, teardown, and high-slot trigger arrays.
+- `[Limits] ScriptPools=x1` expands statements/values/compiled scripts/running
+  contexts to 4096/8192/512/128, preserving the native globals and function tree.
+  A compiler guard refuses null values safely; bounded filename-cache metadata
+  prevents its old 120-name ring from aliasing larger compiled pools. Rule 59 covers the installed
+  profile; counters and verification are documented in [script-pools.md](docs/script-pools.md).
+
+- **Attached powerups and callback nodes:** `[Limits] AttachedPowerups=256` and
+  `VFNodes=256` enlarge the native pools from 128 and 192 to 256. Each key is
+  independent and accepts only 256; absent keys keep retail bytes and agreement.
+  Installed capacities register gameplay rules 61/62. The layout, bitmap clears,
+  free rings and diagnostic readers move together, with private copies of shared
+  helpers. [Implementation and native verification](docs/power-pools.md).
+
+- **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
+  1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
+  1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /
+  20-29 / 30-39 / 40-45, whoever fell. That is X-Men Legends I's price: default.xbe 0xaf6b0 charges 200 x G^2 with
+  the group registry vt+0x58 = 0x54150 makes from vt+0x50 = 0x54c30's highest level. 1.5.0 to 1.8.0-beta.7 charged
+  200 x L^2 (80,000 at level 20 instead of 1,800): their notes took the neighbouring slot vt+0x54 = 0x54cb0 (the
+  acknowledged level) for the group. The 0x4b8830 hook stays; a fourth guard covers 0x449960's roster loop (guest
+  skip, running maximum). With the key set, rule 10 is revision 3 (values unchanged), so a fixed PC and a beta 7 PC
+  refuse each other naming `10 Xtraction services/RevivalCost`; without the key the entry stays revision 2 and the
+  OFF record is unchanged.
+
+- **The objectives page lists what the first game listed** (`[Game] ClassicObjectives = 1`; 1.9.0-beta.1, display
+  only, [docs](docs/classic-objectives.md)). XMen2.exe's PDA page gives slot n to the n-th top-level objective
+  including hidden ones (0x5cce40), so a hidden objective left a hole and the page opened on slot 1, often a finished
+  mission. The key makes the selector walk (0x5cce98) and the page walk (0x5ce148) count visible objectives only, opens
+  the page on the current one (0x5ce484, the remembered-focus cell 0x8afe40) with a six-slot window (slot 7 stays the
+  optional page) and leaves the Danger Room results page native. Checked live on 10-25 at 1280x720 windowed and
+  2560x1440 borderless, beside X-Men Legends I in xemu.
+
+- **XML1's grab lifecycle and flying carry: gameplay rule 45 revision 3** (`[Game] Xml1GrabCarry = xml1`;
+  1.9.0-beta.1, [docs](docs/xml1-grab-carry.md)). Juggernaut's grab-and-hit (`ch_grab_attack`: the grabattackvictim
+  lookup the PC never registered, the large-actor hold after the strict deadline at 0x4edb83), the shared grab victim's
+  retention and cleanup, the ally throw, pickup admission and cancellation, the thrown-landing recovery (0x4f49e9's
+  owner gate and two-second clear bypassed) and the flying charge acquiring the live character it strikes (0x4ee87c /
+  0x4ee8b3) follow X-Men Legends I. New in revision 3: Phoenix's, Rogue's and Storm's **flying carry** (XML1's
+  `ch_fly_guard_decide`, `ch_air_grab_pickup`, `..._idle`, `..._throw` and the victim handler: acquisition, hand
+  attachment, walk / run, throw, smash, interrupted drop and both actors' cleanup), the fix7 flight admission and
+  XML1's strict one-second **flight upkeep**; the parser filter (0x4f74b2) drops only the `%flight_pwr` per-second
+  expression, so a converted PC flying node is never charged twice. Revision 3 needs `[Limits] AnimEnums` and
+  `[Game] LiftRule = xml1` installed; without them it writes nothing and stays an unverified request (host / join
+  closed). Values `{1,15,0,0}`
+  (mask 15 = grab, pickup/recovery, charge collision, carry/fix7/upkeep); revisions 1 and 2 (080b) are refused both
+  ways. Absent: nothing written, no entry. The carry input no longer reports the established carry node as a new
+  chain when the idle / walk / run choice resolves to itself (the PC re-entered the carry every frame and the victim
+  never followed; live 080d); logged as `flying carry keeps its established node (no self-chain)`. Live 080e/080f fixes
+  (fix3): the carrier frame restores the victim's constraint bits after the native node reset (0x42C270), a paired
+  pickup no longer falls through the general descent (0x433E6C) while Guard is held, a thrown body's world impact reaches
+  its receiver again (the PC-only gate at 0x42C09E is opened; amount, deadline, defenses and cooldown stay native) and
+  the carry pose reads the animated skeleton (0x41D620 with `false,false`) so XML1's offsets no longer sink the victim
+  30 units; logged as `thrown bodies forward world impacts (42C09E); carry pose on animated bones`. Not played yet.
+  `[Game] Xml1FlyingCarry = 0` (beta 8 candidate 080h; default on) keeps the rule without the flying carry, which is
+  in progress for beta 9: the five carry handlers are not registered and the descent admission (0x433E6C) stays PC's,
+  while Juggernaut's grab, pickup/recovery, the charge collision, fix7 and XML1's flight upkeep are written as with it.
+  Values `{1,23,0,0}` (bit 16 = fix7/upkeep without the carry), so peers with and without the carry refuse each other
+  both ways; logged as `fix7 and XML1 upkeep installed` and `flying carry off (Xml1FlyingCarry=0): no carry handlers, PC
+  flight descent`.
+
+- **XML1's animation enums: gameplay rule 48** (`[Limits] AnimEnums = 512`; 1.9.0-beta.1,
+  [docs](docs/anim-enums.md)). XMen2.exe's animation enum table holds 210 names, every slot taken; the key raises it to
+  512 (and the animation-set cache 16 -> 128 records) and gives XML1's 23 flying-carry and Juggernaut-grab-victim
+  enums fixed IDs 0xD2..0xE8 (81 operand edits, five caves, two hooks, one startup transaction). The DLL publishes the names as a marked table (`XML2FIX.ANIMENUMS.1`) that the Legends
+  Classic builder compares with its own. Absent or 0: nothing written, no entry. Not played yet.
+
+- **Shared handlers wave C: gameplay rule 46** (eleven `[Game]` keys = `xml1`; 1.9.0-beta.1,
+  [docs](docs/shared-handler-c-rules.md)). `JumpAttackDamageRule` / `FlyChargeDamageRule`: the producer's damage
+  from `values.xmlb`'s L3 minimum with the first game's signed 16-bit stages (0x4ee99b / 0x4eeb88; velocity,
+  deadline and knockback stay native). `ColossusChargeRule`: input 0x4eced0 and contact 0x4ed220 as one unit
+  (event-100 affordability, the -0.71 crash test, special action, 450 recoil). `BeastBounceRule` (0x4ed1a0 always
+  emits, stops and timestamps), `FastballRule` (0x4f4adf emits for actors, objects and null contacts),
+  `IdleBoredRule` (no controller/team or non-humanoid exclusions; stun stays rule 18's), `LocomotionScaleRule`
+  (0x4f01d4), `AnimationPhaseRule` (0x4f026a), `TeleportVisibilityRule` (0x4efc7e / 0x4f44a4). One mask
+  `{installed_mask,0,0,0}`; rule 42 unchanged. `TelekinesisRule` and `GuardDecideRule` add the coupled suspend
+  contract and interaction policy, requiring installed rule45; guard restores rank3 walllunge beside rule39.
+  [Contracts and native fixtures](docs/tk-guard.md). Live integration checks remain.
+  Phoenix's telekinesis sounds (`power1a` / `power1b`) resolve through the PC sound manager's name lookup (slot 0x38,
+  0x590bd0); slot 0x34 is a PC bool query with a 4-byte return, and the XML1 call corrupted the stack at the first
+  telekinesis hold (live 080d crash). Logged as `telekinesis sounds resolve through PC audio slot 38`.
+  Live 080e/080f fixes (fix3): a telekinesis throw released with no velocity keeps the victim's facing fallback with
+  the native upward impulse instead of dividing zero by zero (`a still telekinesis throw keeps the victim's facing (no
+  zero divide)`); guard decide runs its policy in the input slot (0x693018) with XML1's short entry, so a tapped guard
+  exits without moving the stick (`guard decide runs at input and exits after a tap`); Colossus's charge evaluates its
+  converted damage, knockback and range on the caster, as the PC's own 0x4ED220 does, not on the struck soldier (zero
+  damage before; `Colossus charge evaluates its talents on the caster`).
+
+- **E4 stage 1, actor pools: gameplay rule 44** (`[Limits] ActorPools = 124`; 1.9.0-beta.1,
+  [docs](docs/actor-pools.md)). The path, shadow and delayed-damage pools sized for 32 actors grow to 124 in one
+  guarded transaction over an independently audited ledger (367 role rows / 357 instructions, five null-team guards);
+  actor/controller/team counts and the save layout stay stock, the CAI descriptor is published for later stages, and
+  NpcPowerRule's side tables reset when a controller slot is allocated (unhooked again if rule 16 is withdrawn). Values
+  `{32,4,124|124<<16,1}`; any other value is unverified; outside the game image the key is ignored (no entry). Absent:
+  nothing written. None of its live runs has happened; Legends Classic 0.4.1-beta.1 leaves it off by default.
+
+- **XML1 boss brains: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche,pyro,mystique,shadowking,marrow,magneto,blob`;
+  1.9.0-beta.1, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
+  detour (0x5173f3) and the script-table entries Master Mold used; Master Mold is its first client and writes exactly
+  what it wrote before (rule 3 unchanged). The dopples restore X-Men Legends I's overlay (default.xbe 0x116f70):
+  Wolverine and Colossus throw the fastball special every 5 s or more when within 400 of each other, Jean sets off
+  the arena's hazards near the hero every 7 s, all four taunt; Cyclops' reply stays as dormant as in the original.
+  `avalanche` restores his brain (0x111ab0) in both fights: power smash at close range and quake/ranged power at
+  mid range on 4 s deadlines, smash/attack rolls between them, and the health-band flag at 83/66/50/33/16 %.
+  `pyro` (astral3_3: Z filter, attacker reservations, fire up/down), `mystique` (copies a hero and changes back after
+  the authored time or when the copied hero is gone, grenades, paths), `shadowking` (both forms' attacks, the timed
+  shield powers, the floor relocation kept), `magneto` (asteroid2_1: the mag2-5 phase requests, the shield's return
+  at mag4, five tile slots) and `blob` (XML1's two opcode programs, pickup and throw, slam/flop ranges, companion
+  jumps) follow the first game's brains; `marrow`'s backboss brain is already native on the PC (recorded, never
+  replaced). Each boss is a bit of rule 40's mask with its own revision; Master Mold keeps rule 3. Absent key:
+  nothing written, no agreement entry. None of the fights has been played yet.
+
+- **Receive-side damage stages and the damage cap: gameplay rule 41** (`[Balance] ReceiveRounding = xml1`,
+  `[Balance] DamageCap = xml1`; 1.9.0-beta.1, [docs](docs/balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)).
+  X-Men Legends I's damage receive converts the hit to a whole number after the defense and after the scale
+  (default.xbe 0x45517..0x45558); XMen2.exe kept a float (0x437a54..0x437a7c), so 10 against a defense of 0.5 and a
+  scale of 0.5 was 4.75 instead of 4. `ReceiveRounding=xml1` calls two stubs at 0x437a54 / 0x437a75 that truncate the
+  damage, the clamped difference and the product toward zero as XML1's `_ftol` does. `DamageCap=xml1` caps a hit at
+  XML1's 32,000 (0x5ce0d) instead of 1,000,000 (0x453bfd / 0x453c0c point at a 32000.0f). Both are executed side by side
+  with the first game's code in `xml2_balance_parity_test` (72,180 / 72,180 equal cases in 24- and 53-bit x87
+  precision). Absent/`xml2` is byte-identical and adds no agreement entry. `scripts/prove_balance_install.py` now
+  proves every `[Balance]` key (StrengthBonus / MindBonus / MightBonus / Rounding included) installs at run time.
+
+- **Enemy AI fidelity, part 3: gameplay rule 16 revision 14** (`[Game] NpcPowerRule = xml1`; 1.9.0-beta.1,
+  [docs](docs/npc-power-rule.md)). (19) The power picker's lock test goes for all seven other callers too (self buff,
+  ranged/party-target helper, Sentinel probe and attack, FlyNoNav, HitAndRun/ShadesNoWing, flying creatures):
+  0x50fe63 jne -> jmp. (20) The power decision's lock test goes for every caller, the officer weapon brain included
+  (0x5187c4 jne -> jmp; revision 11's caller bridge is retired). (21) Class selection: Advanced Sentinel matches XML1's
+  "dvanced" fragment again (category 0; XMen2.exe's "xxxdvanced" let it fall to Sentinel) and Juggernaut's default
+  category is XML1's 4 (0x694f1e, 0x511fb8). (22) No Danger Room reaction gate (0x435b09 -> jmp 0x435b52): XMen2.exe
+  suppressed a pain reaction within 2 s of the last in Danger Room mode (0xfd), XML1 never does. Revision 14 also
+  carries the character bullet ray below; a revision 11 (1.8.0-beta.7) peer is refused by revision, as are the
+  unreleased candidates 12 (these items alone) and 13 (the ray alone). Officer cells, Shades/Sentinels, Advanced Sentinel, Juggernaut and a
+  Danger Room course need live remeasurement.
+
+- **One-pass engine limits, wave 1: the runtime-only raises** (`[Limits] IGBCache`, `[Engine] ModelHandles`; 1.9.0-beta.1,
+  [docs](docs/igb-cache.md)). The IGB info cache (`CIGBInfoCache2`, 200 records at 0x7b7fb0: every
+  precached model file; full, a zone's map IGB fails and the game reloads the previous zone) moves into a block of the
+  DLL at 201..2048 records, built and torn down by the game's own code: 82 operands, 4 references, the cache's three
+  calls of the shared `bitset<200>::findNext` cloned; the name table comes along (2048 by default). `ModelHandles`
+  raises the IModel handles and transforms past `ModelPools`' profile (8192 for 1024 IGB records). The cache is
+  gameplay-agreement rule 31 (IGBCache, requested only); the handles are part of rule 28's values. The startup log
+  reports LAA on/off and the highest reservable address (E12). Absent keys write no byte and add no agreement entry.
+  Proof: `xml2_test --igb-cache-rules` (runs the patched pool at 1024), `scripts/check_igb_cache_text.py` (whole
+  `.text`), the model-pool plan and lifecycle tests at 8192 handles.
+
+- **XML1 character bullet rays** (`[Game] NpcSemiAuto = xml1`, rule 16 revision 14; 1.9.0-beta.1,
+  [weapon brain](docs/npc-semi-auto.md)). An admitted bullet trace (beta 7's half-second trace gate) no longer uses
+  the PC beam's two collision queries: it casts X-Men Legends I's zero-width ray from the gun's muzzle (weapon slot,
+  `Gun1` bolt) 36 units back to 550 forward along the cached aim, blended toward the muzzle direction below a 0.9
+  dot as default.xbe 0xBA0CD..0xBA1C8 does, and hits the first contact only (a character or a destructible prop takes
+  the hit; the world stops it). Three spread draws stay before the gate, all float work under the game's own
+  precision; 21 new guards. Not yet played: the 120/300/520 unit cells against the original are still to measure
+  (the 300-unit target is 0.71-0.76 hits per admitted trace).
+
+- **Seven shared combat handlers as in X-Men Legends I: gameplay rule 42** (`[Game] SkatingRule`,
+  `TeleportLandingRule`, `PopupRule`, `PopupLandRule`, `ChargeRule`, `NightcrawlerRule`, `GambitRule` = `xml1`;
+  1.9.0-beta.1, [docs](docs/shared-handler-rules.md)). Ice/lava skating's speed and height bands, Nightcrawler's four
+  teleport landings, the popup / air-spin decision and landing reset, the charge's timed end with its sound and
+  per-update event, Nightcrawler's buddy-teleport targets and Gambit's 60-unit object charge follow the first game's
+  callbacks (executed side by side with default.xbe's in `xml2_shared_handlers_test`, 5,793 checks; every selection
+  mask installs). One requested-only rule records the mask; absent keys write nothing. Not yet played.
+
+- **XML1's wall cling: gameplay rule 39** (`[Game] Xml1WallCling = xml1`; 1.9.0-beta.1, [docs](docs/xml1-cling.md)).
+  The acrobat moveset's `clingwalldecide` / `clingwallbackflip` (acrobatics 2) ran as XMen2.exe's default handler;
+  they now turn the hero to a wall within 24 units and back-flip off it (60 back, 500 up), as default.xbe 0xD9740 /
+  0xD9590 do. One jump at the FightMove handler lookup (0x4fd860), shared with Rogue's decide below. Not yet played.
+
+- **XML1's lift rule: gameplay rule 38 revision 2** (`[Game] LiftRule = xml1`; 1.9.0-beta.1,
+  [docs](docs/lift-rule.md)). Objects the Legends Classic builder marks with `xml1heaviness` (the first game's
+  heaviness 4 and 5, which the PC folds into its unliftable class 3) are lifted by XML1's rule: Might rank 3 lifts
+  heaviness 4, nobody lifts 5; their throw impact levels and carried damage, and Phoenix's telekinesis limits, follow
+  XML1 too. Every other object keeps the game's rule and its heaviness byte. Not yet played.
+
+- **Rogue's power decision: gameplay rule 43** (`[Game] Xml1RogueDecide = xml1`; 1.9.0-beta.1,
+  [docs](docs/xml1-rogue-decide.md)). XMen2.exe has no `ch_roguedecide`; the handler (through the same lookup as
+  the wall cling) sweeps 60 units ahead of Rogue, drains the first character it finds (`ability_drain`, with the
+  target lock) or plays `drain_notarget`, and charges the energy once on the decide move, as default.xbe 0xDBD30.
+  Needs the matching Legends Classic heroes output. Not yet played.
+
+## 1.8.1 - 2026-10-26
+
+A hotfix for 1.8.0 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged): the once-a-second pause with a
+controller connected. No gameplay rule or agreement byte changes, so 1.8.1 and 1.8.0 PCs play together; no Rebuild.
+
+- **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; [docs](docs/controller-scan-cache.md)). The
+  retail zone timer (`0x6256E0`) asks for a DirectInput controller scan about once a second (worker `0x618C90` ->
+  `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured 170-900 ms, and with a pad connected it showed as
+  a pause (Team Management's clouds). Controller enumerations are now collected on a background worker and replayed from
+  complete immutable snapshots on the caller's thread through the existing spoof and virtual-pad callbacks (order,
+  structure size, bytes, HRESULT and DIENUM_STOP preserved). Raw Input topology is compared every 250 ms, with a
+  30-second safety rescan; a cold query still waits for its first complete list (the startup scan, main-menu input,
+  libIGDisplay's one-shot count). XInput slots are discovered on XInput's own worker once a second and after a failed
+  read; frames read only the selected slot. `CacheDeviceScan=0` restores the previous enumeration and discovery paths.
+  New native fixtures `xml2_controller_scan_cache_test` and `xml2_xinput_connections_test`. Owner live check on the
+  beta 8 candidate 080i: the pause is gone with a pad connected.
+
 ## 1.8.0 - 2026-10-25
 
 The first stable release since 1.7.1, the engine half of Legends Classic 0.4.0 (content 27 / `LC36`, the same

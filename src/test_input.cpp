@@ -1,4 +1,9 @@
+#include "anim_enums.hpp"
 #include "test_input.hpp"
+#include "no_activate.hpp"
+#include "online_menus.hpp"
+#include "pool_counters.hpp"
+#include "e4_observe.hpp"
 #include "test_state.hpp"
 #include "test_mode.hpp"
 #include "xml1_hook_memory.hpp"
@@ -16,6 +21,10 @@
 #include "world_backfaces.hpp"
 #include "combo_heads.hpp"
 #include "pack_amount.hpp"
+#include "xml1_cling.hpp"
+#include "xml1_rogue_decide.hpp"
+#include "xml1_grab_carry.hpp"
+#include "lift_rule.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "ini.hpp"
@@ -23,6 +32,11 @@
 #include "pad_input.hpp"
 #include "save_format.hpp"
 #include "entity_capacity.hpp"
+#include "address_space.hpp"
+#include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
+#include "xml1_roll.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -238,7 +252,12 @@ namespace test_input
 
 		HRESULT STDMETHODCALLTYPE hooked_get_device_state(void* self, const DWORD size, LPVOID data)
 		{
-			const HRESULT result = real_get_device_state(self, size, data);
+			// NoActivate agent copies are pipe-only, even if focused. The player kit also
+			// enables InputPipe: retain its physical keys while focused, but synthesize
+			// unfocused reads so no background access/acquisition is needed for the pipe.
+			const bool synthetic = (no_activate::enabled() || (enabled && !game_in_foreground())) &&
+				size == 256 && data && is_keyboard(self);
+			const HRESULT result = synthetic ? S_OK : real_get_device_state(self, size, data);
 			if (size != 256 || !data || !is_keyboard(self))
 			{
 				return result;
@@ -251,16 +270,18 @@ namespace test_input
 			if (FAILED(result))
 			{
 				test_mode::input_lost();
+				online_menus::keyboard(nullptr);
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
 				return result;
 			}
 
 			auto* state = static_cast<unsigned char*>(data);
-			if (!game_in_foreground())
+			if (synthetic || !game_in_foreground())
 			{
-				std::memset(state, 0, 256); // typing in another window stays there, as with the game's own foreground-only device
+				std::memset(state, 0, 256); // agent state starts empty; only the pipe can add keys
 			}
 			if (!enabled) {
+				online_menus::keyboard(state);
 				return result;
 			}
 
@@ -279,25 +300,16 @@ namespace test_input
 			}
 			SetEvent(read_event);
 			test_mode::keyboard(state);
+			online_menus::keyboard(state);
 			return result;
 		}
 
 		HRESULT STDMETHODCALLTYPE hooked_set_cooperative_level(void* self, const HWND window, const DWORD flags)
 		{
-			if (!enabled || !is_keyboard(self))
-			{
-				const HRESULT result = real_set_cooperative_level(self, window, flags);
-				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
-				return result;
-			}
-
-			constexpr DWORD ours = DISCL_BACKGROUND | DISCL_NONEXCLUSIVE;
-			const HRESULT result = real_set_cooperative_level(self, window, ours);
-			logger::write("test: keyboard cooperative level %lX -> %lX (background, non-exclusive): %s", flags, ours, SUCCEEDED(result) ? "ok" : "refused");
-			if (FAILED(result))
-			{
-				return real_set_cooperative_level(self, window, flags); // the game's own, as if we weren't here
-			}
+			// Keep the game's foreground-only cooperation. Agent reads are synthesized above,
+			// so no background access to the owner's physical keyboard is needed.
+			const HRESULT result = real_set_cooperative_level(self, window, flags);
+			if (SUCCEEDED(result) && is_keyboard(self) && !enabled && !no_activate::enabled()) test_mode::watch_window(window);
 			return result;
 		}
 
@@ -526,9 +538,11 @@ namespace test_input
 			}
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
+			const auto layout = native_save_layout::status();
+			const auto economy = xml1_economy::status();
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + "; " + test_mode::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + (economy.empty() ? "" : "; " + economy) + "; memory " + address_space::status() + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -572,12 +586,31 @@ namespace test_input
 			case command::kind::state: return test_state::reply("state");
 			case command::kind::objectives: return test_state::reply("objectives");
 			case command::kind::events: return test_state::reply("events");
+			case command::kind::resident_stats: return test_state::reply("resident_stats");
+            case command::kind::resident_census: return test_state::reply("resident_census");
+            case command::kind::motion_pool: return test_state::reply("motion_pool");
+			case command::kind::char_sounds: return test_state::reply("char_sounds");
+			case command::kind::actor_pools: return test_state::reply("actor_pools");
+			case command::kind::e4_observe: return e4_observe::json();
+			case command::kind::pools: return pool_counters::json();
+			case command::kind::particle_scratch: return test_state::reply("particle_scratch");
+			case command::kind::script_pools: return test_state::reply("script_pools");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			case command::kind::save:
 				return save_format::pipe(cmd.text);
 			case command::kind::entity:
 				return entity_pipe(cmd.text);
+			case command::kind::memory:
+			{
+				const auto reply = address_space::pipe(cmd.text);
+				if (cmd.text.find("high") != std::string::npos) logger::write("test: memory%s -> %s", cmd.text.c_str(), reply.c_str());
+				return reply;
+			}
+			case command::kind::economy:
+				if(cmd.text.empty()||cmd.text=="status")return xml1_economy::status();
+				if(cmd.text=="rolls")return xml1_economy::roller::recent_rolls();
+				return xml1_economy::digest::pipe(cmd.text);
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;
@@ -595,6 +628,28 @@ namespace test_input
 					reply = display::test_pointer(WM_LBUTTONUP, cmd.x, cmd.y);
 				}
 				logger::write("test: %s -> %s", line.c_str(), reply.c_str());
+				return reply;
+			}
+			case command::kind::chars:
+			{
+				// One WM_CHAR per character with a gap: the game's text entry keeps a single byte per frame.
+				std::string reply = "ok";
+				std::size_t sent = 0;
+				for (const char c : cmd.text)
+				{
+					reply = display::test_char(static_cast<unsigned char>(c));
+					if (reply.rfind("error", 0) == 0)
+					{
+						break;
+					}
+					++sent;
+					Sleep(test_input_rules::char_gap_ms);
+				}
+				if (reply.rfind("error", 0) != 0)
+				{
+					reply = "ok " + std::to_string(sent) + " characters";
+				}
+				logger::write("test: chars (%zu of %zu) -> %s", sent, cmd.text.size(), reply.c_str());
 				return reply;
 			}
 			default:
@@ -686,6 +741,7 @@ namespace test_input
 			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());
 		}
 		pipe_path = pipe.path;
+		xml1_economy::digest::enable();
 
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -704,12 +760,12 @@ namespace test_input
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
 		display::enable_test_pointer();
-		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - keys from it reach the game without the focus; the keyboard only with it", pipe_path.c_str(), pipe.name.c_str());
+		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - pipe keys reach the game without focus; NoActivate copies use only pipe keys", pipe_path.c_str(), pipe.name.c_str());
 	}
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if ((!enabled && !test_mode::hotkeys_enabled()) || !direct_input)
+		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled() && !online_menus::installed()) || !direct_input)
 		{
 			return;
 		}

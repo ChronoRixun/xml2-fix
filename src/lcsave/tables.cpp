@@ -533,14 +533,16 @@ namespace lcsave::detail
 			load_bind(B, cat, L"shared_talents", st, true);
 			const auto& stl = st.list("TALN");
 			dense(stl, 0, "TALN", "Data\\shared_talents.lcbind");
-			std::map<std::string, u16> shared_by_key;
+			// talents are kept as codes (owner + 1, position): the engine id is the layout's (owner + 1) x M + position
+			// (talent_engine_id; M = 100 RETAIL / E10A2, 200 W2), so one table serves every layout
+			std::map<std::string, u32> shared_by_key;
 			for (const auto& r : stl)
 			{
 				T.TALN_shared.push_back(r.id);
-				if (r.id) t.p_tal[r.id] = r.position;
-				shared_by_key.emplace(r.key, static_cast<u16>(r.position));
+				if (r.id) t.p_tal[r.id] = talent_code(0, r.position);
+				shared_by_key.emplace(r.key, talent_code(0, r.position));
 			}
-			std::map<std::pair<u32, std::string>, u16> hero_by_key;
+			std::map<std::pair<u32, std::string>, u32> hero_by_key;
 			{
 				std::set<std::string> seen;
 				for (u32 i = 1; i <= B.hero_count; ++i)
@@ -554,9 +556,9 @@ namespace lcsave::detail
 					for (const auto& r : l)
 					{
 						put_at(T.TALN_hero[r.group], r.position, r.id, "TALN");
-						const u32 engine_id = (r.group + 1) * 100 + r.position;
-						if (r.id) t.p_tal[r.id] = engine_id;
-						hero_by_key.emplace(std::make_pair(r.group, r.key), static_cast<u16>(engine_id));
+						const u32 code = talent_code(r.group + 1, r.position);
+						if (r.id) t.p_tal[r.id] = code;
+						hero_by_key.emplace(std::make_pair(r.group, r.key), code);
 					}
 				}
 			}
@@ -832,7 +834,8 @@ namespace lcsave::detail
 		{
 			const auto digest = current.prefix_digests.find(p.placements.size());
 			if (p.zone == hash && old == std::string(reinterpret_cast<const char*>(p.old.data()),20) &&
-			    p.current == current.sha1 && p.placements.size() < current.names.size() &&
+			    // A full-length row (no tail) is an equivalence attestation (zonecompat.attest_equivalent).
+			    p.current == current.sha1 && p.placements.size() <= current.names.size() &&
 			    digest != current.prefix_digests.end() && digest->second == p.digest) return &p;
 		}
 		return nullptr;
@@ -867,7 +870,7 @@ namespace lcsave::detail
 		{
 			const auto count = prefix.placements.size();
 			if (prefix.zone != key_hash1(zone, Enc::cp1252) || prefix.current != z.sha1 ||
-			    count >= num.size() || z.prefix_digests.contains(count)) continue;
+			    count > num.size() || z.prefix_digests.contains(count)) continue;
 			try { z.prefix_digests.emplace(count, resident_prefix_digest(root, num, count)); }
 			catch (const Error&) { /* invalid prefix: retain the stock exact-hash path */ }
 		}

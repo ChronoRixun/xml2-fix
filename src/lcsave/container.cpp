@@ -546,7 +546,9 @@ namespace lcsave::detail
 		h.minor = 0;
 		// required_features: bit 0 ENTITY_LAYOUT_CONTIGUOUS10 (PHASE-A-PLAN section 4) - the writer's native layout
 		// decides it; a rewrite carries the read header's bits; a bit this code does not implement is never written
-		if (header.required_features & ~known_required_features)
+		// (bit 1 NATIVE_W2, limits-wave2.md section 7, always with bit 0: a W2 file's typed ids are ten-bit)
+		if ((header.required_features & ~known_required_features) ||
+		    ((header.required_features & feature_native_w2) && !(header.required_features & feature_entity_layout_contiguous10)))
 		{
 			fail("required feature bits " + fmt_hex(header.required_features) + " not implemented by this writer");
 		}
@@ -602,6 +604,10 @@ namespace lcsave::detail
 		if (h.required_features & ~known_required_features)
 		{
 			fail("required feature bits " + fmt_hex(h.required_features) + " not implemented (needs a newer version)");
+		}
+		if ((h.required_features & feature_native_w2) && !(h.required_features & feature_entity_layout_contiguous10))
+		{
+			fail("required feature bits " + fmt_hex(h.required_features) + ": NATIVE_W2 without ENTITY_LAYOUT_CONTIGUOUS10 (damaged marker)");
 		}
 		if (expect_kind >= 0 && h.kind != expect_kind)
 		{

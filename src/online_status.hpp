@@ -6,6 +6,8 @@
 #include "online_status_core.hpp"
 
 #include <string>
+#include <vector>
+#include <Windows.h>
 
 namespace online_status
 {
@@ -27,6 +29,18 @@ namespace online_status
 	// One-shot launch keys (contract v1.1): removes [Online] Host, JoinCode, Public and RoomName from `ini_path` key by key with
 	// WritePrivateProfileStringW (the launcher's writer), leaving every other line as it was. True when all are gone.
 	bool remove_launch_keys(const std::wstring& ini_path);
+	// Contract v1.6 proposal (docs/online-party.md section 9), additive: a new in-game room operation (Host / Join /
+	// Retry) starts a party attempt (generation + 1, attempt state connecting); `party` mirrors this PC's phase, the last
+	// host-table generation and the roster (no ping, no address), coalesced to one write per second; `tick` flushes a
+	// coalesced change. v1's keys keep their meaning, including the process-final top-level error.
+	void attempt();
+	void party(const std::string& phase, int table, const std::vector<online_status_core::roster_row>& roster);
+	void tick();
+	online_status_core::status snapshot();
+	// Host-test seams only.
+	void set_clock_for_test(DWORD (WINAPI *clock)());
+	void restart_for_test();
+	void path_for_test(const std::wstring& path);
 	// The game's xml2-fix.ini (next to the DLL).
 	std::wstring game_ini();
 	// The writer itself, for the unit test: atomically replaces `path` with `text`.

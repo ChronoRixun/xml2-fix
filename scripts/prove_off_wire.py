@@ -48,6 +48,13 @@ def capture(tag, dlldir, edit, rules):
     # revision 2, so the transport's OFF claim is compared with the key removed (rule count unchanged).
     if cfg.has_option("Game", "RevivalCost"):
         cfg.remove_option("Game", "RevivalCost")
+    # XML2 Fix 1.9.0-beta.1 (limits wave 1) registers every non-stock resource limit as its own rule (32-37,
+    # docs/gameplay-agreement.md "Resource-loading limits") on purpose: two PCs with different name/slot capacities
+    # refuse each other by name. The reference predates those rules, so the transport's OFF claim is compared with
+    # the six limit keys removed (rule count unchanged: the reference never registered them).
+    for option in ("ActorSlots", "ResourceNames", "ItemEnhancements", "FightStyles", "EffectCurves", "MoveTriggers"):
+        if cfg.has_option("Limits", option):
+            cfg.remove_option("Limits", option)
     edit(cfg)
     with (folder / "xml2-fix.ini").open("w") as handle:
         cfg.write(handle)
@@ -96,10 +103,11 @@ ref24 = capture("023f-fast", REF, setter(fast=True), 24)
 raw = capture("gns-off-fast", mine, setter(fast=True), 24)
 assert raw == ref24
 print("FastTransfer on, Transport absent = 0.2.3f", records["gns-off-fast"]["sha256"], flush=True)
-on = capture("gns-on", mine, setter(transport="gns"), 24)
+# 0.6 preview fix F: Transport=gns also registers rule 64 OnlineRemovalNotice (with rule 25), one more rule on each gns line.
+on = capture("gns-on", mine, setter(transport="gns"), 25)
 assert on != ref
-print("Transport=gns differs (24 rules)", records["gns-on"]["sha256"], flush=True)
-on2 = capture("gns-on-fast", mine, setter(fast=True, transport="gns"), 25)
+print("Transport=gns differs (25 rules)", records["gns-on"]["sha256"], flush=True)
+on2 = capture("gns-on-fast", mine, setter(fast=True, transport="gns"), 26)
 assert on2 != ref24
 (R / "evidence/off-wire-compatibility.json").write_text(json.dumps({"method": __doc__, "records": records}, indent=1))
 print("Transport OFF wire compatibility PASS")

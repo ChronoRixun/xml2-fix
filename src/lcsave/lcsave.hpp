@@ -50,6 +50,11 @@ namespace lcsave
 	// the same over an LC file (validated by the container reader first; a damaged file is refused with its reason)
 	FeatureDecision decide_features(const std::vector<std::uint8_t>& new_file, const NativeLayout& native);
 	extern const char* const downgrade_refused;   // the retail reader's reason for a feature-1 file
+	extern const char* const w2_refused;          // a contiguous pre-W2 layout's reason for a bit-1 (NATIVE_W2) file
+	// the name and the minimum build of a required-feature bit this code knows (nullptr for another bit): the save menu
+	// and the log name the build a file needs (limits-wave2.md section 7, "Named refusal")
+	const char* required_feature_name(std::uint32_t bit);
+	const char* required_feature_needs(std::uint32_t bit);
 
 	// The typed entity-id registry (tools/lcsave/typed_registry.py; the builder's tools/xml1build/typed_entity_ids.py
 	// writes it): the (scope, key) script variables that hold World tokens, bound to the scripts tree they were
@@ -108,6 +113,9 @@ namespace lcsave
 	bool load_tables(const std::wstring& build_dir, Tables& tables, std::string& error);
 	// the same with the bind files in another folder tree than the data files they describe (tests, tools)
 	bool load_tables(const std::wstring& data_dir, const std::wstring& bind_dir, Tables& tables, std::string& error);
+	// Validate every build talent position before play, including talents absent
+	// from this save. Positions and saved u16 ids follow the selected descriptor.
+	bool validate_talent_positions(const Tables&, const NativeLayout&, std::string& error);
 
 	// Data\autospend as XMen2.exe loads it (parser 0x43d0c0): the first four CharacterClass entries (0x43d18d), the
 	// first four <bonus> rules of each (0x43d373): start and rate unsigned bytes, the four deltas signed bytes in the
@@ -154,6 +162,12 @@ namespace lcsave
 	// old slot file (0x84 + 0x2fc00 bytes) -> LC campaign file (convert.convert_slot)
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables);
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables, const ConvertOptions& options);
+
+	// Runtime rule-52 verification predicate. Default is absent (migration disabled); the economy
+	// installer binds its live verified state after agreement registration. The callback must outlive loads.
+	// This is converter policy only: catalogue attributes alone never enable the migration.
+	void set_xml1_economy_verifier(bool (*verified)());
+	bool item_own_rebuilt_enabled();
 
 	// LC campaign file -> the internal stream the engine's loader reads (convert.reverse_slot through the running
 	// build's tables): the whole old slot image, 0x84 + 0x2fc00 bytes (description + length + payload); the payload
@@ -259,6 +273,14 @@ namespace lcsave
 	std::string dump(const std::vector<std::uint8_t>& file, const Tables& tables);
 	std::string dump(const std::vector<std::uint8_t>& file, const Tables& tables, std::string& error);
 
+	// The representability probe (limits-wave2.md section 7): "" when a build of the older layout `target` (E10A2, the
+	// pre-W2 release layout) can apply the LC campaign `file` exactly, else the first failing rule by name. The W2 writer
+	// sets required-feature bit 1 exactly when this is not "". Runs the target's reverse translation (its pools, widths,
+	// positions, zone-record count and talent multiplier; definition indices stay per build) and the engine constraints
+	// that translation does not check (objective index <= 255, enhancement record < 512, zone records the target would
+	// not apply). No engine, no file is written.
+	std::string representable(const std::vector<std::uint8_t>& file, const Tables& tables, const NativeLayout& target);
+
 	// "add missing herostat talents on load": every talent the running build's herostat lists for a hero that the
 	// stream's talent heap of that hero lacks (hero blocks only), in herostat order. A herostat name is resolved in the
 	// hero's own talent file first, then in shared_talents. On the real saves this includes the powers of heroes
@@ -296,4 +318,8 @@ namespace lcsave
 	Result convert_old_profile_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables, const ConvertOptions& options);
 	Result old_profile_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context);
 	Result new_to_old_profile(const std::vector<std::uint8_t>& new_file, const Tables& tables);
+	// the same with the engine's layout: the profile holds no layout-sized field, but the build's table budgets (item
+	// definitions 160 / 1024) are the installed layout's
+	Result old_profile_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context, const NativeLayout& native);
+	Result new_to_old_profile(const std::vector<std::uint8_t>& new_file, const Tables& tables, const NativeLayout& native);
 }

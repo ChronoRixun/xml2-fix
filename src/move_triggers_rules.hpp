@@ -1,9 +1,10 @@
 #pragma once
 
 #include "limits_rules.hpp"
+#include "fight_moves_layout.hpp"
 
 // CFightMove's layout stays native. Its old inline handle array becomes a pointer to one
-// preallocated side array for each of the native pool's 332 records. Count, tags, event
+// preallocated side array for each published pool slot (332 at stock). Count, tags, event
 // ownership, copies and destruction remain the game's own. These are not save records.
 namespace move_triggers_rules
 {
@@ -13,7 +14,7 @@ namespace move_triggers_rules
 	constexpr int max_capacity = 127; // parser's signed imm8 comparison
 	constexpr DWORD pool_pointer = 0x789e1c;
 	constexpr DWORD record_size = 0x148;
-	constexpr DWORD record_count = 332;
+	constexpr DWORD record_count = fight_moves_layout::stock_count; // legacy callers/tests; production uses descriptor
 	constexpr DWORD array_pointer = 0xcc;
 	constexpr DWORD count_offset = 0x11c;
 	constexpr DWORD constructor = 0x500540;
@@ -27,10 +28,19 @@ namespace move_triggers_rules
 
 	constexpr std::optional<DWORD> slot(const DWORD pool, const DWORD move)
 	{
-		if (!pool || move < pool) return std::nullopt;
-		const DWORD delta = move - pool;
-		if (delta % record_size || delta / record_size >= record_count) return std::nullopt;
-		return delta / record_size;
+		return fight_moves_layout::slot({pool, record_count}, move);
+	}
+	constexpr std::optional<DWORD> slot(fight_moves_layout::pool_descriptor pool, DWORD move)
+	{
+		return fight_moves_layout::slot(pool, move);
+	}
+	// W3-3 owns these relocated operands once its descriptor is published. Keep
+	// every original stock guard when absent; retain the non-operand prefix when on.
+	inline guard descriptor_guard(guard g, bool raised)
+	{
+		if (raised && g.va == 0x4f7a9d) g.hex = g.hex.substr(0, 2);
+		if (raised && g.va == 0x4f6260) g.hex = g.hex.substr(0, 12);
+		return g;
 	}
 
 	constexpr DWORD timer_slots = 1024; // cleared after native actor-arena teardown
@@ -126,10 +136,10 @@ namespace move_triggers_rules
 	}};
 
 	template <typename Check>
-	DWORD mismatch(Check check)
+	DWORD mismatch(Check check, bool raised = false)
 	{
 		for (const auto& a : accesses) if (!check(a.va, a.retail)) return a.va;
-		for (const auto& g : guards) if (!check(g.va, g.hex)) return g.va;
+		for (const auto& original : guards) { const auto g = descriptor_guard(original, raised); if (!check(g.va, g.hex)) return g.va; }
 		return 0;
 	}
 

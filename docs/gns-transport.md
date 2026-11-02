@@ -2,7 +2,7 @@
 
 Requested-only (`[Online] Transport = gns`; absent, empty or any other value = the stock transport, byte for byte, and
 the released capability digest). Every PC of a session must use it: it is gameplay-agreement **rule 25 GnsTransport**,
-revision 4, values `{1, port offset 1000, framing revision 3, 0}` (revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below); a PC with it refuses a PC without it (and the other
+revision 6, values `{1, port offset 1000, framing revision 4, 0}` (revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below; revision 6 / framing 4: the 0.6 party kinds 7/8, docs/online-party.md; revision 5 was skipped - its rule summary collided with revision 4's); a PC with it refuses a PC without it (and the other
 way round) and names `25 GnsTransport` in the refusal.
 
 The LAN / direct-IP mode is described below. [Online rooms](online-rooms.md) imply this transport and add
@@ -46,6 +46,20 @@ the native fixed-length rule (length 0 with a body = the opcode's entry at 0xa3e
 
 The legacy fragment opcodes 0x12/0x13 are never sent over GNS and are dropped when received from it.
 
+Link kinds (first payload byte): 0 game, 1 hello, 2 hello_ack, 3 keepalive, 4 datagram (room tunnel, framing 2),
+5 lost_inputs, 6 lost_ready (framing 3); 7 party_report and 8 party_table (0.6 round 7, room tunnels only, unreliable;
+[online-party.md](online-party.md)). Kinds 7/8 are handled by the room module before the tunnel policy and never reach
+this adapter's game lane; a build without them drops them as malformed/refused tunnel messages and keeps the link.
+Rule 25 is revision 6 / framing 4 for them (`{1, 1000, 4, 0}`); revision-4 builds are refused by name.
+Kind 9 removal_notice (0.6 preview fix F, rule 64 OnlineRemovalNotice, [online-party-menu.md](online-party-menu.md)
+section 4) is the same kind of room-module message: host to the removed member only, before the tunnel policy. Kind 16 is
+rule 63's restore transaction (not sent yet). Kind 10 is the host's admission boundary decision (AQ3) and kind 11 the
+host's lost-newcomer decision (p060fix/AR, [join-in-progress.md](join-in-progress.md) "A newcomer lost before the shared
+start"); both are GNS-only reliable controls, accepted only from the bound host. Kind 12 is the host's room roster
+(p060fix/AS, [online-rooms.md](online-rooms.md) item 5): a room-module message, host to each member reliably on its
+connect and to all members after every join/leave, routed before the tunnel policy and accepted only from the pinned
+host; no rule id (coordinator exception 2026-11-01, see online-rooms.md). Kinds 13-15 are free.
+
 ## A participant lost abruptly (three or more players)
 
 The lockstep keeps every participant's inputs in the synchronizer's input ring (0x79fbb0, getter 0x55a390; one block
@@ -71,7 +85,7 @@ soon as this PC waits at its frame. A vanished host is left to the native watchd
 Every loss takes this path (rule 25 revision 4): a link ends here when GNS closes it, when another survivor's lost
 message names that participant while this PC still hears it (never the host, index 0), and - on the host - when
 the native session times it out. The native removals of a remote participant with a bound link in a running zone
-(lost codes 0x10cc/0x10cd: the watchdog 0x613790 at 0x613adc and the lag-report vote 0x614810 via 0x6133a0) are
+(lost codes 0x10cc/0x10cd: the watchdog 0x613790 at 0x613adc and frame/checksum arbitration 0x614810 via 0x6133a0) are
 filtered at the entries of the notice 0x611550 and the removal 0x612c40: the link is ended and `vanished_links`
 removes the player at the agreed frame (its own `hand_over` calls pass). Loads, other reasons (leave, session
 teardown), the host's record and a loss not handed over 20 s after it began keep the native path. Before (030c/030d,
@@ -121,7 +135,89 @@ output boundary so remote text cannot inject lines.
 
 ## Build
 
-`cmake -S . -B native -A Win32 -DXML2_FIX_GNS_ROOT=<folder with include/steam and lib/>` (GameNetworkingSockets
-v1.6.1 static `/MT`, protobuf and abseil from vcpkg `x86-windows-static`, same toolset). Without `XML2_FIX_GNS_ROOT`
+[docs/BUILDING.md](BUILDING.md) has the recipe: `scripts/build-gns.ps1` builds the package (GameNetworkingSockets
+v1.6.1 static `/MT`, protobuf and abseil from vcpkg, path-trimmed, same toolset as the Fix), and
+`-DXML2_FIX_GNS_ROOT=<folder with include/steam and lib/>` links it into the DLL. Without `XML2_FIX_GNS_ROOT`
 the DLL has no GNS and `Transport=gns` logs that the stock transport stays in use. Native test:
 `xml2_gns_transport_test [XMen2.exe]`.
+
+Native participant removals log the entry caller, participant index, both notice
+reason codes and flag before the existing removal filter runs. The corresponding
+removal logs its caller, record and reason. The best-effort stack can be truncated
+by the engine's x86 frame omission; the explicitly captured entry caller is still
+available. These rare lifecycle lines are outside the capped packet trace.
+Opcode `0x2b` is the native 12-byte participant-removal notice (`0x611550`), so its
+presence alone does not distinguish a network failure, frame/checksum arbitration or session
+teardown. The diagnostics do not suppress a reset, removal or checksum decision.
+
+### Host self-drop diagnostic
+
+For a native notice on either host or guest naming any participant index 0-3 through the common helper,
+the diagnostic records the
+caller above the common `0x6133a0` helper. That helper omits a frame pointer, so a
+normal stack capture may stop inside the adapter. Its guarded entry stack puts
+the upper return at word seven of the `0x611550` entry frame. The diagnostic labels
+returns `0x5f2867` (front-end exit) and `0x6149a7` (frame/checksum arbitration), and retains
+an unknown return numerically. The read is exception-contained and changes no
+removal/filter decision. The next live reproduction must establish which path
+caused the unexplained self-drop.
+
+
+For return `0x6149a7`, the same notice hook also reads the native checksum
+manager `0xa536d8`: state, next frame, period and current simulation frame, then
+all four sender-indexed lists' counts and first sample frame/hash. Each line
+includes the native participant index, record, flags and name; `0x2e` queues by
+that sender index, including the local sample. `readable` and `present` distinguish
+a failed read, an empty list and a real zero hash. Reads are exception-contained;
+participant traversal and output are bounded to four slots. No iterator advances.
+The guarded `0x61499b..0x6149be` sequence proves that list clearing happens after
+the helper returns, so the notice precedes removal and retains the arbitration
+inputs. This uses the existing notice bridge, including when JoinInProgress is
+disabled; its checksum hold hooks are unchanged.
+
+Arbitration is reached after a same-frame checksum disagreement OR an input-frame
+mismatch (the latter tail-jumps from `0x606caa`). `0x6149a7` alone does not
+distinguish those triggers or valid selection from fallback. Two different
+nonzero hashes tied one-to-one can select index zero. Capture the per-index
+frames/hashes on both PCs to investigate actual divergence versus stale or
+misaligned samples/arbitration; the log does not declare the host at fault or
+change native selection/removal. Neither candidate call is a broker timeout.
+
+
+Late-admission handoff stages new output as soon as a link binds. It does not
+continue adding packets to the native queue while waiting for that queue to
+empty. Existing native reliable messages must ACK before staged GNS output can
+flush; the native receive/transmit/fragment queues and held adapter output all
+contribute to opcode backlog. Reports expose bound/switched/native-send-pending.
+The lost-input relay's recipient count excludes the departed peer and counts
+other survivors, so zero is normal in a two-player session. GNS game counters
+exclude native datagrams carried through the room connection.
+
+Transport-service opcodes0x0a/0x0f/0x10/0x11 stay live over a bound GNS link while gameplay is held. In particular0x0f is a native transport ACK, not an input record. Holding ACKs could deadlock both old reliable queues. The two-way regression verifies both drains and input-family0x02 delivery; one-way synthetic ACK progress alone is insufficient.
+
+These service frames bypass the output FIFO with UnreliableNoNagle before and
+after the switch, including the direct-send hook. A bound link that closes before
+switching logs `handoff-link-closed`, `handoff-outbound-overflow`, or
+`handoff-inbound-overflow`, with held/inbound counts and bytes before clearing
+them. It ends through the existing native loss handling. Native fallback cannot
+preserve the ordered stream after the adapter captured gameplay. The offline
+`scripts/test_transport_review.py --out <scratch>` regression executes the
+production send/close hooks against an invented socket sink and checks diagnostic
+cap wiring; the existing logger test verifies the capped helper's rate limit.
+
+An unadmitted peer's tagged native refusal stays on the native datagram lane of
+its unbound room tunnel. Enqueue success at `0x610f30` is not transmission:
+disconnecting the peer lets maintenance `0x60f0a0` retire its reliable queue before
+the next flush. The refusal now calls the guarded session peer-flush wrapper
+`0x610fe0` before clearing the peer's connected flag. The native fixture exercises
+both game port 5165 and a high local port, including the 23-byte refusal packet;
+the race depends on flush/retirement ordering rather than port equality.
+
+The host's reliable waiting-tunnel Quit notice uses ReliableNoNagle. Teardown
+drains those queued notices before destroying the P2P listener: closing that
+listener also destroys accepted children, including lingered connections. The
+shared wait is bounded at 1000 ms across all waiting peers; it checks pending and
+unacknowledged reliable bytes while GNS's backend progresses independently. A
+deadline or unavailable status is logged and teardown still completes. Deferred
+leave preserves linger explicitly after its scheduling arm is consumed. Ordinary
+unarmed Leave keeps its immediate close behavior.
