@@ -5812,7 +5812,12 @@ namespace
 			return;
 		}
 		CHECK(SUCCEEDED(keyboard->SetDataFormat(&c_dfDIKeyboard)));
-		CHECK(SUCCEEDED(keyboard->SetCooperativeLevel(GetConsoleWindow(), DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY))); // the game's flags
+		// The game's flags need a window; a runner without a console (CI services) has none, and the synthetic pipe reads
+		// below do not depend on it.
+		if (const HWND console = GetConsoleWindow())
+			CHECK(SUCCEEDED(keyboard->SetCooperativeLevel(console, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY))); // the game's flags
+		else
+			std::printf("  info  no console window here - the game's cooperative level is not set; the pipe reads still run\n");
 		// Foreground acquisition can fail while unfocused; synthetic pipe reads still succeed.
 		keyboard->Acquire();
 		BYTE state[256]{};
