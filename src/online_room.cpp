@@ -36,6 +36,11 @@
 #include <thread>
 #include <vector>
 
+// Fix AS: the host's room roster has its own first byte on the room connection, routed before the GNS transport's.
+static_assert(online_room_core::roster_kind != online_party_core::kind_report && online_room_core::roster_kind != online_party_core::kind_table &&
+	online_room_core::roster_kind != online_removal_core::link_kind && online_room_core::roster_kind != 16 &&
+	online_room_core::roster_kind > std::uint8_t(gns_transport_core::kind::newcomer_lost), "the room roster's kind must not be any other room-connection message's");
+
 #if XML2_FIX_GNS
 #include "broker_tls.hpp"
 #include <steam/isteamnetworkingutils.h>
@@ -727,7 +732,7 @@ namespace online_room
             }
         }
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
-		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
+		tunnel* by_address(std::uint32_t a) { if (!a) return nullptr; for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
 		const char* route(HSteamNetConnection c)
 		{
@@ -782,7 +787,9 @@ namespace online_room
 			auto t = std::make_unique<tunnel>();
 			t->id = id;
 			t->address = members.address(id);
-			if (!t->address || by_address(t->address) || t->address == own_address)
+			if (!t->address && !members.confirmed())
+				logger::write("online: member %s gets its address with the host's room roster", id.c_str());
+			else if (!t->address || by_address(t->address) || t->address == own_address)
 			{
 				logger::write("online: member %s has no unique room-assigned virtual address - it stays unreachable", id.c_str());
 				t->address = 0;
@@ -864,6 +871,108 @@ namespace online_room
 		}
 		// Who opens which connection: a joiner to the host; between two joiners the smaller identity.
 		bool opens_to(const std::string& id) { return id == host_id || (!hosting && id != host_id && own_id < id); }
+
+		// ---- Fix AS: the host's room roster (online_room_core.hpp room_roster): every PC holds the host's address map ----
+		// A joiner's map is provisional until the host's roster arrives; nothing of its game reaches a member before that
+		// (admission_target, room_sendto and the waiting queue wait), so its game never learns an address another PC does
+		// not share. A host build without the roster: after this long on a connected host tunnel the broker's order is used,
+		// as before Fix AS.
+		constexpr DWORD roster_wait_ms = 5000;
+		bool roster_logged = false; // the first adopted roster of this room is logged whole
+		bool roster_ready() { return hosting || members.confirmed(); }
+		EResult real_send_roster(HSteamNetConnection c, const void* bytes, std::uint32_t size) {
+			return sockets()->SendMessageToConnection(c, bytes, size, k_nSteamNetworkingSend_ReliableNoNagle, nullptr);
+		}
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+		auto send_roster_bytes = &real_send_roster;
+#else
+		EResult send_roster_bytes(HSteamNetConnection c, const void* bytes, std::uint32_t size) { return real_send_roster(c, bytes, size); }
+#endif
+		std::string roster_text()
+		{
+			std::string out;
+			for (const auto& r : members.rows())
+			{
+				if (!out.empty()) out += ", ";
+				out += r.id + "=" + (members.address(r.id) ? core::dotted(members.address(r.id)) : std::string("?")) + (r.active ? "" : " (left)");
+			}
+			return out;
+		}
+		// The host: its roster to one connected member (on connect) or to all of them (after a membership change).
+		bool send_roster(tunnel& t)
+		{
+			if (!hosting || !room_ready || !t.connected || t.connection == k_HSteamNetConnection_Invalid || !members.contains(t.id)) return false;
+			const auto bytes = core::encode_roster(members.gen(), members.rows());
+			if (bytes.empty()) { logger::write_once("online-roster-encode", "online: the room roster could not be encoded (%zu entries) - members keep their own maps", members.size()); return false; }
+			const auto r = send_roster_bytes(t.connection, bytes.data(), std::uint32_t(bytes.size()));
+			if (r != k_EResultOK) logger::write("online: could not send the room roster to %s (result %d)", t.id.c_str(), int(r));
+			return r == k_EResultOK;
+		}
+		void send_roster_all(const char* why)
+		{
+			if (!hosting || !room_ready) return;
+			unsigned sent = 0;
+			for (auto& t : tunnels) sent += send_roster(*t);
+			if (sent) logger::write("online: room roster gen %lld sent to %u member%s (%s): %s", members.gen(), sent, sent == 1 ? "" : "s", why, roster_text().c_str());
+		}
+		// Every tunnel takes the address the (new) map gives its member.
+		void relabel_tunnels()
+		{
+			own_address = members.address(own_id);
+			for (auto& tp : tunnels) // never erases: poll() calls this while it walks the tunnels (a leaver's tunnel goes with peer_left)
+			{
+				auto& t = *tp;
+				const auto address = members.address(t.id);
+				if (address != t.address)
+				{
+					if (t.address)
+					{
+						logger::write("online: room roster: %s moves from %s to %s%s", t.id.c_str(), core::dotted(t.address).c_str(), core::dotted(address).c_str(),
+						              t.transport_bound ? " - its game link was already bound to the old address" : "");
+						for (std::size_t k = 0; k < arrivals.size();)
+						{
+							if (arrivals[k].address != t.address) { ++k; continue; }
+							arrivals_bytes -= arrivals[k].data.size();
+							arrivals.erase(arrivals.begin() + k);
+						}
+					}
+					t.address = address;
+				}
+			}
+		}
+		// The joiner (and every member, on each refresh): the host's roster on the host's own room connection.
+		void roster_receive(tunnel& t, const std::uint8_t* data, std::size_t size)
+		{
+			if (hosting || t.id != host_id || !room_ready) { t.refused("a room roster not from this room's host", int(core::roster_kind), size); return; }
+			long long gen = 0;
+			std::vector<core::roster_row_t> rows;
+			if (!core::decode_roster(data, size, gen, rows)) { t.refused("malformed room roster", int(core::roster_kind), size); return; }
+			const bool was_confirmed = members.confirmed();
+			const auto r = members.adopt(rows, gen, host_id, own_id);
+			if (!r.ok)
+			{
+				logger::write_capped("online-roster-refused", "online: refused the host's room roster (gen %lld, %zu entries): %s", gen, rows.size(), r.why);
+				return;
+			}
+			relabel_tunnels();
+			online_status::players(status_players());
+			if (!roster_logged || r.changed)
+				logger::write("online: room roster from the host (gen %lld)%s: %s; this PC is %s", gen,
+				              !was_confirmed ? "" : r.changed ? " CHANGED this PC's map" : "", roster_text().c_str(), core::dotted(own_address).c_str());
+			roster_logged = true;
+		}
+		// No roster on a connected host tunnel for roster_wait_ms: a host build before Fix AS - the broker's order.
+		void roster_wait_tick()
+		{
+			if (hosting || !room_ready || members.confirmed()) return;
+			const auto* h = by_id(host_id);
+			if (!h || !h->connected || room_clock() - h->connected_at < roster_wait_ms) return;
+			members.assume_broker_order();
+			relabel_tunnels();
+			logger::write("online: no room roster from the host %lu ms after connecting (a host build without one) - the broker's member order gives the addresses: %s; this PC is %s",
+			              unsigned long(roster_wait_ms), roster_text().c_str(), core::dotted(own_address).c_str());
+			roster_logged = true;
+		}
 
 		void write_room_file()
 		{
@@ -996,7 +1105,7 @@ namespace online_room
 			{
 				room_code = core::join_code(msg.text("code"));
 				host_id = own_id;
-				room_ready = !room_code.empty() && members.reset({own_id});
+				room_ready = !room_code.empty() && members.reset({own_id}, msg.number("gen", 0));
 				own_address = members.address(own_id);
 				if (!room_ready) { host_id.clear(); own_address = 0; client.fail(client.view().generation, "malformed_reply", room_clock()); logger::write("online: broker returned an invalid host response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
 				logger::write("online: room %s open (host %s, up to %lld players) - joiners set [Online] JoinCode=%s", online_security::redact_join_code(room_code).c_str(), own_id.c_str(), msg.number("max_participants"), online_security::redact_join_code(room_code).c_str());
@@ -1024,8 +1133,9 @@ namespace online_room
                     if (!core::valid_identity(m) || !unique.insert(m).second) { client.fail(client.view().generation, "malformed_reply", room_clock()); return; }
                     ordered.push_back(m);
                 }
-				room_ready = !room_code.empty() && core::valid_identity(host_id) && !ordered.empty() && ordered.front() == host_id && members.reset(ordered) && members.contains(own_id);
-				own_address = members.address(own_id);
+				room_ready = !room_code.empty() && core::valid_identity(host_id) && !ordered.empty() && ordered.front() == host_id && members.provisional(ordered, msg.number("gen", 0)) && members.contains(own_id);
+				own_address = members.address(own_id); // 0 until the host's room roster (Fix AS): only the host's .1 is known now
+				roster_logged = false;
 				if (!room_ready) { host_id.clear(); own_address = 0; client.fail(client.view().generation, "malformed_reply", room_clock()); logger::write("online: broker returned an invalid resolve response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
 				// Another game build's room: refused before any connection (the room carries the host's version token).
 				const auto room = core::parse(msg["room"].text);
@@ -1064,26 +1174,33 @@ namespace online_room
 					if (room["public"].t == core::value::type::boolean) client.metadata(room.text("name"), listed_room);
 					online_status::room(listed_room, listed_room ? browser::clip_utf8(room.text("name"), browser::name_max) : std::string());
 				}
-				logger::write("online: join code %s: host %s at %s - in Join Game, Connect by IP ([Del]) type 0 (or that address), Enter; %zu members", online_security::redact_join_code(room_code).c_str(),
-				              host_id.c_str(), core::dotted(members.address(host_id)).c_str(), members.active_size());
+				logger::write("online: join code %s: host %s at %s - in Join Game, Connect by IP ([Del]) type 0 (or that address), Enter; %zu members (gen %lld; the other members' addresses come with the host's room roster)", online_security::redact_join_code(room_code).c_str(),
+				              host_id.c_str(), core::dotted(members.address(host_id)).c_str(), members.active_size(), msg.number("gen", 0));
 			}
 			else if (op == "peer_joined")
 			{
 				const auto id = msg.text("identity");
-				if (room_ready && core::valid_identity(id) && members.join(id))
+				const auto gen = msg.number("gen", 0);
+				if (room_ready && core::valid_identity(id) && members.join(id, gen))
 				{
-					logger::write("online: %s joined room %s (%s)", id.c_str(), online_security::redact_join_code(room_code).c_str(), core::dotted(members.address(id)).c_str());
+					logger::write("online: %s joined room %s (%s, gen %lld)", id.c_str(), online_security::redact_join_code(room_code).c_str(),
+					              members.confirmed() ? core::dotted(members.address(id)).c_str() : "address from the host's room roster", gen);
 					online_status::players(status_players());
+					send_roster_all("a member joined");
 				}
 			}
 			else if (op == "peer_left")
 			{
 				const auto id = msg.text("identity");
-				members.leave(id);
+				const auto gen = msg.number("gen", 0);
+				members.leave(id, gen);
 				signal_rates.erase(id);
-				forget(id, "left the room");
-				logger::write("online: %s left room %s", id.c_str(), online_security::redact_join_code(room_code).c_str());
+				// A stale repeat (its generation already applied from the host's roster) changes nothing; the tunnel goes
+				// only when the member is not in the room now.
+				if (!members.contains(id)) forget(id, "left the room");
+				logger::write("online: %s left room %s (gen %lld)", id.c_str(), online_security::redact_join_code(room_code).c_str(), gen);
 				online_status::players(status_players());
+				send_roster_all("a member left");
 			}
 			else if (op == "room_closed")
 			{
@@ -1220,6 +1337,12 @@ namespace online_room
 						batch[i]->Release();
 						continue;
 					}
+					if (batch[i]->m_cbSize >= 1 && data[0] == core::roster_kind)
+					{
+						roster_receive(*t, data, std::size_t(batch[i]->m_cbSize));
+						batch[i]->Release();
+						continue;
+					}
 					const auto p = gns_transport_core::parse(data, std::size_t(batch[i]->m_cbSize));
                     // A waiting admitted guest has no native host link. Classify
                     // only the pinned host's valid reliable departure here; all
@@ -1239,6 +1362,12 @@ namespace online_room
 					}
 					if (p.k == gns_transport_core::kind::datagram)
 					{
+						if (!t->address)
+						{
+							t->refused("no room address yet (the host's room roster has not arrived)", int(p.k), p.length);
+							batch[i]->Release();
+							continue;
+						}
 						if (!t->datagram_packets.allow(now) || !t->datagram_bytes.allow(now, p.length))
 						{
 							t->refused("datagram rate", int(p.k), p.length);
@@ -1340,7 +1469,8 @@ namespace online_room
 					datagram d{room_clock(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
 					present_virtual(s, d.data);
 					if (t->datagrams_out < 8) logger::write("online: tunnel trace: to %s:%u %d bytes, first byte %02x", core::dotted(address).c_str(), unsigned(d.to), length, length ? unsigned(std::uint8_t(data[0])) : 0u);
-					if (!(t->connected && send_datagram(*t, d)))
+					// Fix AS: a joiner's game reaches no member before the host's room roster (it is queued, as while connecting).
+					if (!(t->connected && roster_ready() && send_datagram(*t, d)))
 					{
 						while (!t->waiting.empty() && (t->waiting.size() >= 64 || t->waiting_bytes > waiting_cap - d.data.size()))
 						{
@@ -1358,6 +1488,7 @@ namespace online_room
 				if ((address == INADDR_BROADCAST || (address & 0xff) == 0xff) && ntohs(to.sin_port) == game_port && !configured_code.empty())
 				{
 					int asked = 0;
+					if (!roster_ready()) return length; // Fix AS: asked again by the game's next search, after the host's roster
 					for (auto& t : tunnels)
 					{
 						datagram d{room_clock(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
@@ -1997,7 +2128,8 @@ namespace online_room
         address = 0;
         if (!menu_client || hosting || !wanted || generation != client.view().generation ||
             client.view().state != browser::phase::room || !client.view().authenticated ||
-            !room_ready || !cert_ready || !ice_ready || broker_gone || host_id.empty() || !members.contains(host_id)) return false;
+            !room_ready || !cert_ready || !ice_ready || broker_gone || host_id.empty() || !members.contains(host_id) ||
+            !members.confirmed()) return false; // Fix AS: admission waits for the host's room roster
         const auto* tunnel = by_address(members.address(host_id));
         if (!tunnel || !tunnel->connected || tunnel->connection == k_HSteamNetConnection_Invalid || tunnel->id != host_id) return false;
         address = tunnel->address; return core::is_virtual(address);
@@ -2170,9 +2302,10 @@ namespace online_room
 			}
 		}
         relay_route_tick();
+		roster_wait_tick();
 		for (auto& t : tunnels)
 		{
-			if (!t->connected) continue;
+			if (!t->connected || !roster_ready()) continue;
 			while (!t->waiting.empty())
 			{
 				if (room_clock() - t->waiting.front().at > 10000 || send_datagram(*t, t->waiting.front()))
@@ -2214,7 +2347,8 @@ namespace online_room
 			t.connection = c;
 			t.outgoing = false;
 			t.started = room_clock();
-			if (!t.address || sockets()->AcceptConnection(c) != k_EResultOK)
+			// A joiner accepts a member's connection before the host's roster names its address (it is labelled then).
+			if ((!t.address && members.confirmed()) || sockets()->AcceptConnection(c) != k_EResultOK)
 			{
 				logger::write("online: could not accept the connection from %s", remote);
 				drop(t, "accept failed");
@@ -2244,6 +2378,9 @@ namespace online_room
 			connection_status(c, &st, 0, nullptr);
 			logger::write("online: connected to %s (%s) in %lu ms - route %s, ping %d ms; the game reaches it at %s", t->id.c_str(), t->outgoing ? "outgoing" : "incoming",
 			              unsigned long(t->connected_at - t->started), route(c), st.m_nPing, core::dotted(t->address).c_str());
+			// Fix AS: the host's room roster goes first on every member's connection (reliable, so it precedes the host's
+			// own reliable traffic there; the member's game sends nothing before it has the roster).
+			if (hosting && send_roster(*t)) logger::write("online: room roster gen %lld sent to %s: %s", members.gen(), t->id.c_str(), roster_text().c_str());
 			// A joiner reaching the host: the host's game now answers the games list's search through this connection.
 			if (!hosting && t->id == host_id) host_loss.connected();
 			if (!hosting && t->id == host_id && online_status::current() == online_status_core::state::connecting)

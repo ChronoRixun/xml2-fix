@@ -176,9 +176,18 @@ Host = broker                       ; this PC opens a room when its online sessi
    proven identity must be the member's (`str:` + the broker's identity), else the connection is closed. The patched,
    project-CA-pinned GNS build (net030-gnslib) refuses unsigned and foreign-CA certificates itself. Signals are capped
    at 8192 decoded bytes and 20 per second per member; duplicate requests on a live tunnel are refused.
-5. **Virtual addresses.** The broker's member order, preserved in a vector rather than a `std::set`, assigns the host
-   `10.77.0.1` and later members `.2`, `.3`, `.4`. Addresses are not key-derived and are not renumbered on departure;
-   tombstones keep rejoins and later joins from colliding with live assignments. Datagrams use link framing kind 4
+5. **Virtual addresses.** The HOST's room history assigns them: the host `10.77.0.1`, then every identity in the order
+   the host first saw it join (`.2`, `.3`, ...). Addresses are not key-derived and are not renumbered on departure;
+   a leaver keeps its entry (a returning identity gets its old address back, a new one appends), so rejoins and later
+   joins never collide with live assignments. The broker's `resolve_ok` lists only the members present now, so a
+   joiner cannot rebuild that history (Fix AS, RR-1: numbering that list gave a late rejoiner another map than the
+   room's); its map stays provisional (only the host's `.1`) until the host's **room roster** arrives on the host's room
+   connection (link kind 12: `[12][1][broker gen u32 LE][count][count x (8-byte key, active flag)]`, sent reliably on
+   every member's connect and to every member after each membership change). The member adopts it and replays the
+   broker `peer_joined` / `peer_left` events it saw after the roster's generation (later copies of events the roster
+   already holds are skipped by `gen`). Until then the joiner's game reaches no member (admission, datagrams and the
+   LAN search wait). A host without the roster (an older build): after 5 s on the connected host tunnel the broker's
+   order is used, as before. Datagrams use link framing kind 4
    (`[4][from port][to port][datagram]`) and reach the receive pump as the sender's virtual address. The embedded
    game-info route at datagram offset +13 is confined to that same sender address and source port.
 6. **After admission** the GNS transport (gns_transport, rule 25) carries the game's messages on the same P2P
