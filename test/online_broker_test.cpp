@@ -358,7 +358,16 @@ void native_target_test() {
     assert(!room::admission_target(generation,address));
     SteamNetConnectionStatusChangedCallback_t status{};status.m_hConn=local;status.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
     status.m_info.m_identityRemote.ParseString(online_room_core::gns_identity(room::host_id).c_str());
-    assert(room::on_status(&status));assert(room::admission_target(generation,address) && address==room::members.address(room::host_id));
+    assert(room::on_status(&status));
+    // Fix AS: a connected host tunnel alone does not admit - the host's room roster must have arrived on it first.
+    assert(!room::admission_target(generation,address) && address==0);
+    {
+        const auto roster=online_room_core::encode_roster(0,{{room::host_id,true},{room::own_id,true}});
+        assert(!roster.empty() && room::sockets()->SendMessageToConnection(peer,roster.data(),std::uint32_t(roster.size()),k_nSteamNetworkingSend_Reliable,nullptr)==k_EResultOK);
+        for(int i=0;i<400 && !room::members.confirmed();++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5));room::poll(); }
+        assert(room::members.confirmed() && room::own_virtual()==0x0a4d0002);
+    }
+    assert(room::admission_target(generation,address) && address==room::members.address(room::host_id));
     auto old=generation;--old.room;assert(!room::admission_target(old,address) && address==0);
     room::cert_ready=false;assert(!room::admission_target(generation,address));room::cert_ready=true;
     room::ice_ready=false;assert(!room::admission_target(generation,address));room::ice_ready=true;
@@ -810,6 +819,7 @@ void room_closed_offline(const std::string& only={}) {
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }
+#include "online_room_roster_fixture.inl"
 // No GNS initialization, sockets, worker thread or certificate-provider calls. Drive the production dispatcher/inbox
 // and the real queue with invented protocol-2 replies, including the extra public-list request after a refusal.
 void join_refusal_offline() {
@@ -942,6 +952,7 @@ void started_advert_offline() {
 int main(int argc,char** argv) {
     if(argc==2 && std::string(argv[1])=="--join-refusal-offline") { join_refusal_offline();return 0; }
     if(argc==2 && std::string(argv[1])=="--started-advert-offline") { std::cout<<std::unitbuf;started_advert_offline();return 0; }
+    if(argc==2 && std::string(argv[1])=="--roster-offline") { roster_fixture::run_all();return 0; }
     if(argc>=2 && std::string(argv[1])=="--room-closed-offline") { std::cout<<std::unitbuf;room_closed_offline(argc>2 ? argv[2] : "");return 0; }
     if(argc!=1) { std::cerr<<"unknown broker fixture argument\n";return 2; }
     std::cout<<std::unitbuf;
@@ -967,7 +978,8 @@ int main(int argc,char** argv) {
     assert(!room::post(std::string(room::broker_queue_cap+1,'x')));
     assert(!room::list());assert(!room::resolve("ABCDEFGH"));
     fake::clock+=2000;assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room; });
-    assert(room::own_virtual()!=0 && room::view().code=="ABCDEFGH");
+    // Fix AS: a joiner's own address comes with the host's room roster; only the host's .1 is known from resolve_ok.
+    assert(room::own_virtual()==0 && !room::members.confirmed() && room::members.address(room::host_id)==0x0a4d0001 && room::view().code=="ABCDEFGH");
     auto prior=room::view().generation;room::leave();assert(room::view().generation.room>prior.room);
     pump_until([] { return room::worker_done.load(); });fake::clock+=2000;
     assert(room::host("  Friday night  ",true));pump_until([] { return room::view().state==b::phase::room; });assert(room::view().code=="ABCDEFGH");
