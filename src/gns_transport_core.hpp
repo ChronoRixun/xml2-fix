@@ -103,6 +103,17 @@ namespace gns_transport_core
 	{
 		return connector && !bound && (last == 0 || now - last >= 250);
 	}
+	// Fix AS follow-up (live-060zo-reg item 7): a room member's native link can be found before its room connection is up
+	// (ICE / TURN may finish after the game's discovery). The link then waits for that connection and binds over it when it
+	// comes up - before, it was closed at once and the pair stayed on the tunnelled stock socket for the whole session,
+	// without the GNS-only controls (a lost participant's input union and agreed cut frame, kinds 5/6). After the wait the
+	// link gives up as before.
+	constexpr std::uint32_t room_link_wait_ms = 30000;
+	enum class room_link { adopt, wait, give_up };
+	constexpr room_link room_link_step(bool connection_up, std::uint32_t waited_ms)
+	{
+		return connection_up ? room_link::adopt : waited_ms >= room_link_wait_ms ? room_link::give_up : room_link::wait;
+	}
 	// One whole game message: the native header's opcode (+0x10), reliable flag (+0xe) and body (+0, length +8).
 	struct message
 	{

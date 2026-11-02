@@ -79,6 +79,7 @@ namespace gns_transport
 			bool connector = false, bound = false, switched = false, closed = false, overflow = false, sequenced = false;
 			bool handoff_logged = false;
 			bool tunnel = false; // a room member's P2P connection (online_room owns it; the link only borrows it)
+			bool room_wait = false; // a tunnel link whose room connection was not up yet when it was found (Fix AS follow-up)
 			std::uint16_t sequence = 0; // the next native reliable sequence the GNS messages continue
 			gns_transport_core::outbox out;
 			gns_transport_core::inbox in;
@@ -527,14 +528,14 @@ namespace gns_transport
 					// decides who binds first. Both sides compare virtual addresses, as each sees the other.
 					l->connector = gns_transport_core::connects(online_room::own_virtual(), own_port, ntohl(l->address), l->port);
 					l->connection = online_room::connection_for(ntohl(l->address));
-					if (l->connection == k_HSteamNetConnection_Invalid) l->closed = true;
+					if (l->connection == k_HSteamNetConnection_Invalid) l->room_wait = true; // adopt_room_connections() binds it later
 					else if (l->connector)
 					{
 						send(*l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
 						l->hello_at = GetTickCount();
 					}
 					logger::write("online: GNS link %s for a new participant - %s", text(l->address, l->port).c_str(),
-					              l->closed ? "no room connection to it, its messages stay on the tunnelled stock socket" : (l->connector ? "hello sent on its room connection" : "waiting for its hello on its room connection"));
+					              l->room_wait ? "its room connection is not up yet - the link waits for it (its messages use the tunnelled stock socket until then)" : (l->connector ? "hello sent on its room connection" : "waiting for its hello on its room connection"));
 					links.push_back(std::move(l));
 					continue;
 				}
@@ -563,6 +564,36 @@ namespace gns_transport
 			using record_of_t = void*(__thiscall*)(void* session, void* connection);
 			logger::write("online: GNS link %s bound after %lu ms (%s); peer %p is participant record %p (0x611110)", text(l.address, l.port).c_str(), unsigned long(l.bound_at - l.opened),
 			              l.connector ? "connected" : "accepted", static_cast<void*>(l.peer), session ? reinterpret_cast<record_of_t>(0x611110)(session, l.peer) : nullptr);
+		}
+
+		// Fix AS follow-up: tunnel links found before their room connection was up take it when it comes up (then the
+		// connector says hello, as at discovery); after room_link_wait_ms the link gives up as before (stock socket).
+		void adopt_room_connections()
+		{
+			const auto now = GetTickCount();
+			for (auto& item : links)
+			{
+				auto& l = *item;
+				if (!l.room_wait || l.closed) continue;
+				const auto c = online_room::connection_for(ntohl(l.address));
+				const auto step = gns_transport_core::room_link_step(c != k_HSteamNetConnection_Invalid, now - l.opened);
+				if (step == gns_transport_core::room_link::wait) continue;
+				l.room_wait = false;
+				if (step == gns_transport_core::room_link::give_up)
+				{
+					l.closed = true;
+					logger::write("online: GNS link %s: no room connection to it after %lu ms - its messages stay on the tunnelled stock socket", text(l.address, l.port).c_str(), unsigned long(now - l.opened));
+					continue;
+				}
+				l.connection = c;
+				if (l.connector)
+				{
+					send(l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
+					l.hello_at = now;
+				}
+				logger::write("online: GNS link %s: its room connection came up %lu ms after the link - %s", text(l.address, l.port).c_str(), unsigned long(now - l.opened),
+				              l.connector ? "hello sent on it" : "waiting for its hello on it");
+			}
 		}
 
 		void lost_message(link& from, const gns_transport_core::parsed& p); // a lost participant's cut frame (below)
@@ -1403,11 +1434,12 @@ namespace gns_transport
 			online_room::tick();
 			if (!listening) return;
 			discover(manager);
+			adopt_room_connections();
 			const auto now = GetTickCount();
 			for (auto& item : links)
 			{
 				auto& l = *item;
-				if (!l.closed && l.tunnel && gns_transport_core::hello_due(l.connector, l.bound, now, l.hello_at))
+				if (!l.closed && l.tunnel && l.connection != k_HSteamNetConnection_Invalid && gns_transport_core::hello_due(l.connector, l.bound, now, l.hello_at))
 				{
 					send(l, gns_transport_core::hello(gns_transport_core::kind::hello, own_address, own_port), true);
 					l.hello_at = now;
