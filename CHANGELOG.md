@@ -43,8 +43,9 @@ X-Men Legends II's own online menus and joins only in the lobby, and the control
   instead of replaying a moment of play. The wait is `[Online] JoinHoldSeconds` in `xml2-fix.ini` (default 10, 0..15;
   `0` turns it off); each PC uses its own value. If a join takes longer than the wait, play continues and the
   friend comes in moments later.
-- If a friend's game drops while they are joining, the others are no longer left stuck: the game carries on without
-  that friend, who can join again by code.
+- If two friends are joining and one of them drops out, the other still gets in and everyone plays on: the host
+  decides once and every PC goes on without the friend who dropped. If the host drops out while a friend is
+  joining, the others see the host-left message.
 - Joining a game in progress is on by default. The host's **DROP-IN** setting turns it off for one room; a friend
   who enters the code of a game that has started then is told that the session has started and to ask the host to
   return to the lobby. A player who set `LateJoin=0` in `xml2-fix.ini` keeps that choice through a rebuild or repair.
@@ -106,6 +107,9 @@ with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The 
   (planned for 0.8). If a healthy host drops out unexpectedly, please keep `xml2-fix.log` from every PC: the cause is
   not known yet.
 - Joining a game in progress happens only at the host's next area, never mid-area.
+- If the only friend who is joining drops out partway through, one of the players already in the game can be left
+  on the pause screen with every player shown as "Not Ready". That player has to leave and join again by code; the
+  others play on. This is being fixed for the next beta.
 - The new screens still need more checks with mouse, keyboard and controllers at 720p, 1080p and 4:3, over long
   sessions (memory and graphics memory), and on the first opening of Party and the slower original screens. The
   Play Online Back selection, Party status labels and the original Kick button's lettering are still being reviewed.
