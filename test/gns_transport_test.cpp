@@ -117,6 +117,9 @@ int main(int argc, char** argv)
 	check(hello_due(true, false, 1000, 0), "hello: connector starts the handshake");
 	check(!hello_due(true, false, 1249, 1000), "hello: no busy retry before 250 ms");
 	check(hello_due(true, false, 1250, 1000), "hello: retry when the listener was not yet admitted at the first hello");
+	check(room_link_step(true, 0) == room_link::adopt && room_link_step(true, 29999) == room_link::adopt && room_link_step(false, 0) == room_link::wait &&
+	      room_link_step(false, 29999) == room_link::wait && room_link_step(false, 30000) == room_link::give_up && room_link_step(true, 30000) == room_link::adopt,
+	      "AS follow-up: a room link found before its room connection waits up to 30 s and binds over it when it comes up");
 	check(!hello_due(true, true, 2000, 1000) && !hello_due(false, false, 2000, 1000), "hello: a bound link or listener does not retry");
 	check(hello_due(true, false, 20, 0xffffff10u), "hello: retry interval survives the tick counter wrapping");
 	// Ordering: whole messages leave in enqueue order, reliable and unreliable alike, bodies copied at enqueue.

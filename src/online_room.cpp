@@ -866,11 +866,18 @@ namespace online_room
 			t.started = room_clock();
 			++t.attempts;
 			t.connection = sockets()->ConnectP2PCustomSignaling(new signaling(t.id), &remote, 0, 0, nullptr);
-			logger::write("online: connecting to %s (%s, attempt %d)%s", t.id.c_str(), core::dotted(t.address).c_str(), t.attempts,
+			logger::write("online: connecting to %s (%s, attempt %d)%s", t.id.c_str(), t.address ? core::dotted(t.address).c_str() : "address from the host's room roster", t.attempts,
 			              t.connection == k_HSteamNetConnection_Invalid ? " - GNS refused to start it" : "");
 		}
 		// Who opens which connection: a joiner to the host; between two joiners the smaller identity.
 		bool opens_to(const std::string& id) { return id == host_id || (!hosting && id != host_id && own_id < id); }
+		// Fix AS follow-up (live-060zo-reg item 7): a joiner opens its connections to EVERY member at once, before the host's
+		// roster names their addresses (they are labelled when it arrives; nothing of the game crosses them before that).
+		// Opening the other members' connections only after the roster made them finish after the game's GNS discovery.
+		bool connect_due(const tunnel& t, DWORD now)
+		{
+			return (t.address || !members.confirmed()) && t.connection == k_HSteamNetConnection_Invalid && t.attempts < 3 && now >= t.retry_at;
+		}
 
 		// ---- Fix AS: the host's room roster (online_room_core.hpp room_roster): every PC holds the host's address map ----
 		// A joiner's map is provisional until the host's roster arrives; nothing of its game reaches a member before that
@@ -2297,7 +2304,7 @@ namespace online_room
 			{
 				if (id == own_id || !opens_to(id)) continue;
 				auto& t = ensure_tunnel(id);
-				if (!t.address || t.connection != k_HSteamNetConnection_Invalid || t.attempts >= 3 || now < t.retry_at) continue;
+				if (!connect_due(t, now)) continue;
 				connect(t);
 			}
 		}

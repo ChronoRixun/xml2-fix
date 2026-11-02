@@ -124,6 +124,36 @@ broker_model script(const std::vector<std::pair<char, int>>& ops) {
     for (const auto& [o, n] : ops) { const bool ok = o == 'j' ? bm.join(member(n)) : bm.leave(member(n)); assert(ok); (void)ok; }
     return bm;
 }
+// Fix AS follow-up (live-060zo-reg item 7): a lobby joiner opens its connections to every present member AT ONCE, before the
+// host's roster (060zo waited for the roster first, so the guest connections finished after the game's GNS discovery and
+// those pairs stayed on the tunnelled stock socket). The guests' tunnels are unlabelled until the roster, then labelled.
+void ordering() {
+    for (int guests = 1; guests <= 3; ++guests) {
+        broker_model bm;
+        for (int n = 1; n <= guests; ++n) assert(bm.join(member(n)));
+        const auto h = run_host(bm);
+        const auto& e = bm.events.back();
+        pc(e.id, false); assert(room::client.begin(b::operation::resolve, fake::clock, true) && room::client.issue());
+        room::handle(core::parse(resolve_line(e))); assert(room::room_ready && !room::members.confirmed());
+        unsigned due = 0;
+        for (const auto& id : room::members.active_ids()) {
+            if (id == e.id) continue;
+            auto& t = room::ensure_tunnel(id);
+            assert(t.address == (id == H ? 0x0a4d0001u : 0u));
+            due += room::connect_due(t, fake::clock); // the old rule (an address first) refused every guest here
+        }
+        assert(due == unsigned(guests)); // the host and every other guest, before the roster
+        auto& host = *room::by_id(H); host.connection = 123; host.connected = true; host.connected_at = fake::clock;
+        closure_fixture::send(h.rosters.back()); room::poll(); assert(room::members.confirmed());
+        for (const auto& id : room::members.active_ids()) {
+            if (id == e.id || id == H) continue;
+            auto* t = room::by_id(id); assert(t && t->address == h.maps.back().at(id) && room::connect_due(*t, fake::clock));
+            t->connection = 200; assert(!room::connect_due(*t, fake::clock)); t->connection = k_HSteamNetConnection_Invalid;
+        }
+        room::tunnels.clear();
+    }
+    std::cout << "PASS roster ordering: a lobby joiner (2-4 players) opens every member's connection before the host's roster; labelled when it arrives\n";
+}
 // The host's roster refused or missing: the map stays provisional, then the old broker order (a host build before AS).
 void refusals() {
     const broker_model bm = script({{'j', 1}, {'j', 2}, {'j', 3}, {'l', 2}, {'j', 2}});
@@ -193,6 +223,7 @@ void run_all() {
         check(bm);
     }
     std::cout << "PASS roster agreement random churn: 150 rooms x 12 changes, " << (runs - before) << " joiner runs agree with the host's map\n";
+    ordering();
     refusals();
     std::cout << "PASS roster offline: " << runs << " joiner runs over " << intervals << " membership intervals, every PC's map equals the host's\n";
 }
