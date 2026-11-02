@@ -59,6 +59,13 @@ X-Men Legends II's own online menus and joins only in the lobby, and the control
 - When the host quits (even with a dead hero), crashes or loses the connection, guests see a host-left message with
   working **Host again** and **Back to Online** buttons. A sudden crash can take about ten seconds to be noticed.
 - Guests stay connected while the host uses Team Management, and a player who leaves and rejoins gets the roster back.
+- Players can now leave a lobby or a game and others can still join: before this, after someone other than the most
+  recent player left, a new or returning player could lose the connection a minute after joining, taking another
+  player with them. In testing on two PCs with four players, after a player left the lobby (from the first, a middle
+  or the last place) or quit a game in progress, a returning or brand-new player joined, in the lobby or later in the
+  game, and everyone stayed connected and in step.
+  With three or four players, the guests now connect to each other the same way they connect to the host, and when
+  one player's game closes suddenly, the others agree that it left and play on.
 - Fixed a crash when starting with a guest, focus and input getting stuck when returning to Play Online, and
   Party confirmations that swallowed the next Quit or Back.
 - Screens free their text, panels and model data when they close; repeated opening and closing kept memory use steady
