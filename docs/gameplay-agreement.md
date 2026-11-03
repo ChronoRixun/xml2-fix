@@ -1,5 +1,12 @@
 # Shared effective gameplay agreement
 
+**Linked frame rate:** rule 29 (TickRate) revision 2 uses `{1,1,10,60}`
+to agree on host-owned pacing and the versioned settings trailer. Numeric
+guest settings are local; the host's rate arrives before native admission.
+The verified timer patch is mandatory. Revision 1/beta.1 peers refuse both
+ways. See [the wire and lifecycle contract](linked-frame-rate.md); the
+revision-1 numeric TickRate description below is historical.
+
 Rule **60 ParticleScratch**, revision 1, registers `{40,0,0,0}` only after
 `[Limits] ParticleScratch=40` installs all eleven scratch clamps. Absent/0/off adds
 no rule. Refused installs register unverified with zero effective capacity.

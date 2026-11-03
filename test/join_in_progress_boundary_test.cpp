@@ -13,6 +13,10 @@
 #include <cstdarg>
 
 std::vector<std::string> observed_jip_logs;
+namespace frame_rate {
+unsigned fixture_shared_starts=0;
+void shared_frame_started() { ++fixture_shared_starts; }
+}
 
 namespace logger {
 void write(const char* format,...) {

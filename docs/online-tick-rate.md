@@ -1,5 +1,11 @@
 # Online tick rate (`[Online] TickRate`)
 
+Current co-op builds use [host-owned session pacing](linked-frame-rate.md):
+rule 29 revision 2 agrees on support, and the host sends its numeric rate
+before admission. Guest display/TickRate settings do not veto it. The
+revision-1 agreement and local-minimum behavior below document the original
+implementation and timing evidence.
+
 XML2 Fix 1.8.0-beta.3 (TickWait: beta.4). Online sessions of the stock game run at 30 frames per second; single-player runs at 60.
 
 ```ini

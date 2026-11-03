@@ -2,8 +2,10 @@
 #include "frame_rate.hpp"
 #include "frame_rate_rules.hpp"
 #include "ini.hpp"
+#include "ini_rules.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include "online_menus.hpp"
 
 #include <cstring>
 
@@ -14,6 +16,7 @@ namespace online_tick
 		using namespace frame_rate_rules;
 		tick_setting setting;
 		unsigned in_effect = stock_online_fps;
+        bool link_requested = false, link_verified = false;
 
 		bool read_matches(const code_patch& which, const std::uint8_t* at, const bool patched)
 		{
@@ -75,7 +78,10 @@ namespace online_tick
 	void install(const HMODULE game)
 	{
 		setting = parse_tick_rate(ini::text(L"Online", L"TickRate"));
-		if (!setting.requested)
+        const auto transport = ini::text(L"Online", L"Transport");
+        link_requested = setting.requested || online_menus::installed() || ini::text(L"Online", L"Host").has_value() || ini::text(L"Online", L"JoinCode").has_value() ||
+            (transport && lower(ini_rules::value_text(*transport)) == "gns");
+		if (!setting.requested && !link_requested)
 		{
 			return; // the game's own 30, no agreement entry
 		}
@@ -85,7 +91,7 @@ namespace online_tick
 		}
 		// TickWait=timer (default): the online minimum is 0.0 and the fix paces online frames at the rate with a sleeping
 		// wait; spin: the game's own busy-spin at 1/60 (TickRate=60) or 1/30, as in beta 3.
-		const bool spin = parse_tick_wait_spin(ini::text(L"Online", L"TickWait"));
+		const bool spin = !link_requested && parse_tick_wait_spin(ini::text(L"Online", L"TickWait"));
 		const unsigned wanted = setting.valid ? setting.fps : stock_online_fps;
 		bool paced = false;
 		if (!spin && patch(game, online_wait_patch))
@@ -94,10 +100,16 @@ namespace online_tick
 			const auto priority = ini::text(L"Online", L"TickPriority");
 			frame_rate::pace_online(wanted, priority && parse_tick_priority_thread(*priority));
 		}
+        link_verified = paced;
+        if (link_requested) logger::write("frame rate: %s; host-owned session pacing %s (rule 29 revision 2)", linked_frame_rate_core::capability, link_verified ? "verified" : "unavailable - admission closed");
 		const bool patched = setting.valid && setting.fps == 60 && (paced || patch(game, online_tick_patch));
 		in_effect = effective_tick_rate(setting, patched);
 		logger::write("online tick rate: online frames %s", paced ? "paced by the fix (high-resolution timer + spin, [Online] TickWait=timer): the game's online busy-spin is off" : "use the game's own busy-spin ([Online] TickWait=spin or the timer patch was refused)");
-		if (in_effect == 60)
+		if (link_requested)
+        {
+            logger::write("online tick rate: this PC's hosting ceiling is %u fps; the host's session rate overrides guests without changing their settings (TickWait=timer required)", in_effect);
+        }
+        else if (in_effect == 60)
 		{
 			logger::write("online tick rate: online sessions run at 60 fps (the game's online 1/30 s frame is 1/60 s); every PC in a session must have TickRate=60 (gameplay agreement rule 29)");
 		}
@@ -107,8 +119,11 @@ namespace online_tick
 		}
 	}
 
-	bool requested() { return setting.requested; }
-	unsigned rate() { return in_effect; }
-	std::array<std::uint32_t, 4> agreement_values() { return tick_rate_values(in_effect); }
-	std::size_t frames_for(const std::size_t count_at_30) { return frame_rate_rules::frames_for(count_at_30, in_effect); }
+	bool requested() { return setting.requested || link_requested; }
+    bool linked() { return link_requested; }
+    bool verified() { return !link_requested || link_verified; }
+    std::uint16_t revision() { return link_requested ? linked_frame_rate_core::revision : frame_rate_rules::tick_rate_revision; }
+	unsigned rate() { const auto session = frame_rate::session_rate(); return session ? session : in_effect; }
+	std::array<std::uint32_t, 4> agreement_values() { return link_requested ? std::array<std::uint32_t,4>{1,1,10,60} : tick_rate_values(in_effect); }
+	std::size_t frames_for(const std::size_t count_at_30) { return frame_rate_rules::frames_for(count_at_30, rate()); }
 }

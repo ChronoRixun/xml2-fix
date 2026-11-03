@@ -24,6 +24,18 @@
 #include <string>
 #include <vector>
 #include <cwchar>
+#include "frame_rate.hpp"
+#include "online_tick.hpp"
+
+namespace online_tick { bool link_fixture=false; bool linked() { return link_fixture; } }
+namespace frame_rate {
+ linked_frame_rate_core::session fixture_session;
+ unsigned host_setting=60;
+ unsigned session_rate() { return fixture_session.target(); }
+ unsigned host_rate() { return host_setting; }
+ bool adopt_session_rate(unsigned fps,bool room_owned) { return fixture_session.adopt(fps,room_owned); }
+ void clear_session_rate(bool room_only) { if(!room_only || fixture_session.room_owned()) fixture_session.clear(); }
+}
 
 namespace ini {
  std::optional<std::string> impact;
@@ -390,7 +402,7 @@ void records(){
    check(a.compare(c.bytes(),&d)==result::value && d.buckets==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(rules)) && !d.local_only && !d.peer_only,"the last rule's value differs: refused, and only its summary bucket differs");}
  }
  record overflow;for(std::uint16_t id=2;id<=256;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(257,1,{0,0,0,0},true) && !overflow.finalize(),"the 257th rule entry fails closed");
- static_assert(gameplay_agreement_rules::largest_queued_body==188 && gameplay_capabilities::record_size==108,"protocol 3 sizes");
+ static_assert(gameplay_agreement_rules::largest_queued_body==196 && gameplay_capabilities::record_size==108,"bounded record plus session settings");
  // Naming: which rule differs, for the log and the dialog.
  {
   auto wave=[](std::uint32_t death,bool solo){record r;for(std::uint16_t id=2;id<=15;++id)if(id!=8 || solo)r.add(id,1,{id==9 ? death : 0u,0,0,0},true);r.finalize();return r;};
@@ -474,7 +486,8 @@ void* descriptor_get(){return selected_descriptor;}void* session_get(){return se
 int __fastcall no_peer(void*,void*){return 0;}void __fastcall noop(void*,void*){}
 void __cdecl free_buffer(void* p){++freed;last_freed=p;}void* __stdcall timer_get(void* p){return p;}
 void __fastcall timer_destroy(void* p,void*){++timers;last_timer=p;}void __fastcall unregister(void*,void*){++unregistered;}
-int admitted(void*){++forwarded;return 73;}
+unsigned admitted_session_rate=0;
+int admitted(void*){++forwarded;admitted_session_rate=frame_rate::session_rate();return 73;}
 int timeout_trap(){++failures;return 0;}
 void pending_context(){context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);context[0x2294]=1;for(auto n:{0x21f4,0x21f8,0x21fc,0x2200,0x2204,0x222c,0x2234,0x2230})put(n,1);put(0x22bc,0x33333333);put(0x2298,std::uint32_t(reinterpret_cast<std::uintptr_t>(&status)));descriptor[0]=1;}
 bool cleaned(){return get(0x2250)==0 && context[0x2294]==0 && get(0x21f4)==0 && get(0x21f8)==0 && get(0x21fc)==0 && get(0x2200)==0 && get(0x2204)==0 && get(0x222c)==0 && get(0x2234)==0 && get(0x2230)==0 && get(0x22bc)==0 && get(0x221c)==0xffffffff;}
@@ -871,6 +884,34 @@ void runtime(){
   check(output_this==0x12345678 && (mode==2 ? output_arg==0xffffffffu && output_extra==2 : output_arg==0x23456789 && output_extra==(mode==0 ? 123 : 0)),"native sender adapter preserves this, stack arguments and cleanup");
   check(header[8]==base && *reinterpret_cast<const std::uint8_t*const*>(header.data())==input.data(),"native original header/body storage remains intact");
  }
+ // Versioned settings ride the real installed admission adapters. The callback
+ // records the pacer's state at its entry, before a native shared frame is possible.
+ online_tick::link_fixture=true;
+ for(unsigned host_rate : {30u,60u}) {
+  frame_rate::clear_session_rate();frame_rate::host_setting=host_rate;
+  for(const auto [site,opcode,base,mode]:std::array<std::array<std::uint32_t,4>,5>{{{request_send,0x18,request_size,0},{reply_broadcast,0x1f,reply_size,2},{reply_send,0x1f,reply_size,1},{info_send,0x1a,info_size,1},{ack_send,0x1b,ack_size,1}}}) {
+   input.fill(0x5a);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);const auto length=std::uint16_t(base);std::memcpy(header.data()+8,&length,2);header[0x10]=std::uint8_t(opcode);header[0x11]=1;entry=site;ret(site+5);send_count=0;
+   if(mode==0)invoke_direct();else if(mode==1)invoke_single();else invoke_broadcast();
+   unsigned parsed=0;
+   check(send_count==1 && output_size==base+local.bytes().size()+linked_frame_rate_core::settings_size &&
+     linked_frame_rate_core::decode(output.data()+base+local.bytes().size(),linked_frame_rate_core::settings_size,parsed) && parsed==host_rate,
+     "linked rate: every installed native admission sender carries the versioned numeric target");
+   check(local.compare({output.data()+base,output_size-base})!=result::match,"linked rate: beta.1 record parser refuses the extended body before native admission");
+  }
+  frame_rate::clear_session_rate();frame_rate::host_setting=host_rate==30 ? 60 : 30;
+  const auto settings=linked_frame_rate_core::encode(host_rate);
+  input.fill(0);std::memcpy(input.data()+reply_size,local.bytes().data(),local.bytes().size());
+  std::memcpy(input.data()+reply_size+local.bytes().size(),settings.data(),settings.size());
+  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(reply_registration+1)));
+  pending_context();event incoming{0x1f,input.data(),std::uint16_t(reply_size+local.bytes().size()+settings.size()),0,context.data(),sender.data()};
+  forwarded=0;admitted_session_rate=0;
+  check(receiver(&incoming)==73 && forwarded==1 && admitted_session_rate==host_rate && frame_rate::session_rate()==host_rate,
+    "linked rate: host 30/guest 60 and reverse applied before the actual native reply callback");
+  const auto calls_before=forwarded;incoming.length=std::uint16_t(reply_size+local.bytes().size());pending_context();
+  receiver(&incoming);
+  check(forwarded==calls_before && frame_rate::session_rate()==0,"linked rate: a missing/old settings trailer never reaches native admission and restores the local cap");
+ }
+ online_tick::link_fixture=false;frame_rate::clear_session_rate();frame_rate::host_setting=60;
  separate_host_joiner();
  host_notice_tests();
  for(const auto [registration,opcode,base,joining]:std::array<std::array<std::uint32_t,4>,4>{{{request_registration,0x18,request_size,0},{reply_registration,0x1f,reply_size,1},{info_registration,0x1a,info_size,0},{ack_registration,0x1b,ack_size,1}}}){

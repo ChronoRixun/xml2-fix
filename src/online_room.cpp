@@ -1,6 +1,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "online_room.hpp"
+#include "frame_rate.hpp"
 #include "online_menus.hpp"
 #include "gns_transport.hpp"
 #include "receive_validation.hpp"
@@ -882,11 +883,12 @@ namespace online_room
 		// ---- Fix AS: the host's room roster (online_room_core.hpp room_roster): every PC holds the host's address map ----
 		// A joiner's map is provisional until the host's roster arrives; nothing of its game reaches a member before that
 		// (admission_target, room_sendto and the waiting queue wait), so its game never learns an address another PC does
-		// not share. A host build without the roster: after this long on a connected host tunnel the broker's order is used,
-		// as before Fix AS.
+		// not share. A host without versioned rate settings is refused after this
+        // wait; using its provisional order/rate could admit an unsafe mixed session.
 		constexpr DWORD roster_wait_ms = 5000;
 		bool roster_logged = false; // the first adopted roster of this room is logged whole
-		bool roster_ready() { return hosting || members.confirmed(); }
+        bool rate_refused = false; // terminal for this room generation; only Leave clears it
+		bool roster_ready() { return !rate_refused && frame_rate::session_rate() && (hosting || members.confirmed()); }
 		EResult real_send_roster(HSteamNetConnection c, const void* bytes, std::uint32_t size) {
 			return sockets()->SendMessageToConnection(c, bytes, size, k_nSteamNetworkingSend_ReliableNoNagle, nullptr);
 		}
@@ -909,7 +911,7 @@ namespace online_room
 		bool send_roster(tunnel& t)
 		{
 			if (!hosting || !room_ready || !t.connected || t.connection == k_HSteamNetConnection_Invalid || !members.contains(t.id)) return false;
-			const auto bytes = core::encode_roster(members.gen(), members.rows());
+			const auto bytes = core::encode_session_roster(members.gen(), members.rows(), frame_rate::session_rate());
 			if (bytes.empty()) { logger::write_once("online-roster-encode", "online: the room roster could not be encoded (%zu entries) - members keep their own maps", members.size()); return false; }
 			const auto r = send_roster_bytes(t.connection, bytes.data(), std::uint32_t(bytes.size()));
 			if (r != k_EResultOK) logger::write("online: could not send the room roster to %s (result %d)", t.id.c_str(), int(r));
@@ -947,20 +949,40 @@ namespace online_room
 				}
 			}
 		}
+        void refuse_rate_settings() {
+            rate_refused = true;
+            if (client.view().error=="version_mismatch") return;
+            client.refuse("version_mismatch");
+            // Legacy launcher presets have no co-op flow to translate the
+            // client error. Publish the same clear terminal reason for them.
+            online_status::error(online_status_core::error::version_mismatch,
+                "The host did not supply compatible linked frame-rate settings. Use the same XML2 Fix build on every PC.");
+        }
 		// The joiner (and every member, on each refresh): the host's roster on the host's own room connection.
 		void roster_receive(tunnel& t, const std::uint8_t* data, std::size_t size)
 		{
 			if (hosting || t.id != host_id || !room_ready) { t.refused("a room roster not from this room's host", int(core::roster_kind), size); return; }
+            if (rate_refused) { t.refused("session frame-rate agreement already refused", int(core::roster_kind), size); return; }
 			long long gen = 0;
 			std::vector<core::roster_row_t> rows;
-			if (!core::decode_roster(data, size, gen, rows)) { t.refused("malformed room roster", int(core::roster_kind), size); return; }
+            unsigned fps = 0;
+            if (!core::decode_session_roster(data, size, gen, rows, fps)) {
+                t.refused("incompatible session frame-rate settings", int(core::roster_kind), size);
+                if (size >= 2 && data[1] != 2) refuse_rate_settings();
+                return;
+            }
 			const bool was_confirmed = members.confirmed();
-			const auto r = members.adopt(rows, gen, host_id, own_id);
+            // Validate both before publishing either. A bad/replayed roster must
+            // not set this PC's rate; a conflicting rate must not confirm its map.
+            auto candidate = members;
+			const auto r = candidate.adopt(rows, gen, host_id, own_id);
 			if (!r.ok)
 			{
 				logger::write_capped("online-roster-refused", "online: refused the host's room roster (gen %lld, %zu entries): %s", gen, rows.size(), r.why);
 				return;
 			}
+            if (!frame_rate::adopt_session_rate(fps, true)) { refuse_rate_settings(); return; }
+            members = std::move(candidate);
 			relabel_tunnels();
 			online_status::players(status_players());
 			if (!roster_logged || r.changed)
@@ -968,17 +990,14 @@ namespace online_room
 				              !was_confirmed ? "" : r.changed ? " CHANGED this PC's map" : "", roster_text().c_str(), core::dotted(own_address).c_str());
 			roster_logged = true;
 		}
-		// No roster on a connected host tunnel for roster_wait_ms: a host build before Fix AS - the broker's order.
+		// No compatible roster on a connected host tunnel: refuse, never guess a rate.
 		void roster_wait_tick()
 		{
-			if (hosting || !room_ready || members.confirmed()) return;
+			if (hosting || !room_ready || members.confirmed() || rate_refused) return;
 			const auto* h = by_id(host_id);
 			if (!h || !h->connected || room_clock() - h->connected_at < roster_wait_ms) return;
-			members.assume_broker_order();
-			relabel_tunnels();
-			logger::write("online: no room roster from the host %lu ms after connecting (a host build without one) - the broker's member order gives the addresses: %s; this PC is %s",
-			              unsigned long(roster_wait_ms), roster_text().c_str(), core::dotted(own_address).c_str());
-			roster_logged = true;
+            refuse_rate_settings();
+            logger::write_once("online-rate-settings-missing", "online: host did not supply versioned frame-rate settings; native admission stays closed");
 		}
 
 		void write_room_file()
@@ -1115,6 +1134,7 @@ namespace online_room
 				room_ready = !room_code.empty() && members.reset({own_id}, msg.number("gen", 0));
 				own_address = members.address(own_id);
 				if (!room_ready) { host_id.clear(); own_address = 0; client.fail(client.view().generation, "malformed_reply", room_clock()); logger::write("online: broker returned an invalid host response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
+                if (!frame_rate::adopt_session_rate(frame_rate::host_rate(), true)) { room_ready = false; client.fail(client.view().generation, "version_mismatch", room_clock()); return; }
 				logger::write("online: room %s open (host %s, up to %lld players) - joiners set [Online] JoinCode=%s", online_security::redact_join_code(room_code).c_str(), own_id.c_str(), msg.number("max_participants"), online_security::redact_join_code(room_code).c_str());
                 if (!client.joined(client.view().generation, browser::operation::host, msg.text("code"), listed.name)) {
                     room_ready = false; client.fail(client.view().generation, "malformed_reply", room_clock()); return;
@@ -1820,8 +1840,16 @@ namespace online_room
             const int self_index = local ? local->index : -1;
             const std::string self_name = local ? std::string(local->name) : screen_name();
             party_cards = party_model.cards(self_phase, self_index, self_name, local && local->ready, local != nullptr, own_version_token, now);
+            for (auto& card : party_cards) if (card.self) {
+                card.local_fps = std::uint16_t(frame_rate::local_rate());
+                card.measured_fps_x10 = std::uint16_t(std::min(frame_rate::measured_fps_x10(), 10000u));
+                card.capacity = frame_rate::capacity_status();
+            }
             // This PC's report to every connected member, on change (<= 1/s) and every 5 s.
             auto own = party_model.own_report(self_phase, self_index, local != nullptr, own_version_token, self_name);
+            own.local_fps = std::uint16_t(frame_rate::local_rate());
+            own.measured_fps_x10 = std::uint16_t(std::min(frame_rate::measured_fps_x10(), 10000u));
+            own.capacity = frame_rate::capacity_status();
             own.seq = 0;
             const auto content = party_core::encode(own);
             if (report_pacer.due(content, now)) {
@@ -2031,6 +2059,8 @@ namespace online_room
                 tracked,pending,unavailable,unsigned long(GetTickCount()-started),unsigned long(bound_ms));
         }
         void clear_room(bool linger = false) {
+            frame_rate::clear_session_rate(true);
+            rate_refused = false;
             if(linger) drain_waiting_departures();
             for (auto& t : tunnels) drop(*t, "intentional room departure", linger);
             tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
@@ -2136,7 +2166,7 @@ namespace online_room
         if (!menu_client || hosting || !wanted || generation != client.view().generation ||
             client.view().state != browser::phase::room || !client.view().authenticated ||
             !room_ready || !cert_ready || !ice_ready || broker_gone || host_id.empty() || !members.contains(host_id) ||
-            !members.confirmed()) return false; // Fix AS: admission waits for the host's room roster
+            !roster_ready()) return false; // map AND host pacing must be settled before native admission
         const auto* tunnel = by_address(members.address(host_id));
         if (!tunnel || !tunnel->connected || tunnel->connection == k_HSteamNetConnection_Invalid || tunnel->id != host_id) return false;
         address = tunnel->address; return core::is_virtual(address);
@@ -2493,6 +2523,7 @@ namespace online_room
 				m.self = c.self;
 				m.host = c.host;
 				m.percent = c.percent == party_core::percent_none ? -1 : int(c.percent);
+                m.local_fps = c.local_fps; m.session_fps = frame_rate::session_rate(); m.measured_fps_x10 = c.measured_fps_x10; m.rate_capacity = c.capacity;
 			}
 		}
 		out.hosting = hosting;
@@ -2503,6 +2534,7 @@ namespace online_room
 			if (out.pending_count < 3)
 			{
 				auto& m = out.pending[out.pending_count++];
+                m.local_fps = c.local_fps; m.session_fps = frame_rate::session_rate(); m.measured_fps_x10 = c.measured_fps_x10; m.rate_capacity = c.capacity;
 				m.host = c.host;
 				const auto name = online_status_core::utf8_clean(c.name, party_core::name_max);
 				std::memcpy(m.name, name.c_str(), name.size());

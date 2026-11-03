@@ -882,6 +882,10 @@ bool native_flow_tick(screen s) {
         native_dispatcher_line("join start");
     }
     const auto phase=native_flow.phase;
+    if(view.generation==native_flow.ticket && view.error=="version_mismatch" &&
+       (phase==native_phase::tunnel || phase==native_phase::discovery || phase==native_phase::admitting)) {
+        native_flow_error("settings_refused");return false;
+    }
     if(phase==native_phase::setup && s==screen::host && native_flow.departure==screen::none) { broker_cancel();return false; }
     if(phase==native_phase::idle || phase==native_phase::setup) return false;
     if((phase==native_phase::host || phase==native_phase::guest) && native_flow.lobby_active) return false;

@@ -4,6 +4,7 @@
 #include "e4_core.hpp"
 #include "e4_core_sites.hpp"
 #include "join_in_progress.hpp"
+#include "frame_rate.hpp"
 #include "join_in_progress_core.hpp"
 #include "join_in_progress_rules.hpp"
 #include "game_version.hpp"
@@ -515,6 +516,7 @@ namespace join_in_progress
 		}
 		void __cdecl frame_gate_reseed()
 		{
+            frame_rate::shared_frame_started();
 			hold_playing = true; // AQ3: a running cohort, after initial/restart loading; its next area boundary exchanges decisions
 			probe_frame_camera(); // probe only; every gated frame
 			if (!restart.armed) return;

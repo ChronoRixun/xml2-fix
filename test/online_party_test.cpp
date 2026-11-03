@@ -93,6 +93,15 @@ namespace
 int main()
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
+    {
+        P::model model;model.open(CODE,K(1),K(1));model.roster({K(1),K(2)});
+        auto report=sample_report(1);report.local_fps=30;report.measured_fps_x10=299;report.capacity=linked_frame_rate_core::capacity::slow;
+        check(report_to(model,K(2),report,100)==P::refusal::none,"rate report: authenticated member report accepted");
+        auto snapshot=cards(model,100);const auto* peer=card_of(snapshot,K(2));
+        check(peer && peer->local_fps==30 && peer->measured_fps_x10==299 && peer->capacity==linked_frame_rate_core::capacity::slow,"rate report: measured slow peer reaches lobby card facts");
+        snapshot=cards(model,100+P::claim_stale_ms+1);peer=card_of(snapshot,K(2));
+        check(peer && peer->local_fps==linked_frame_rate_core::unknown_rate && peer->capacity==linked_frame_rate_core::capacity::unknown,"rate report: stale claims cannot keep a slow warning alive");
+    }
 	// ---- framing table ----
 	check(std::uint8_t(gns_transport_core::kind::lost_ready) == 6 && P::kind_report == 7 && P::kind_table == 8, "framing: kinds 0-6 are the transport's, party takes 7 and 8");
 	{
@@ -116,14 +125,14 @@ int main()
 		r.name = std::string(31, 'N');
 		r.rtt = {{K(2), 38, P::route::direct}, {K(3), 112, P::route::relay}, {K(4), P::rtt_none, P::route::unknown}};
 		const auto b = P::encode(r);
-		check(b.size() == 119 && b.size() <= P::report_max, "report: the largest one is 119 bytes (cap 128)");
+		check(b.size() == 124 && b.size() <= P::report_max, "report: the largest one is 124 bytes (cap 128)");
 		P::report back;
 		check(P::parse(b.data(), b.size(), back) == P::refusal::none && back.seq == 9 && back.token == r.token && back.name == r.name && back.rtt.size() == 3 &&
 		          back.rtt[1].ms == 112 && back.rtt[1].how == P::route::relay && back.index == 1,
 		      "report: round trip keeps every field");
 		check(P::encode(back) == b, "report: canonical (parse -> encode gives the same bytes)");
 		const auto small = P::encode(P::report{[] { P::report x; std::memcpy(x.code, CODE, 8); x.seq = 1; return x; }()});
-		check(small.size() == P::report_fixed, "report: the smallest one is 23 bytes");
+		check(small.size() == P::report_fixed, "report: the smallest one is 28 bytes");
 		bool truncations = true;
 		for (std::size_t n = 0; n < b.size(); ++n) truncations = truncations && P::parse(b.data(), n, back) != P::refusal::none;
 		check(truncations, "report: every truncation is refused");
@@ -139,7 +148,7 @@ int main()
 		P::report out;
 		auto mutate = [&](std::size_t at, std::uint8_t v) { auto c = base; c[at] = v; return P::parse(c.data(), c.size(), out); };
 		check(mutate(0, 8) == P::refusal::kind, "report enum: wrong kind");
-		check(mutate(1, 2) == P::refusal::wire && mutate(1, 0) == P::refusal::wire, "report enum: wire versions other than 1");
+		check(mutate(1, 1) == P::refusal::wire && mutate(1, 0) == P::refusal::wire, "report enum: wire versions other than 2 (including beta.1) refused");
 		check(mutate(2, '0') == P::refusal::code && mutate(9, 'o') == P::refusal::code, "report: room code outside the alphabet");
 		{ auto c = base; std::memset(c.data() + 10, 0, 4); check(P::parse(c.data(), c.size(), out) == P::refusal::sequence, "report: sequence 0 refused"); }
 		check(mutate(14, 9) == P::refusal::none && mutate(14, 10) == P::refusal::phase && mutate(14, 255) == P::refusal::phase, "report enum: phase 0..9 only");
@@ -153,7 +162,8 @@ int main()
 		check(mutate(23, 32) == P::refusal::name, "report length: name over 31");
 		check(mutate(24, 0) == P::refusal::name && mutate(24, 0x1f) == P::refusal::name && mutate(24, 0xe9) == P::refusal::name, "report encoding: no control bytes in the name, and no byte outside valid UTF-8");
 		check(mutate(29, 4) == P::refusal::rtt, "report length: more than three RTT rows");
-		check(mutate(base.size() - 1, 0xfe) == P::refusal::hero, "report: the reserved hero field must say unknown");
+		check(mutate(base.size() - 6, 0xfe) == P::refusal::hero, "report: the reserved hero field must say unknown");
+        check(mutate(base.size()-1,3)==P::refusal::flags,"report: invalid frame capacity refused");
 		auto r = sample_report(5);
 		r.rtt = {{K(2), 61000, P::route::direct}};
 		auto b = P::encode(r);

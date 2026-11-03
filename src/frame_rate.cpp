@@ -35,6 +35,9 @@ namespace frame_rate
 		HANDLE timer = nullptr;
 		bool high_resolution = false;
 		unsigned online_fps = 0;    // [Online] TickWait=timer: online frames paced at this (0: the game's spin)
+        linked_frame_rate_core::session linked_session;
+        linked_frame_rate_core::work_meter local_work;
+        LONGLONG shared_start = 0;
 		bool online_now = false;    // the last frame was an online one
 		bool online_thread_priority = false; // [Online] TickPriority=thread: the whole game thread above normal online
 		unsigned seconds = 0; // since the start or the last change: the fps is logged after the 2nd and the 30th
@@ -428,6 +431,35 @@ namespace frame_rate
 		return target != 0 || watches_screens() || online_fps != 0;
 	}
 
+    unsigned local_rate() {
+        return setting.what == cap::kind::stock ? stock_fps : target_fps(setting, refresh);
+    }
+    unsigned host_rate() {
+        const unsigned local = setting.what == cap::kind::stock ? stock_fps : target;
+        return linked_frame_rate_core::host_target(local, online_fps ? online_fps : stock_online_fps);
+    }
+    unsigned session_rate() { return linked_session.target(); }
+    bool adopt_session_rate(unsigned fps, bool room_owned) {
+        const bool first = linked_session.target()==0;
+        if (!linked_session.adopt(fps, room_owned)) return false;
+        // Native admission may fail before another Present. Remember an
+        // already-created native session now so its cleanup restores the cap.
+        if (reinterpret_cast<std::uintptr_t>(game_module)==image_base) linked_session.observe_online(session_online());
+        if (first || paced != fps) {
+            pace.set_interval(ticks_for_fps(fps, frequency));
+            paced = fps; local_work.reset(); shared_start = 0;
+            logger::write("frame rate: session uses host's %u fps; local setting %u retained", fps, local_rate());
+        }
+        return true;
+    }
+    void clear_session_rate(bool room_only) {
+        if (room_only && !linked_session.room_owned()) return;
+        if (linked_session.target()) logger::write("frame rate: session ended; local setting %u restored", local_rate());
+        linked_session.clear(); local_work.reset(); shared_start = 0;
+    }
+    void shared_frame_started() { if (linked_session.target()) shared_start = now(); }
+    linked_frame_rate_core::capacity capacity_status() { return local_work.state(GetTickCount()); }
+
 	void on_present()
 	{
 		if (!frequency)
@@ -435,6 +467,20 @@ namespace frame_rate
 			return;
 		}
 		LONGLONG time = now();
+        const bool native_online = session_online();
+        if (linked_session.observe_online(native_online)) {
+            local_work.reset(); shared_start = 0;
+            logger::write("frame rate: native session ended; local setting %u restored", local_rate());
+        }
+        // Measure before our deliberate wait. A passed shared-input gate starts
+        // this span; the possibly long wait for a remote PC is outside it.
+        if (linked_session.target()) {
+            screen shown;
+            if (!screens_known || !read_screen(shown) || shown.loading || shown.movie || !native_online) local_work.reset();
+            else if (shown.menu || shown.popup || shown.conversation) local_work.pause(GetTickCount());
+            else if (shared_start) local_work.sample(GetTickCount(), std::uint64_t(std::max<LONGLONG>(0, time - shared_start)) * 1000000 / frequency, linked_session.target());
+        }
+        shared_start = 0;
 
 		// A menu, popup or conversation: 60 fps; play: FrameRate.
 		unsigned wanted = target;
@@ -472,7 +518,7 @@ namespace frame_rate
 		}
 		if (online_fps && reinterpret_cast<std::uintptr_t>(game_module) == image_base)
 		{
-			const bool online = session_online();
+			const bool online = native_online;
 			if (online)
 			{
 				wanted = online_pace_fps(wanted, online_fps);
@@ -489,6 +535,10 @@ namespace frame_rate
 			}
 			online_now = online;
 		}
+        // Session ownership wins over local FrameRate, menu pacing and the
+        // windowed VSync refresh clamp. Fullscreen Present may still be slow;
+        // that is measured and warned about rather than changing the session.
+        if (linked_session.target()) wanted = linked_session.target();
 		if (wanted != paced)
 		{
 			paced = wanted;
@@ -523,6 +573,7 @@ namespace frame_rate
 	std::string describe()
 	{
 		std::string text = describe_setting();
+        if (linked_session.target()) text += "; host's session rate " + std::to_string(linked_session.target()) + " fps";
 		if (watches_screens())
 		{
 			text += menu_rate ? " (60 now: a menu, popup or conversation is up)" : " (menus, popups and conversations at 60)";

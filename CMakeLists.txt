@@ -23,6 +23,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin") # the test runs ne
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_executable(xml2_economy_rules_test test/xml1_economy_rules_test.cpp)
+add_executable(xml2_linked_frame_rate_test test/linked_frame_rate_test.cpp src/frame_rate.cpp src/online_tick.cpp)
+target_include_directories(xml2_linked_frame_rate_test PRIVATE src)
+target_link_libraries(xml2_linked_frame_rate_test PRIVATE winmm)
 target_include_directories(xml2_economy_rules_test PRIVATE src)
 add_executable(xml2_grab_bag_rules_test test/xml1_grab_bag_rules_test.cpp)
 target_include_directories(xml2_grab_bag_rules_test PRIVATE src)

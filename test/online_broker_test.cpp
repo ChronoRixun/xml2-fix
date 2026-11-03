@@ -125,6 +125,17 @@ namespace logger {
 void write(const char*,...) {} void write_once(std::string_view,const char*,...) {} void write_capped(std::string_view,const char*,...) {}
 }
 namespace online_menus { bool installed() { return true; } }
+namespace frame_rate {
+    unsigned local_setting=60;
+    linked_frame_rate_core::session fixture_session;
+    unsigned local_rate() { return local_setting; }
+    unsigned host_rate() { return linked_frame_rate_core::host_target(local_setting,60); }
+    unsigned session_rate() { return fixture_session.target(); }
+    bool adopt_session_rate(unsigned fps,bool room_owned) { return fixture_session.adopt(fps,room_owned); }
+    void clear_session_rate(bool room_only) { if(!room_only || fixture_session.room_owned()) fixture_session.clear(); }
+    unsigned measured_fps_x10() { return 0; }
+    linked_frame_rate_core::capacity capacity_status() { return linked_frame_rate_core::capacity::unknown; }
+}
 // The game-side reads of the transport (rule 64 glue tests set them): the native session facts and the delivery call.
 namespace fake { gns_transport::party_facts party{}; bool party_ok=false,deliver_ok=true; std::vector<unsigned> delivered; }
 namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; }
@@ -362,7 +373,7 @@ void native_target_test() {
     // Fix AS: a connected host tunnel alone does not admit - the host's room roster must have arrived on it first.
     assert(!room::admission_target(generation,address) && address==0);
     {
-        const auto roster=online_room_core::encode_roster(0,{{room::host_id,true},{room::own_id,true}});
+        const auto roster=online_room_core::encode_session_roster(0,{{room::host_id,true},{room::own_id,true}},60);
         assert(!roster.empty() && room::sockets()->SendMessageToConnection(peer,roster.data(),std::uint32_t(roster.size()),k_nSteamNetworkingSend_Reliable,nullptr)==k_EResultOK);
         for(int i=0;i<400 && !room::members.confirmed();++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5));room::poll(); }
         assert(room::members.confirmed() && room::own_virtual()==0x0a4d0002);
@@ -598,6 +609,7 @@ int receive(HSteamNetConnection,SteamNetworkingMessage_t** out,int max) {
 void send(std::vector<std::uint8_t> bytes) { queued.push_back(new packet(std::move(bytes))); }
 room::tunnel& setup() {
     assert(queued.empty());room::tunnels.clear();room::client={};room::host_loss.reset();room::removal_reset();room::party_reset();
+    room::rate_refused=false;frame_rate::clear_session_rate();assert(frame_rate::adopt_session_rate(60,true));
     fake::status_error.clear();room::relay_only=false;room::connection_info=info;room::connection_status=status;room::hosting=false;fake::clock=10000;room::room_clock=&fake::now;room::room_ready=true;room::room_code="ABCDEFGH";
     room::own_id="legends:1111111111111111";room::host_id="legends:2222222222222222";
     assert(room::members.reset({room::host_id,room::own_id}));

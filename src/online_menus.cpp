@@ -1729,6 +1729,10 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!card_shown);
         hide(menu,(prefix+"pending").c_str(),!waiting_member);
         if(waiting_member) {
+            const bool rate_known=waiting_member->local_fps!=linked_frame_rate_core::unknown_rate && waiting_member->session_fps;
+            bind_text(menu,(prefix+"fps").c_str(),rate_known ? linked_frame_rate_core::rate_text(waiting_member->local_fps,waiting_member->session_fps).c_str() : "");
+            bind_text(menu,(prefix+"fps_warning").c_str(),rate_known ? linked_frame_rate_core::warning_text(waiting_member->local_fps,waiting_member->session_fps,waiting_member->rate_capacity).c_str() : "");
+            hide(menu,(prefix+"fps").c_str(),!rate_known);hide(menu,(prefix+"fps_warning").c_str(),!rate_known);
             const auto* raw=waiting_member->name;
             const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string(waiting_member->host ? "Host" : "Player");
             bind_text(menu,(prefix+"name").c_str(),shown_name.c_str());
@@ -1745,10 +1749,11 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             hide(menu,(prefix+"other_build").c_str(),waiting_member->build!=1);
             hide(menu,(prefix+"checking_build").c_str(),waiting_member->build!=0);
             bind_text(menu,(prefix+"phase").c_str(),phase_text(waiting_member->phase));
-            hide(menu,(prefix+"hero_fallback").c_str(),false);
+            hide(menu,(prefix+"hero_fallback").c_str(),rate_known);
             continue;
         }
         if(!member) {
+            hide(menu,(prefix+"fps").c_str(),true);hide(menu,(prefix+"fps_warning").c_str(),true);
             for(const auto* field:{"ready","not_ready","host","you","ping","ms","measuring","same_build","checking_build","selected","to_host","other_build"})
                 hide(menu,(prefix+field).c_str(),true);
             bind_text(menu,(prefix+"phase").c_str(),"");
@@ -1768,6 +1773,11 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             if(data) { data=nullptr;break; }data=&extra.members[j];
         }
         const bool self_row=view.local_known && view.ids[i]==view.local;
+        const bool rate_known=data && data->local_fps!=linked_frame_rate_core::unknown_rate && data->session_fps;
+        bind_text(menu,(prefix+"fps").c_str(),rate_known ? linked_frame_rate_core::rate_text(data->local_fps,data->session_fps).c_str() : "");
+        bind_text(menu,(prefix+"fps_warning").c_str(),rate_known ? linked_frame_rate_core::warning_text(data->local_fps,data->session_fps,data->rate_capacity).c_str() : "");
+        hide(menu,(prefix+"fps").c_str(),!rate_known);hide(menu,(prefix+"fps_warning").c_str(),!rate_known);
+        hide(menu,(prefix+"hero_fallback").c_str(),rate_known);
         const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && !self_row;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);
@@ -2699,7 +2709,9 @@ DWORD party_feedback_at=0;
 DWORD party_departed_at=0;     // a Leave was handed to the native quit; cleared by Back or after party_departed_ms
 constexpr DWORD party_departed_ms=4000;
 constexpr DWORD party_feedback_ms=6000;
-struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1; };
+struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1;
+    unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0;
+    linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
 struct party_snapshot_view { std::vector<party_card> cards; party_roster roster; std::string code; };
 party_snapshot_view party_collect() {
     party_snapshot_view out;
@@ -2719,6 +2731,7 @@ party_snapshot_view party_collect() {
     for(const auto* m:natives) {
         if(out.cards.size()==4) break;
         party_card c;
+        c.local_fps=m->local_fps;c.session_fps=m->session_fps;c.rate_capacity=m->rate_capacity;
         c.row.index=int(m->native_index);c.row.self=m->self;c.row.host=m->host;
         c.row.name=display(std::string(m->name,strnlen(m->name,31)),31);
         if(c.row.name.empty()) c.row.name="Player";
@@ -2729,6 +2742,7 @@ party_snapshot_view party_collect() {
     for(unsigned i=0;i<extra.pending_count && out.cards.size()<4;++i) {
         const auto& m=extra.pending[i];
         party_card c;
+        c.local_fps=m.local_fps;c.session_fps=m.session_fps;c.rate_capacity=m.rate_capacity;
         c.row.pending=true;
         c.row.name=m.name[0] ? display(std::string(m.name,strnlen(m.name,31)),31) : std::string("Player");
         c.ping=m.ping_ms;c.to_host=m.ping_to_host;c.route=m.route;c.build=m.build;c.phase=m.phase;
@@ -2830,6 +2844,7 @@ void party_frame(void* menu) {
         for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),present);
         for(const auto* field:{"card","name","slot"}) hide(menu,(prefix+field).c_str(),!present);
         if(!present) {
+            hide(menu,(prefix+"fps").c_str(),true);
             for(const auto* field:{"host","you","hero_fallback","hero_next","ms","measuring","ping","to_host","same_build","checking_build","other_build",
                     "pending","selected","tone_good","tone_warn","tone_idle","kick"}) hide(menu,(prefix+field).c_str(),true);
             enable(menu,(prefix+"kick").c_str(),false);
@@ -2837,13 +2852,17 @@ void party_frame(void* menu) {
             continue;
         }
         const auto& c=view.cards[i];
+        const bool rate_known=c.local_fps!=linked_frame_rate_core::unknown_rate && c.session_fps;
+        const auto rate_status=c.rate_capacity==linked_frame_rate_core::capacity::slow ? " / slow" : c.rate_capacity==linked_frame_rate_core::capacity::holding ? " / holds" : " / measuring";
+        bind_text(menu,(prefix+"fps").c_str(),rate_known ? (linked_frame_rate_core::rate_text(c.local_fps,c.session_fps)+rate_status).c_str() : "");
+        hide(menu,(prefix+"fps").c_str(),!rate_known);
         bind_text(menu,(prefix+"name").c_str(),c.row.name.c_str());
         bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
         hide(menu,(prefix+"host").c_str(),!c.row.host);
         hide(menu,(prefix+"you").c_str(),!c.row.self);
         hide(menu,(prefix+"pending").c_str(),!c.row.pending);
         const bool next=c.phase==4 || c.phase==5;
-        hide(menu,(prefix+"hero_next").c_str(),!next);hide(menu,(prefix+"hero_fallback").c_str(),next);
+        hide(menu,(prefix+"hero_next").c_str(),rate_known || !next);hide(menu,(prefix+"hero_fallback").c_str(),rate_known || next);
         const bool measured=c.ping>=0 && c.ping<=60000 && !c.row.self;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(c.ping).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);hide(menu,(prefix+"ms").c_str(),!measured);
@@ -2851,9 +2870,9 @@ void party_frame(void* menu) {
         hide(menu,(prefix+"to_host").c_str(),!(measured && c.to_host));
         bind_text(menu,(prefix+"route").c_str(),measured ? route_text(c.route) : "");
         const int stage=c.row.self ? 2 : c.build;
-        hide(menu,(prefix+"same_build").c_str(),!(stage==2 || stage==3));
-        hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
-        hide(menu,(prefix+"other_build").c_str(),stage!=1);
+        hide(menu,(prefix+"same_build").c_str(),rate_known || !(stage==2 || stage==3));
+        hide(menu,(prefix+"checking_build").c_str(),rate_known || stage==2 || stage==3 || stage==1);
+        hide(menu,(prefix+"other_build").c_str(),rate_known || stage!=1);
         bind_text(menu,(prefix+"phase").c_str(),phase_text(c.phase));
         const int tone=party_tone(c.phase);
         hide(menu,(prefix+"tone_good").c_str(),tone!=0);hide(menu,(prefix+"tone_warn").c_str(),tone!=1);hide(menu,(prefix+"tone_idle").c_str(),tone!=2);
@@ -2862,6 +2881,17 @@ void party_frame(void* menu) {
         hide(menu,(prefix+"selected").c_str(),!(confirm_kick && !c.row.pending && c.row.index==party_ui.kick_index));
         if(notice_name.empty() && !c.row.self && (c.phase==4 || c.phase==5)) { notice_name=c.row.name;notice_phase=c.phase;notice_percent=c.percent; }
     }
+    std::string rate_warning;
+    // Prefer a sustained capacity failure; otherwise explain an overridden cap.
+    for (bool slow : {true,false}) {
+        for (const auto& c : view.cards) if (c.session_fps && c.local_fps!=linked_frame_rate_core::unknown_rate &&
+            (slow ? c.rate_capacity==linked_frame_rate_core::capacity::slow : c.local_fps!=c.session_fps)) {
+            rate_warning=c.row.name+": "+linked_frame_rate_core::warning_text(c.local_fps,c.session_fps,c.rate_capacity);break;
+        }
+        if (!rate_warning.empty()) break;
+    }
+    bind_text(menu,"lc_party_rate_warning",rate_warning.c_str());hide(menu,"lc_party_rate_warning",rate_warning.empty());
+    hide(menu,"lc_party_recovery_1",!rate_warning.empty());
     // Notice bar: one pending member at a time; its text nodes are hidden with the scene.
     const bool waiting=!notice_name.empty() && notice_phase==4,receiving=!notice_name.empty() && notice_phase==5;
     hide(menu,"lc_party_waiting",!waiting);hide(menu,"lc_party_receiving",!receiving);
