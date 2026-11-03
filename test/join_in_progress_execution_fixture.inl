@@ -8,7 +8,7 @@ unsigned controller_commands=0, save_commands=0, service_order=0, mutation=0, ac
 unsigned restart_entries=0, mode2_loads=0, network_setups=0;
 unsigned consumed_step=0;
 unsigned event_state=0,ai_state=0;
-unsigned video_updates=0;
+unsigned video_updates=0, network_notice_polls=0;
 unsigned diagnostic_failures=0;
 unsigned fixture_stage=0;
 bool message=true, command_load=false, command_end=false;
@@ -84,7 +84,7 @@ void __fastcall manager_service(void* self,void*) {
 }
 void __fastcall raw_poll(void*,void*,float,int) { fixture_stage=1;++polls; }
 void __fastcall produce(void*,void*,int,int,int) { fixture_stage=2;++produces; }
-const char* __fastcall message_get(void*,void*) { fixture_stage=7;return message ? "fixture wait" : nullptr; }
+const char* __fastcall message_get(void*,void*) { fixture_stage=7;++network_notice_polls;return message ? "fixture wait" : nullptr; }
 void WINAPI yield(DWORD n) { assert(n==1); ++sleeps; }
 void __fastcall execute_command(void*,void*,const char* text) {
     fixture_stage=5;
@@ -328,6 +328,7 @@ void run() {
     std::cout<<"PASS AR5 unfixed/observer-only control: actual stalled helper runs menu/HUD and mutates digest; normal world bypassed\n";
     reset();queue(true);
     const auto waiting_samples=frame_rate::fixture_shared_starts;
+    const auto notice_polls=network_notice_polls;
     for(unsigned i=0;i<20;++i) outer_tick(client);
     assert(frame_rate::fixture_shared_starts==waiting_samples); // protected waits are never local-work samples
     assert(menu_ticks==0 && hud_ticks==0 && draws==0 && presents==0 && mutation==0 && worlds==0 && cleanups==20 && polls==20 && sleeps==20);
@@ -335,6 +336,12 @@ void run() {
     assert(controller_commands==1 && save_commands==1 && service_order==12 && join_in_progress::at<int>(command_image,0x634)==-1);
     assert(!join_in_progress::execution.canonical_seen);
     std::cout<<"PASS AR5 pre-canonical waits: native prefix, first-stall feedback, real filtered pending queues exactly once/in order, manager/seat service, raw polling, cleanup and bounded yield; no render/world callbacks\n";
+    assert(message && network_notice_polls==notice_polls+20 && presents==0);
+    // A42 is a pre-Present observer. An active native notice does not authorize
+    // rendering during a protected wait; a modal resumes the native tail.
+    put(menus_image,0x86090,modal);outer_tick(client);
+    assert(network_notice_polls==notice_polls+21 && presents==1);
+    std::cout<<"PASS beta.2 A42 + AR5: active notice polling survives protected waits, pre-Present lane stays suppressed, modal resumes presentation\n";
     for(unsigned phase:{1u,2u}) for(unsigned mode:{0u,1u}) for(unsigned frame:{0u,1u,2u,5u,65535u}) {
         reset();put(reinterpret_cast<void*>(0xa3bbd8),0xc,phase);put(reinterpret_cast<void*>(0xa3bbd8),6,static_cast<unsigned char>(mode));
         *reinterpret_cast<unsigned short*>(native_frame)=static_cast<unsigned short>(frame);

@@ -667,7 +667,7 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
         const auto prior=activations;
         for(bool ready_missing:{false,true}) {
             people_count=3;setup_lobby(true);missing_list=!ready_missing;missing_ready_list=ready_missing;
-            activate(child.data(),nullptr,0);assert(activations==prior && calls.back()=="request:online");
+            activate(child.data(),nullptr,0);assert(activations==prior && calls.back()=="request:lc_online_unavailable");
             missing_list=missing_ready_list=false;
         }
         // A consumed native state 2 cannot authorize a later departure.

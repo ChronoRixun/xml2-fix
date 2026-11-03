@@ -130,7 +130,7 @@ bool native_queue_open(native_phase role,bool owned) {
 bool native_route_request(const char* name,bool console) {
     if(!name) return true;
     if(!std::strcmp(name,"game_options") && native_flow.phase==native_phase::idle && !custom(which(current()))) options_owner=0;
-    if(native_flow.phase==native_phase::setup && (!std::strcmp(name,"main") || !std::strcmp(name,"online") ||
+    if(native_flow.phase==native_phase::setup && (!std::strcmp(name,"main") || entry_name(name) ||
         !std::strcmp(name,"lc_online") || !std::strcmp(name,"lc_code") || !std::strcmp(name,"lc_browse") || !std::strcmp(name,"campaign_lobby"))) broker_cancel();
     if(!std::strcmp(name,"host")) {
         native_open_token token;

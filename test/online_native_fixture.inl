@@ -229,13 +229,13 @@ void run(const script_functions_rules::func_entry* registration) {
     auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
     auto cancel=[&] { screen("lc_host");post(intent::back);tick(child.data(),nullptr);screen("lc_online");tick(child.data(),nullptr);ticks+=2000; };
-    const char* options_name="game_options";
-    auto begin=[&] { screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);assert(calls.back()==std::string("request:")+options_name);custom_close();screen(options_name);(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0); };
+    const char* options_name="lc_game_options";
+    auto begin=[&] { screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);assert(calls.back()==std::string("request:")+options_name);if(!std::strcmp(options_name,"lc_online_unavailable")) return;custom_close();screen(options_name);(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0); };
     // All Game Options selection commands run through the retail action tick.
     begin();const auto canceled_hosts=menu_hosts;
     (*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
     assert(menu_hosts==canceled_hosts && menu_view().state==bm::phase::idle);cancel();
-    // Optional skin selection: partial files retain native; a complete marker
+    // Optional skin selection: partial files show the failure page; a complete marker
     // and resource closure run the SAME real native tick and session writes.
     std::ofstream(root/"Data/lc_online_options.cap",std::ios::binary)<<"lc-online-options/1\n";
     begin();(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);cancel();
@@ -245,15 +245,16 @@ void run(const script_functions_rules::func_entry* registration) {
     for(const auto* file:skin_files) {
         const auto path=root/file;std::filesystem::create_directories(path.parent_path());std::ofstream(path)<<"synthetic";
     }
+    options_name="lc_online_unavailable";
     for(const auto* file:skin_files) {
         const auto path=root/file;const auto absent=path.string()+".absent";
         std::filesystem::rename(path,absent);
-        begin();(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);cancel();
+        begin();cancel();
         std::filesystem::rename(absent,path);
     }
     for(const auto* marker:{"","unsupported\n","lc-online-options/1\nextra"}) {
         std::ofstream(root/"Data/lc_online_options.cap",std::ios::binary|std::ios::trunc)<<marker;
-        begin();(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);cancel();
+        begin();cancel();
     }
     std::ofstream(root/"Data/lc_online_options.cap",std::ios::binary|std::ios::trunc)<<"lc-online-options/1\n";
     options_name="lc_game_options";
@@ -263,7 +264,7 @@ void run(const script_functions_rules::func_entry* registration) {
     reinterpret_cast<void(__cdecl*)()>(0x5f2090)();assert(choices.size()==3 && choices[0]=="setDifficultyLevel(0)");
     script(0x49f8f0,1);script(0x49f9b0,3);script(0x4a0930,2);
     assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e0)==1 && *reinterpret_cast<unsigned char*>(0xa53058+0x3dd)==3 && *reinterpret_cast<unsigned char*>(0xa53058+0x3df)==2);
-    action("text_gamename");assert(native_tag==1 && native_max==31 && calls.back()=="request:text_entry");
+    action("text_gamename");assert(native_tag==1 && native_max==31 && calls.back()=="request:lc_text_entry");
     result("New campaign",1);reinterpret_cast<tick_t>(0x5b8f90)(child.data(),nullptr);reinterpret_cast<tick_t>(0x5b8f90)(child.data(),nullptr);
     assert(std::string_view(reinterpret_cast<char*>(0xa53058+0x3b6))=="New campaign");
     const auto host_count=menu_hosts;action("text_inviteslots");assert(menu_hosts==host_count+1 && maximum==3 && menu_last_name=="New campaign");
@@ -446,7 +447,7 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
     auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
     screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
-    assert(calls.back()=="request:game_options");custom_close();screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);script(0x49f8f0,1);script(0x49f9b0,3);
+    assert(calls.back()=="request:lc_game_options");custom_close();screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);script(0x49f8f0,1);script(0x49f9b0,3);
     if(loaded) { save_accept=true;script(0x49ef60,3); }
     (*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),loaded ? "Loaded lobby" : "New lobby");action("text_inviteslots");
     screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && published==0);

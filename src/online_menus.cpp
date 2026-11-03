@@ -48,6 +48,17 @@ using command_fn=bool(__thiscall*)(void*,const char*);
 using set_text_fn=void(__cdecl*)(void*,const char*,const char*,...);
 using hide_fn=void(__thiscall*)(void*,const char*,bool);
 bool ready=false;
+constexpr const char* failure_menu="lc_online_unavailable";
+bool legacy_online_name(const char* name) {
+    if(!name) return false;
+    if(!std::strncmp(name,"live_",5)) return true;
+    for(const auto* value:{"online","campaign_lobby","games_list","game_options","text_entry","player_game_options",
+                          "players_list","hero_list","region","lc_online_entry"})
+        if(!std::strcmp(name,value)) return true;
+    return false;
+}
+bool entry_name(const char* name) { return name && (!std::strcmp(name,"online") || !std::strcmp(name,"lc_online_entry")); }
+
 // The frontend table (602200), separate from W2's zone strings, keeps the
 // retail 1024-slot handle layout and +1008 arena offset. Shared Code focus
 // adds 32 distinct resource names. Retail's 7 KiB arena ran out, published
@@ -361,16 +372,16 @@ bool assets_ready() noexcept {
         cached_asset_generation=generation;return true;
     } catch(...) {
         cached_asset_generation=0;
-        logger::write("online menus: asset check threw; native online entry retained");
+        logger::write("online menus: asset check threw; rebuilt LC failure entry retained");
         return false;
     }
 }
 
 // This variant keeps GAME_OPTIONS_MENU and all native setup services. Retail
-// resources stay untouched: disabled UI, old builder, or missing variant files
-// select the original page without affecting the hosting state machine.
+// definitions remain read-only inputs. Missing variants select the plain LC
+// message; they never select the GameSpy-era resource.
 const char* game_options_menu() noexcept {
-    if(!ready || !mod_loader::generation()) return "game_options";
+    if(!ready || !mod_loader::generation()) return failure_menu;
     try {
         const auto root=std::filesystem::path(mod_loader::game_root());
         const auto exists=[&](const wchar_t* name) {
@@ -380,19 +391,22 @@ const char* game_options_menu() noexcept {
         constexpr char expected[]="lc-online-options/1\n";
         std::ifstream marker(mod_loader::resolve_file((root/L"Data/lc_online_options.cap").wstring()),std::ios::binary);
         std::array<char,sizeof(expected)> bytes{};marker.read(bytes.data(),bytes.size());
-        if(marker.gcount()!=sizeof(expected)-1 || std::memcmp(bytes.data(),expected,sizeof(expected)-1)) return "game_options";
+        if(marker.gcount()!=sizeof(expected)-1 || std::memcmp(bytes.data(),expected,sizeof(expected)-1)) return failure_menu;
         for(const auto* file:{L"UI/menus/lc_game_options.XMLB",L"UI/menus/lc_game_options.engb",L"UI/menus/lc_game_options.IGB",
             L"Packages/generated/maps/package/menus/lc_game_options.PKGB",L"UI/models/lc_o_backdrop_lc_game_options.IGB",L"UI/models/lc_o_field.IGB",
             L"UI/models/lc_o_focus_0_-192_4144_0.IGB"})
-            if(!exists(file)) return "game_options";
+            if(!exists(file)) return failure_menu;
         return "lc_game_options";
-    } catch(...) { return "game_options"; }
+    } catch(...) { return failure_menu; }
 }
 
 // Optional native-class scenes. All editing/state/input remains in retail.
 // Check the complete authored dependency set before selecting another name.
 const char* native_skin_menu(const char* name,bool online_editor=false) noexcept {
-    if(!ready || !name || !mod_loader::generation()) return name;
+    if(!name) return name;
+    if(!std::strncmp(name,"live_",5) || !std::strcmp(name,"players_list") || !std::strcmp(name,"hero_list") || !std::strcmp(name,"region")) return failure_menu;
+    if(!std::strcmp(name,"game_options") || !std::strcmp(name,"lc_game_options")) return game_options_menu();
+    if(!ready || !mod_loader::generation()) return legacy_online_name(name) ? failure_menu : name;
     struct skin { const char *native,*variant,*capability;std::initializer_list<const char*> models; };
     const skin skins[]{
         {"text_entry","lc_text_entry","lc-online-skin/text_entry/1\n",
@@ -405,8 +419,9 @@ const char* native_skin_menu(const char* name,bool online_editor=false) noexcept
             {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0"}}
     };
     const skin* selected=nullptr;
-    for(const auto& candidate:skins) if(!std::strcmp(name,candidate.native)) selected=&candidate;
-    if(!selected || (!std::strcmp(name,"text_entry") && !online_editor)) return name;
+    for(const auto& candidate:skins) if(!std::strcmp(name,candidate.native) || !std::strcmp(name,candidate.variant)) selected=&candidate;
+    if(!selected) return name;
+    if(!std::strcmp(name,"text_entry") && !online_editor) return failure_menu;
     try {
         const auto root=std::filesystem::path(mod_loader::game_root());
         const auto exists=[&](const std::filesystem::path& file) {
@@ -417,15 +432,15 @@ const char* native_skin_menu(const char* name,bool online_editor=false) noexcept
         std::ifstream cap(mod_loader::resolve_file((root/marker).wstring()),std::ios::binary);
         std::array<char,80> bytes{};cap.read(bytes.data(),bytes.size());
         const auto length=std::strlen(selected->capability);
-        if(cap.gcount()!=static_cast<std::streamsize>(length) || std::memcmp(bytes.data(),selected->capability,length)) return name;
+        if(cap.gcount()!=static_cast<std::streamsize>(length) || std::memcmp(bytes.data(),selected->capability,length)) return failure_menu;
         const std::string variant=selected->variant;
-        for(const auto* ext:{".XMLB",".engb",".IGB"}) if(!exists("UI/menus/"+variant+ext)) return name;
+        for(const auto* ext:{".XMLB",".engb",".IGB"}) if(!exists("UI/menus/"+variant+ext)) return failure_menu;
         if(!exists("Textures/menus/"+variant+".IGB") ||
            !exists("Packages/generated/maps/package/menus/"+variant+".PKGB") ||
-           !exists("UI/models/lc_o_backdrop_"+variant+".IGB") || !exists("UI/models/lc_o_field.IGB")) return name;
-        for(const auto* model:selected->models) if(!exists("UI/models/"+std::string(model)+".IGB")) return name;
+           !exists("UI/models/lc_o_backdrop_"+variant+".IGB") || !exists("UI/models/lc_o_field.IGB")) return failure_menu;
+        for(const auto* model:selected->models) if(!exists("UI/models/"+std::string(model)+".IGB")) return failure_menu;
         return selected->variant;
-    } catch(...) { return name; }
+    } catch(...) { return failure_menu; }
 }
 bool native_online_editor_source(void* menu) {
     __try {
@@ -437,6 +452,18 @@ bool native_online_editor_source(void* menu) {
             (type==0x69f724 && (!std::strcmp(name,"player_game_options") || !std::strcmp(name,"lc_player_game_options"))) ||
             (type==0x69f8b4 && (!std::strcmp(name,"games_list") || !std::strcmp(name,"lc_games_list")));
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool legacy_controls_request(const char* name) {
+    if(!name || (std::strcmp(name,"players") && std::strcmp(name,"options_controller"))) return false;
+    auto* source=current_peek();
+    return custom(which(source)) || lobby(which(source)) || native_online_editor_source(source);
+}
+bool online_failure_request(const char* name) {
+    if(legacy_online_name(name) || legacy_controls_request(name)) return true;
+    if(!name) return false;
+    for(const auto* value:{"lc_other_online","lc_campaign_lobby","lc_games_list","lc_game_options","lc_text_entry","lc_player_game_options"})
+        if(!std::strcmp(name,value)) return true;
+    return false;
 }
 
 struct native_engine {
@@ -722,22 +749,22 @@ void request_impl(void* m,const char* name,const char* args) {
     // later native close (Options Back) pop to the Hub. Same invariant as the custom screens' tick trim.
     if(ready && which(source)==screen::main) native_history_trim(source);
     if(name && std::strcmp(name,"lc_code")) rejoin_seed.reset();
-    if(ready && name && std::strcmp(name,"online")==0 && which(source)==screen::main) {
+    if(ready && entry_name(name) && which(source)==screen::main) {
         // Availability precedes the capture gate: missing/wrong assets always
-        // retain native online, including console requests and delayed queues.
+        // use the plain LC failure page, including console requests and delayed queues.
         if(!assets_ready()) {
             entry.clear();accept_hint(source,true);
-            at<request_fn>(0x5d5db0)(m,name,args);return;
+            at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
         }
         if(entry.waiting(source_id,now_ms())) return;
         if(!accept_fresh(accepted,accepted_at,now_ms())) {
             accepted=-1;
             // Builder owns this localized text. Without a usable prompt item,
-            // fall back natively rather than create a silent main-menu action.
+            // use the failure page rather than create a silent main-menu action.
             if(accept_hint(source,false)) {
                 logger::write("online menus: waiting for real Accept; localized continue prompt shown");return;
             }
-            at<request_fn>(0x5d5db0)(m,name,args);return;
+            at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
         }
         accept_hint(source,true);
         const int p=accepted; accepted=-1;
@@ -748,14 +775,14 @@ void request_impl(void* m,const char* name,const char* args) {
             logger::write("online menus: entry initialized once, controller=%d; Hub requested; no broker operation",p);
             at<request_fn>(0x5d5db0)(m,"lc_online",nullptr);return;
         }
-        logger::write("online menus: native initialization refused; keeping native online entry");
-        entry.clear();
+        logger::write("online menus: native initialization refused; plain LC failure page requested");
+        entry.clear();at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
     } else if(name && which(source)==screen::main && std::strcmp(name,"lc_online")) {
         entry.clear();accept_hint(source,true);
     }
-    const char* destination=ready && name && !std::strcmp(name,"game_options") ? game_options_menu() :
+    const char* destination=legacy_controls_request(name) ? failure_menu :
         native_skin_menu(name,name_edit.owned || native_online_editor_source(source));
-    at<request_fn>(0x5d5db0)(m,destination,args);
+    at<request_fn>(0x5d5db0)(m,destination,destination==failure_menu ? nullptr : args);
 }
 void __fastcall request(void* m,void*,const char* name,const char* args) {
     try {
@@ -763,8 +790,11 @@ void __fastcall request(void* m,void*,const char* name,const char* args) {
         request_impl(m,name,args);
     } catch(...) {
         pending.clear();entry.clear();accepted=-1;
-        logger::write("online menus: request threw; native request retained");
-        try { at<request_fn>(0x5d5db0)(m,name,args); }
+        logger::write("online menus: request threw; online requests fail closed");
+        try {
+            const bool failed_online=online_failure_request(name);
+            at<request_fn>(0x5d5db0)(m,failed_online ? failure_menu : name,failed_online ? nullptr : args);
+        }
         catch(...) { logger::write("online menus: native request threw; frame contained"); }
     }
 }
@@ -1593,7 +1623,7 @@ bool lobby_native_activate(void* menu,int argument,unsigned original) {
     if(marked) --refreshing_names;return result;
 }
 bool lobby_exit(void* menu) {
-    __try { at<request_fn>(0x5d5db0)(manager(),"online",nullptr);return true; }
+    __try { at<request_fn>(0x5d5db0)(manager(),failure_menu,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         __try { at<void(__thiscall*)(void*,const char*,int)>(0x5db270)(manager(),static_cast<char*>(menu)+0xc,0);return true; }
         __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -3195,7 +3225,7 @@ void tick_impl(void* menu,bool& native_called) {
         pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
         if(!abandon_name()) { show_notice(menu);return; }
         // Original manager request deliberately bypasses our Online interception:
-        // Other ways opens the full native name/profile/Host/Join chain.
+        // Other ways selects verified LC scenes with native name/profile/Host/Join services.
         at<request_fn>(0x5d5db0)(manager(),native_skin_menu(destination),nullptr);
         return; // never bind after requesting a transition
     }
@@ -3529,13 +3559,13 @@ void install(HMODULE game,const install_hooks* hooks) {
     if(ready || !requested()) return;
     // The co-op screens are authored for the private Barlow family only (live 060p f03: with
     // LegendsClassicFonts=0 the hub opened in the classic font with overlapping rows). Without the
-    // committed font capability, Play Online stays the game's own menu.
+    // committed font capability, the rebuilt entry stays on its plain LC message.
     if(!lc_fonts::active()) {
-        logger::write("online menus: [Game] LegendsClassicFonts is not active (off or refused); native online entry retained"); return;
+        logger::write("online menus: [Game] LegendsClassicFonts is not active (off or refused); rebuilt LC failure entry retained"); return;
     }
     if(reinterpret_cast<std::uintptr_t>(game)!=0x400000 ||
         !registration_fits(script_function_overflow::table(),script_functions::capacity())) {
-        logger::write("online menus: registration/capacity refused; native online entry retained"); return;
+        logger::write("online menus: registration/capacity refused; rebuilt LC failure entry retained"); return;
     }
     if(hooks) {
         offline_fixture=hooks->broker==nullptr;
@@ -3557,7 +3587,7 @@ void install(HMODULE game,const install_hooks* hooks) {
     const auto result=tx.commit(hooks ? hooks->transaction : nullptr);
     if(result==patch_transaction::outcome::rollback_failed) game_version::refuse_startup();
     if(result!=patch_transaction::outcome::committed) {
-        logger::write("online menus: %s; native online entry retained",tx.report().c_str()); return;
+        logger::write("online menus: %s; rebuilt LC failure entry retained",tx.report().c_str()); return;
     }
     // Installation runs before game registration on a single thread; capacity
     // was reserved above. Publish the function only after every hook readback.
@@ -3567,6 +3597,7 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
+    logger::write("online menus: lc-online-no-gamespy/1; rebuilt entry and failed optional scenes use the plain LC message");
     ::display::set_network_overlay(&network_status_ui::draw);
     logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability);
 }

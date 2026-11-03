@@ -900,6 +900,19 @@ void runtime(){
   }
   frame_rate::clear_session_rate();frame_rate::host_setting=host_rate==30 ? 60 : 30;
   const auto settings=linked_frame_rate_core::encode(host_rate);
+  // The skinned Other ways browser still enters the installed 0x18 adapter.
+  // Listing hosts must validate their settings without adopting any of them.
+  input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
+  std::memcpy(input.data()+request_size+local.bytes().size(),settings.data(),settings.size());
+  auto browser=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
+  event advert{0x18,input.data(),std::uint16_t(request_size+local.bytes().size()+settings.size()),0,context.data(),sender.data()};
+  forwarded=0;admitted_session_rate=0;
+  check(browser(&advert)==73 && forwarded==1 && admitted_session_rate==0 && frame_rate::session_rate()==0,
+    "beta.2 Other ways browser: compatible 30/60 host is listed without adopting its rate");
+  const auto listed=forwarded;advert.length=std::uint16_t(request_size+local.bytes().size());
+  browser(&advert);
+  check(forwarded==listed && frame_rate::session_rate()==0,
+    "beta.2 Other ways browser: beta.1 host without settings is refused before the native list callback");
   input.fill(0);std::memcpy(input.data()+reply_size,local.bytes().data(),local.bytes().size());
   std::memcpy(input.data()+reply_size+local.bytes().size(),settings.data(),settings.size());
   auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(reply_registration+1)));

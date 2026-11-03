@@ -134,7 +134,7 @@ bool __fastcall command_stub(void*,void*,const char* s) {
     name_fault_at(11);assert(std::string_view(s)=="runscript saveloadProcess(2)");return step("persist");
 }
 bool __fastcall queue_stub(void*,void*,const char* s) { calls.push_back(std::string("queue:")+s);return false; }
-void __fastcall request_stub(void*,void*,const char* name,const char*) { if(std::string_view(name)=="text_entry") name_fault_at(12);calls.push_back(std::string("request:")+name); }
+void __fastcall request_stub(void*,void*,const char* name,const char*) { if(std::string_view(name)=="text_entry" || std::string_view(name)=="lc_text_entry") name_fault_at(12);calls.push_back(std::string("request:")+name); }
 void __fastcall deactivate_stub(void*,void*) { set_current(nullptr); }
 void __fastcall tick_stub(void* menu,void*) {
     ++native_ticks;
@@ -336,7 +336,11 @@ void fake_services() {
     set_current(main_menu.data());
 }
 void asset_files() {
-    root=std::filesystem::current_path()/"temp"/("online-menus-"+mode+"-"+std::to_string(GetCurrentProcessId()));
+    // Windows reuses PIDs. Repeated full matrices must not inherit an older
+    // process's remembered-room file or marker mutations.
+    LARGE_INTEGER instance{};assert(QueryPerformanceCounter(&instance));
+    root=std::filesystem::current_path()/"temp"/("online-menus-"+mode+"-"+
+        std::to_string(GetCurrentProcessId())+"-"+std::to_string(instance.QuadPart));
     std::filesystem::create_directories(root/"Data");
     std::ofstream(root/"Data/lc_online_menus.cap",std::ios::binary)<<capability;
     for(const auto* menu:{"lc_online","lc_host","lc_code","lc_browse"}) {
@@ -347,6 +351,23 @@ void asset_files() {
             std::ofstream(root/"Packages/generated/maps/package/menus"/(std::string(menu)+".PKGB"))<<"synthetic";
     }
     if(mode=="bad-marker") std::ofstream(root/"Data/lc_online_menus.cap",std::ios::binary)<<"unsupported-contract\n";
+    // Native-flow fixtures use complete LC replacements. Separate r27/r28 cases
+    // remove markers/dependencies explicitly to exercise the failure page.
+    if(mode!="r28-no-gamespy") {
+        std::filesystem::create_directories(root/"Textures/menus");
+        for(const auto* name:{"lc_game_options","lc_text_entry"}) {
+            for(const auto* ext:{".XMLB",".engb",".IGB"}) std::ofstream(root/"UI/menus"/(std::string(name)+ext))<<"synthetic";
+            std::ofstream(root/"Packages/generated/maps/package/menus"/(std::string(name)+".PKGB"))<<"synthetic";
+            std::filesystem::create_directories(root/"UI/models");
+            std::ofstream(root/"UI/models"/("lc_o_backdrop_"+std::string(name)+".IGB"))<<"synthetic";
+        }
+        for(const auto* model:{"lc_o_field","lc_o_focus_0_-192_4144_0","lc_o_focus_-200_-208_200_0","lc_o_focus_-488_-224_488_0","lc_o_focus_-528_-224_528_0"})
+            std::ofstream(root/"UI/models"/(std::string(model)+".IGB"))<<"synthetic";
+        std::ofstream(root/"Textures/menus/lc_text_entry.IGB")<<"synthetic";
+        std::ofstream(root/"Data/lc_online_options.cap",std::ios::binary)<<"lc-online-options/1\n";
+        std::ofstream(root/"Data/lc_online_skin_text_entry.cap",std::ios::binary)<<"lc-online-skin/text_entry/1\n";
+    }
+
 }
 struct fake_engine {
     std::vector<std::string> sequence;
@@ -648,6 +669,50 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r28-no-gamespy") {
+        using request_t=void(__fastcall*)(void*,void*,const char*,const char*);
+        const auto request=*reinterpret_cast<request_t*>(0x6a23d8);
+        set_current(main_menu.data());assets=false;calls.clear();
+        request(mgr.data(),nullptr,"online",nullptr);
+        assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
+        calls.clear();request(mgr.data(),nullptr,"lc_online_entry",nullptr);
+        assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
+        assets=true;set_current(hub.data());
+        for(const auto* name:{"online","campaign_lobby","games_list","game_options","text_entry","player_game_options",
+            "players_list","hero_list","region","live_password","live_game_type","live_options","live_quickmatch",
+            "live_optimatch","live_join_by_id","live_accounts","live_connect","live_friends_list","live_feedback","live_voice_message","players","options_controller"}) {
+            calls.clear();request(mgr.data(),nullptr,name,nullptr);
+            assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
+        }
+        for(const auto* name:{"players","options_controller","lc_game_options","lc_other_online"}) {
+            request_throw=1;calls.clear();request(mgr.data(),nullptr,name,nullptr);request_throw=0;
+            assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
+        }
+        calls.clear();request(mgr.data(),nullptr,"options",nullptr);
+        assert(calls==std::vector<std::string>{"request:options"});
+        set_current(main_menu.data());calls.clear();request(mgr.data(),nullptr,"options_controller",nullptr);
+        assert(calls==std::vector<std::string>{"request:options_controller"});
+        set_current(main_menu.data());calls.clear();
+        const auto capture=reinterpret_cast<void*>(0x5c9720+*reinterpret_cast<unsigned*>(0x5c971c));
+        invoke_capture(capture,mgr.data(),2,0x10);request(mgr.data(),nullptr,"lc_online_entry",nullptr);
+        assert(calls==std::vector<std::string>({"bind:2","network","name","session","campaign","mode","profile","persist","request:lc_online"}));
+        // The plain page also needs Back with the entire online transaction
+        // absent. Execute retail CMenu::Back and CText::usecmd, including the
+        // original console call; the authored item menu_cancel=true sets 0x80.
+        static std::array<unsigned char,0x1100> failure_strings{};
+        std::strcpy(reinterpret_cast<char*>(failure_strings.data()+0x1008),"openmenu main");
+        redirect(0x602200,+[]()->void* { return failure_strings.data(); });
+        child.fill(0);put(child.data(),0,0x69e41c);
+        std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_online_unavailable");
+        put(child.data(),0x828,0);put(child.data(),0x834,0x3fffffff);
+        put(child.data(),0x160c,unsigned(reinterpret_cast<std::uintptr_t>(text_item.data())));
+        text_item.fill(0);put(text_item.data(),0,0x6a0244);put(text_item.data(),0x24,1);text_item[0x54]=0x80;
+        restore_retail(0x5bc3d0,5);calls.clear();
+        reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5ad7c0)(child.data(),nullptr);
+        assert(calls==std::vector<std::string>{"queue:openmenu main"});
+        std::cout<<"PASS retail Back-to-Main item dispatch with no online usecmd hook\n";
+        std::cout<<"PASS no GameSpy entry/variant/conditional fallbacks; unrelated menu unchanged\n";return 0;
+    }
     if(mode=="r27-text") { text_fixture::run(entry);return 0; }
     if(mode=="r27-other") { other_fixture::run(entry);return 0; }
     if(mode=="r27-network") { network_fixture::run();return 0; }
@@ -711,17 +776,17 @@ int main(int argc,char** argv) {
         if(mode=="asset-badalloc") asset_throw=1;
         if(mode=="asset-filesystem") asset_throw=2;
         if(mode=="review-no-prompt") missing_prompt=true;
-        request(mgr.data(),nullptr,"online",nullptr);assert(calls==std::vector<std::string>{"request:online"});
+        request(mgr.data(),nullptr,"online",nullptr);assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
         invoke_capture(capture,mgr.data(),2,0x10);++ticks;
         asset_throw=0;request(mgr.data(),nullptr,"online",nullptr);
-        if(mode=="assets" || mode=="bad-marker" || mode=="missing-file") assert(calls==std::vector<std::string>({"request:online","request:online"}));
+        if(mode=="assets" || mode=="bad-marker" || mode=="missing-file") assert(calls==std::vector<std::string>({"request:lc_online_unavailable","request:lc_online_unavailable"}));
         else assert(calls.size()==10 && calls.back()=="request:lc_online");
         std::cout<<"online menus "<<mode<<" PASS (native fallback without capture / exception containment)\n";return 0;
     }
     if(mode=="review-entry") {
         request(mgr.data(),nullptr,"online",nullptr);
         assert(calls.empty() && !visibility["lc_online_continue"] && root_reads==1);
-        missing_prompt=true;request(mgr.data(),nullptr,"online",nullptr);assert(calls==std::vector<std::string>{"request:online"});
+        missing_prompt=true;request(mgr.data(),nullptr,"online",nullptr);assert(calls==std::vector<std::string>{"request:lc_online_unavailable"});
         missing_prompt=false;calls.clear();request(mgr.data(),nullptr,"online",nullptr);assert(calls.empty());
         invoke_capture(capture,mgr.data(),2,0x10);ticks+=1000;
         request(mgr.data(),nullptr,"online",nullptr);assert(calls.size()==9 && visibility["lc_online_continue"]);
@@ -735,7 +800,7 @@ int main(int argc,char** argv) {
         invoke_capture(capture,mgr.data(),2,0x10);request(mgr.data(),nullptr,"online",nullptr);assert(calls.size()==27);
         assert(root_reads==1); // first successful asset validation is cached
         ++asset_generation;request(mgr.data(),nullptr,"online",nullptr);assert(root_reads==2 && calls.size()==27);
-        ++asset_generation;asset_throw=1;request(mgr.data(),nullptr,"online",nullptr);assert(root_reads==3 && calls.size()==28 && calls.back()=="request:online");
+        ++asset_generation;asset_throw=1;request(mgr.data(),nullptr,"online",nullptr);assert(root_reads==3 && calls.size()==28 && calls.back()=="request:lc_online_unavailable");
         asset_throw=0;invoke_capture(capture,mgr.data(),2,0x10);request(mgr.data(),nullptr,"online",nullptr);assert(root_reads==4 && calls.size()==37);
         set_current(hub.data());tick(hub.data(),nullptr);queue(nullptr,nullptr,"runscript lcOnlineIntent(9)");tick(hub.data(),nullptr);
         ticks+=5000;tick(hub.data(),nullptr);assert(native_tag==0);
@@ -744,7 +809,7 @@ int main(int argc,char** argv) {
     }
     if(mode=="review-exceptions") {
         for(int kind:{1,2}) { request_throw=kind;request(mgr.data(),nullptr,"online",nullptr); }
-        assert(calls==std::vector<std::string>({"request:online","request:online"}));request_throw=0;
+        assert(calls==std::vector<std::string>({"request:lc_online_unavailable","request:lc_online_unavailable"}));request_throw=0;
         invoke_capture(capture,mgr.data(),2,0x10);request(mgr.data(),nullptr,"online",nullptr);assert(calls.size()==11);
         set_current(hub.data());
         for(int kind:{1,2}) { const auto n=native_ticks;tick_throw=kind;tick(hub.data(),nullptr);assert(native_ticks==n+1); }
@@ -764,7 +829,7 @@ int main(int argc,char** argv) {
     if(mode=="assets") assets=false;
     request(mgr.data(),nullptr,"online",nullptr);
     if(!fail.empty() || mode=="assets" || mode=="bad-marker" || mode=="missing-file" || mode=="name32") {
-        assert(calls.back()=="request:online");
+        assert(calls.back()=="request:lc_online_unavailable");
         if(fail.empty()) assert(calls.size()==1);
         else { const auto it=std::find(calls.begin(),calls.end(),fail);assert(it!=calls.end() && it+2==calls.end()); }
         std::cout<<"online menus "<<mode<<" PASS (native fallback)\n";return 0;
@@ -819,7 +884,7 @@ int main(int argc,char** argv) {
     set_current(main_menu.data());assert(queue(nullptr,nullptr,"runscript lcOnlineIntent(2)"));assert(calls.back()=="queue:runscript lcOnlineIntent(2)");calls.pop_back();assert(calls==expected);set_current(hub.data());
     post(int(intent::code));post(int(intent::host));tick(hub.data(),nullptr);assert(calls.back()=="request:lc_code");
     set_current(child.data());post(int(intent::back));tick(child.data(),nullptr);assert(calls.back()=="request:lc_online");
-    set_current(hub.data());post(int(intent::other));tick(hub.data(),nullptr);assert(calls.back()=="request:online");
+    set_current(hub.data());post(int(intent::other));tick(hub.data(),nullptr);assert(calls.back()=="request:lc_online_unavailable");
     set_current(hub.data());post(int(intent::back));tick(hub.data(),nullptr);assert(calls.back()=="request:main");
     set_current(main_menu.data());invoke_capture(capture,mgr.data(),3,0x10);request(mgr.data(),nullptr,"online",nullptr);
     assert(calls[calls.size()-9]=="bind:3" && calls.back()=="request:lc_online");
@@ -844,7 +909,7 @@ int main(int argc,char** argv) {
         int_value[0]=0x12345678;post(2);tick(hub.data(),nullptr);assert(calls.empty());int_value[0]=0x6905fc;
         post(1);tick(hub.data(),nullptr);assert(calls.empty());
         put(hub.data(),0,0x69f134);post(2);queue(nullptr,nullptr,"runscript lcOnlineIntent(2)");tick(hub.data(),nullptr);assert(calls==std::vector<std::string>{"queue:runscript lcOnlineIntent(2)"});calls.clear();put(hub.data(),0,0x69e41c);
-        const char* destinations[]{"lc_host","lc_code","lc_browse","online","main"};
+        const char* destinations[]{"lc_host","lc_code","lc_browse","lc_online_unavailable","main"};
         for(int value=2;value<=8;++value) {
             set_current(hub.data());const auto n=calls.size();const auto command="runscript lcOnlineIntent("+std::to_string(value)+")";
             queue(nullptr,nullptr,command.c_str());tick(hub.data(),nullptr);
@@ -869,11 +934,11 @@ int main(int argc,char** argv) {
         post(int(intent::edit_name));tick(hub.data(),nullptr);
         assert(consumes==old_consumes+1 && native_tag==0 && native_max==31);
         assert(std::string_view(native_seed.data())=="100%~$#|;openmenu bad");
-        assert(calls==std::vector<std::string>{"request:text_entry"});
+        assert(calls==std::vector<std::string>{"request:lc_text_entry"});
         tick(hub.data(),nullptr);assert(native_tag==0 && calls.size()==1); // queued, not yet closed
         deactivate(hub.data(),nullptr);set_current(hub.data());result(std::string(31,'N'));tick(hub.data(),nullptr);
         assert(texts["local_name"]==field_name(std::string(31,'N')));
-        assert(calls==std::vector<std::string>({"request:text_entry","name","profile","persist"}));
+        assert(calls==std::vector<std::string>({"request:lc_text_entry","name","profile","persist"}));
         auto edit=[&]() { calls.clear();post(int(intent::edit_name));tick(hub.data(),nullptr);assert(calls.size()==1);deactivate(hub.data(),nullptr);set_current(hub.data()); };
         edit();result(std::string(32,'x'));tick(hub.data(),nullptr);assert(calls.size()==1 && texts["local_name"]==field_name(std::string(31,'N')));
         edit();result(std::string(31,'N'));tick(hub.data(),nullptr);assert(calls.size()==1); // Esc seed
@@ -935,7 +1000,7 @@ int main(int argc,char** argv) {
         // Scope and precedence: keyboard X is a code symbol, pad MENU_OTHER clears.
         keys.fill(0);online_menus::keyboard(keys.data());keys[0x2d]=128;online_menus::keyboard(keys.data());mask=0x1000000;tick(child.data(),nullptr);mask=0;assert(texts["cell0"]=="X");
         post(int(intent::clear));tick(child.data(),nullptr);assert(texts["code_value"]=="____-____");
-        set_current(hub.data());mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
+        set_current(hub.data());mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_text_entry");native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
         mask=0x400000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
         // ---- Pad X / Y (060p live round, failure 8). The bits come from the retail tables (raw_menu_mask), the device from the
         // prompts' tracker (pad_probe_*): with the pad shown X is the screens' "other" button and Y the "next" one; with the
@@ -953,7 +1018,7 @@ int main(int argc,char** argv) {
             online_menus::set_pad_probe(pad_probe_yes);
             // Hub: X changes the name, Y rejoins (the last game), a pad's RT keeps rejoining.
             set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
-            mask=X;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");
+            mask=X;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_text_entry");
             native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
             calls.clear();mask=Y;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
             set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
@@ -977,7 +1042,7 @@ int main(int argc,char** argv) {
             mask=0x1000000;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="____-____");
             set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
             mask=X;tick(hub.data(),nullptr);mask=0;assert(calls.empty());
-            mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");
+            mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_text_entry");
             native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
             calls.clear();mask=0x400000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
             online_menus::set_pad_probe(nullptr);

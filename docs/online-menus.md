@@ -638,7 +638,7 @@ Retain native menu names/types `host` / `join`, vtables 0x69f274 / 0x69f33c.
 The invisible marker item `lc_lobby_v1` opts each parsed native skin into the
 adapter. Without it, native activation/tick/Back/deactivation forward unchanged.
 Both parsed `text_playername1` and `text_readycheck1` must be real LISTBOXes
-with backing tables. A marked skin missing either returns to native online
+with backing tables. A marked skin missing either returns to the plain LC failure page
 before the retail activator can dereference it (guarded named-close fallback
 if requesting online faults). It never leaves an inactive lobby waiting for
 an inline dismissal. Unmarked/cached menus forward without resetting the
@@ -977,7 +977,7 @@ cannot alias a real remote index zero, unknown local cannot authorize Kick, and
 Back still exits. `r4-dismiss-invalid` verifies notice dismissal does not require
 a roster read: first Back dismisses, a later intentional Back uses native Leave.
 
-Missing-list activation still queues return to native online rather than calling
+Missing-list activation queues the plain LC failure page rather than calling
 the unsafe activator. Its real manager processing/one-native-tick interval is a
 live residual to check, not proven by the queued-request fixture. No live game,
 raster capture or desktop input was executed for this correction.
@@ -2009,11 +2009,10 @@ The confirmation stays within the original deadline; if there is insufficient ti
 
 The companion builder can author `lc_game_options` with the native
 `GAME_OPTIONS_MENU` class and unchanged option/data identifiers, native commands,
-platform/mode gates and focus notifications. The original `game_options` assets
-remain available. With Menus installed, requests select the LC variant only if
+platform/mode gates and focus notifications. The original definitions are read-only authoring inputs. With Menus installed, requests select the LC variant only if
 `Data/lc_online_options.cap` exactly contains `lc-online-options/1` plus LF and
 both menu halves, scene, package, two backdrop models and the shared row-focus
-model exist. Unsupported or incomplete authoring retains the native page.
+model exist. Unsupported or incomplete authoring selects the plain LC failure page.
 The native tick, session setters, save selection, Post and Back remain the
 existing setup flow; there is no second Game Options state machine.
 
@@ -2039,10 +2038,10 @@ With `Online/Menus=1`, the companion can select `lc_text_entry`,
 `lc_other_online`, `lc_campaign_lobby`, `lc_games_list` and
 `lc_player_game_options`. Each keeps its original native menu class, mode
 predicates, values, policy/information content, list services and return chain.
-The builder retains the original resources and publishes a separate exact
+The builder reads the original resources and publishes a separate exact
 `Data/lc_online_skin_<native>.cap` only for a supported template and companion
 DLL. Selection checks the complete scene/menu/package/backdrop/focus closure;
-missing assets or an invalid marker retain the native resource.
+missing assets or an invalid marker select the plain LC failure message.
 
 The PC editor implements keyboard characters but leaves the retained 40-key
 pad grid unpopulated. The scoped LC adapter supplies lower/upper/symbol pages,
@@ -2055,7 +2054,7 @@ comparisons recognize both editor names. Closing/deactivating retires pending
 input, and physical typing takes precedence over a queued on-screen character.
 The native tag 3 IP editor exposes digits and period only. Hub and Game Options
 names retain their 31-byte limit; the Other ways name and IP requests retain
-their native 15-byte limit. Offline editor callers retain the original page.
+their native 15-byte limit. Unscoped requests for this legacy editor also select the plain failure page.
 
 The native campaign chooser's Join action requests `player_game_options` on
 PC, whose handler owns Connect by IP and queues `openmenu games_list`. Its
@@ -2079,8 +2078,44 @@ pages' existing inline/footer notices. It never changes queue priority, expiry,
 readiness, the simulation clock or the stall decision. Failed reads/draws leave
 the native queue intact. This works independently of the JoinInProgress switch.
 
+With the experimental JoinStallWrapper enabled, a classified protected restart
+wait skips the render tail and Present, so this notice lane is also suppressed.
+An active notice does not authorize that tail: it contains the local render work
+the wrapper is testing for lockstep mutations. Native message polling and prefix
+services continue; ordinary stalls and modal/loading/video exclusions retain
+presentation. Notices remain owned by the native queue and can expire while
+presentation is suppressed. Live A42 acceptance must distinguish these cases.
+
 The host matrix modes `r27-text`, `r27-other` and `r27-network` cover editor
 effects, both keyboard context selectors, native Host/Join and browser services,
 resource fallbacks and network queue observation. Actual keyboard/pad/mouse
 rendering, policy scrolling, aspect ratios and overlay placement still require
 live acceptance; no synthetic fixture establishes those visual results.
+
+
+### No GameSpy screens (beta.2)
+
+Rebuilt LC main menus request `lc_online_entry`. That resource is a plain LC
+failure page by default; a working online adapter intercepts it for the Hub.
+Disabled/refused hooks, fonts or registration therefore cannot expose native
+ONLINE_MENU. Runtime resource/marker checks, entry failure, request exceptions
+and unusable lobby controls select `lc_online_unavailable`, never a native
+GameSpy-era screen. This supersedes historical native-fallback instructions
+above. Native services behind verified LC variants and skinned save lists stay.
+
+The builder always authors the failure resource for the XML1 front end, even
+with online menus off: eight anchors within the original 175 limit, shared
+native-font styles, original navy geometry and no script-intent dependency.
+The visible Back item has `menu_cancel=true` and `usecmd="openmenu main"`;
+retail Escape/pad Back dispatches that item without our hooks. `menu_cancel`
+is an item boolean, not a root command. Rebuild/update guidance is plain text.
+Original online resource names receive this same message unless an existing
+LC-skinned host/join resource is retained. The builder removes branding model
+records, their decorative references and logo precaches from retained skins.
+
+C02-C07 legacy/friends/hero/region/Live requests are refused to this page;
+C08 Players/controller resource requests are refused when issued from the
+online flow. Ordinary PC options and save dialogs retain their own routes.
+The companion capability is `lc-online-no-gamespy/1`; regenerate matching
+content before accepting the candidate. Live visual/input acceptance remains
+required, including guard/font/marker/resource failures and Back at both aspects.

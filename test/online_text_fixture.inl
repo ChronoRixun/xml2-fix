@@ -45,14 +45,14 @@ void run(const script_functions_rules::func_entry* entry) {
     expect("lc_text_entry");
     for(const auto* file:files) {
         const auto path=root/file;const auto missing=path.wstring()+L".missing";
-        std::filesystem::rename(path,missing);expect("text_entry");std::filesystem::rename(missing,path);
+        std::filesystem::rename(path,missing);expect("lc_online_unavailable");std::filesystem::rename(missing,path);
     }
-    for(const auto* bad:{"","lc-online-skin/text_entry/2\n","lc-online-skin/text_entry/1\nextra"}) { cap(bad);expect("text_entry"); }
+    for(const auto* bad:{"","lc-online-skin/text_entry/2\n","lc-online-skin/text_entry/1\nextra"}) { cap(bad);expect("lc_online_unavailable"); }
     cap("lc-online-skin/text_entry/1\n");
     put(child.data(),0,0x69efa4);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"online");expect("lc_text_entry");
     put(child.data(),0,0x69f8b4);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"games_list");expect("lc_text_entry");
     put(child.data(),0,0x69f724);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_player_game_options");expect("lc_text_entry");
-    set_current(main_menu.data());expect("text_entry");
+    set_current(main_menu.data());expect("lc_online_unavailable");
     std::cout<<"PASS text entry scope and all 10 missing-resource / marker fallback cases\n";
     for(unsigned va:{0x60b960u,0x60b9a0u,0x60c730u,0x60c780u}) restore_retail(va,5);
     redirect(0x5accc0,activate_base);redirect(0x5af410,deactivate_stub);

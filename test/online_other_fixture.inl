@@ -47,9 +47,9 @@ void run(const script_functions_rules::func_entry* entry) {
         expect(variant);
         for(const auto& file:files) {
             const auto path=root/file;const auto missing=path.wstring()+L".missing";
-            std::filesystem::rename(path,missing);expect(native);std::filesystem::rename(missing,path);
+            std::filesystem::rename(path,missing);expect("lc_online_unavailable");std::filesystem::rename(missing,path);
         }
-        std::ofstream(marker,std::ios::binary|std::ios::trunc)<<capability<<"extra";expect(native);
+        std::ofstream(marker,std::ios::binary|std::ios::trunc)<<capability<<"extra";expect("lc_online_unavailable");
         std::ofstream(marker,std::ios::binary|std::ios::trunc)<<capability;
     }
     // The actual Hub Other action bypasses main-menu interception but must use
@@ -65,7 +65,7 @@ void run(const script_functions_rules::func_entry* entry) {
     put(child.data(),0,0x69f404);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_campaign_lobby");set_current(child.data());
     put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(text_item.data())));child[0x195c]=1;put(child.data(),0x1968,0);mask=0x10;
     std::strcpy(reinterpret_cast<char*>(names.data()+0x1018),"text_hostgame");
-    reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b09f0)(child.data(),nullptr);assert(calls.back()=="request:game_options");
+    reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b09f0)(child.data(),nullptr);assert(calls.back()=="request:lc_game_options");
     std::strcpy(reinterpret_cast<char*>(names.data()+0x1018),"text_joingame");
     reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b09f0)(child.data(),nullptr);assert(calls.back()=="request:lc_player_game_options");
     std::cout<<"PASS real native campaign choice Host/Join effects and intermediate PC page\n";
@@ -104,7 +104,7 @@ void run(const script_functions_rules::func_entry* entry) {
     mask=0;put(child.data(),0,0x69f724);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_player_game_options");set_current(child.data());
     redirect(0x5cef40,refresh);redirect(*reinterpret_cast<unsigned*>(0x6a236c+0x160),accept_only);
     mask=0x1000000;reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5cf230)(child.data(),nullptr);mask=0;
-    assert(native_tag==3 && native_max==15 && calls.back()=="request:text_entry"); // no optional editor assets in this mode
+    assert(native_tag==3 && native_max==15 && calls.back()=="request:lc_text_entry"); // no optional editor assets in this mode
     redirect(0x607450,preference);redirect(0x607430,set_preference);
     result("203.0.113.9",3);calls.clear();const auto consumed=consumes;
     reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5cf040)(child.data(),nullptr);

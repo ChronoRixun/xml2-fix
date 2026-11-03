@@ -121,7 +121,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_host");tick(child.data(),nullptr);assert(menu_hosts==0);
     post(intent::visibility);tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==0 && calls.back()=="request:game_options");
+    assert(menu_hosts==0 && calls.back()=="request:lc_game_options");
     post(intent::back);tick(child.data(),nullptr);assert(menu_leaves==0 && menu_view().state==bm::phase::idle);
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_code");tick(child.data(),nullptr);
@@ -145,7 +145,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     menu_launch={bm::operation::host,{},"Preset room",true};menu_has_preset=true;
     set_current(hub.data());tick(hub.data(),nullptr);assert(calls.back()=="request:lc_host" && menu_hosts==0);
     screen("lc_host");tick(child.data(),nullptr);ticks+=2000;post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==0 && calls.back()=="request:game_options");
+    assert(menu_hosts==0 && calls.back()=="request:lc_game_options");
     post(intent::back);tick(child.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
     ticks+=2000;screen("lc_code");tick(child.data(),nullptr);menu_refuse=true;
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
