@@ -157,6 +157,9 @@ void hub_select() {
     // native refresh; do not seed the synthetic widget name as displayed text.
     text_of(123,expanded ? "~84[Esc] Back" : "~84$MENU_BACK Back");put(back.mem.data(),0x9c,123);
     text_of(122,"~84$MENU_ACCEPT Select");put(select.mem.data(),0x9c,122);
+    const auto display_get=*reinterpret_cast<const char*(__fastcall**)(void*,void*)>(0x6a02c0);
+    assert(std::string(display_get(select.mem.data(),nullptr)).find("Enter Select")!=std::string::npos);
+    assert(std::string(reinterpret_cast<const char*(__thiscall*)(void*)>(0x5c67f0)(select.mem.data())).find("$MENU_ACCEPT")!=std::string::npos);
     auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));row[0x54]|=1;
     if(mode=="r22-hub-footer") { footer_fills.clear();redirect(0x5ae580,footer_events); }
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
@@ -171,16 +174,16 @@ void hub_select() {
     auto* native_focus=*reinterpret_cast<void**>(hub.data()+0x324);
     tick(hub.data(),nullptr);
     std::cout<<"Hub Select hover text: "<<texts["desctext1"]<<"\n";
-    assert(texts["desctext1"]=="~80$MENU_ACCEPT Select" && *reinterpret_cast<void**>(hub.data()+0x324)==native_focus);
+    assert(texts["desctext1"]=="~80Enter Select" && *reinterpret_cast<void**>(hub.data()+0x324)==native_focus);
     text_of(122,"~80$MENU_ACCEPT Select"); // the engine setter stored the previous tick's string
     ask_unit(mouse,hub.data(),10,100);tick(hub.data(),nullptr);
-    assert(texts["desctext1"]=="~84$MENU_ACCEPT Select");
+    assert(texts["desctext1"]=="~84Enter Select");
     if(mode=="r22-hub-footer") {
         assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
         assert((select.mem[0x54]&0x21)==0x20 && (back.mem[0x54]&0x21)==0x20);
         assert(!footer_fills[select.mem.data()] && !footer_fills[back.mem.data()]);
-        const char* normal=expanded ? "~84[Esc] Back" : "~84$MENU_BACK Back";
-        const char* navy=expanded ? "~80[Esc] Back" : "~80$MENU_BACK Back";
+        const char* normal="~84Esc Back";
+        const char* navy="~80Esc Back";
         text_of(123,normal);put(back.mem.data(),0x9c,123);
         ask_unit(mouse,hub.data(),100,15);assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
         assert(footer_fills[back.mem.data()] && !footer_fills[select.mem.data()]);

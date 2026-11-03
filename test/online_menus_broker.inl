@@ -397,7 +397,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
 
     // Hub: a service never asked shows neutral text, the connected scene hidden.
     menu_broker.cancel();menu_broker.stopped();set_current(hub.data());tick(hub.data(),nullptr);
-    assert(gone("lc_service_ok") && texts["service"]=="Connecting...");
+    assert(gone("lc_service_ok") && texts["service"]=="Unavailable");
     // No broker at all: a consistent private host card from the first frame, no error scene, no Retry.
     menu_up=false;screen("lc_host");tick(child.data(),nullptr);
     assert(shown("lc_host_private") && gone("lc_host_public") && gone("retry") && gone("lc_service_ok") && texts["service"]=="Unavailable");

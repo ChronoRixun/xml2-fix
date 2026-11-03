@@ -123,6 +123,7 @@ struct owned_text {
     void* owner=nullptr;
     unsigned name=0;
     std::array<char,1024> value{};
+    std::array<char,128> prompt_native{};
 };
 std::map<void*,owned_text> owned_texts;
 bool text_identity(void* item,const owned_text& value) {
@@ -136,9 +137,11 @@ const char* owned_value(void* item) {
     const auto found=owned_texts.find(item);
     return found!=owned_texts.end() && text_identity(item,found->second) ? found->second.value.data() : nullptr;
 }
+const char* first_prompt_text(void* item,const char* raw);
+bool bind_prompt_native(void* menu,void* item,const char* name,const char* text);
 const char* __fastcall owned_text_getter(void* item,void*) {
     if(const char* value=owned_value(item)) return value;
-    return at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+    return first_prompt_text(item,at<const char*(__thiscall*)(void*)>(0x5c67f0)(item));
 }
 void forget_text_owner(void* owner) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(owner)) bindings.clear();
@@ -165,7 +168,9 @@ bool assign_owned_text(void* owner,void* item,const char* text) {
     // A real parsed widget has both its owner and interned name. Fixture
     // recorders lacking this identity retain the original binding path.
     if(!name || *reinterpret_cast<void**>(p+4)!=owner) return false;
-    auto& value=owned_texts[item];value.owner=owner;value.name=name;
+    auto& value=owned_texts[item];
+    if(value.owner!=owner || value.name!=name) value.prompt_native.fill(0);
+    value.owner=owner;value.name=name;
     unsigned n=0;while(n<value.value.size()-1 && text[n]) ++n;
     std::memcpy(value.value.data(),text,n);value.value[n]=0;
     return true;
@@ -180,7 +185,9 @@ code_model code;
 name_request name_edit;
 DWORD name_requested_at=0;
 key_edges keyboard_edges;
-input_inbox keyboard_input;
+input_inbox keyboard_input,host_keys;
+bool host_accept_held=false,host_accept_guard=false;
+bool host_input_ticking=false;
 std::optional<std::string> rejoin_seed;
 std::atomic<DWORD> game_thread{0},keyboard_thread{0};
 bool back_held=false;
@@ -743,7 +750,7 @@ void request_impl(void* m,const char* name,const char* args) {
     // console_open (openmenu) has already routed this request with console provenance; never route it twice.
     const bool routed=console_routed;console_routed=false;
     if(ready && !routed && !native_route_request(name)) return;
-    pending.clear();keyboard_input.clear();
+    pending.clear();keyboard_input.clear();host_keys.clear();
     if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
     const auto source_id=reinterpret_cast<std::uintptr_t>(source);
@@ -875,6 +882,7 @@ bool bind_text_native(void* menu,const char* item,const char* text) {
         if(!found) return false;
         const auto* vt=*static_cast<const std::uint32_t**>(found);
         if(vt[0x78/4]!=0x5c6850 || *reinterpret_cast<const std::uint32_t*>(static_cast<char*>(found)+0xa0)) return false;
+        if(bind_prompt_native(menu,found,item,text)) return true;
         // Native CText mouse handling reads $MENU prompts directly from +9c.
         // They have a finite authored vocabulary and must keep that token.
         if(!std::strstr(text,"$MENU") && vt[0x7c/4]==reinterpret_cast<std::uintptr_t>(&owned_text_getter) && assign_owned_text(menu,found,text)) {
@@ -1082,7 +1090,15 @@ DWORD last_list_at=0,list_done_at=0;
 bool listed_started=false,list_done=false;
 broker::ticket resolve_ticket{}, remembered_ticket{};
 void native_flow_cancel();
+enum class service_observation { unknown,connected,unavailable };
+service_observation service_seen=service_observation::unknown;
+void observe_service(const broker::client_view& v) {
+    if(v.authenticated) service_seen=service_observation::connected;
+    else if(v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused || (v.state==broker::phase::room && !v.error.empty()))
+        service_seen=service_observation::unavailable;
+}
 void broker_cancel(bool leave_room=false) {
+    if(broker_live()) observe_service(broker_view());
     native_flow_cancel();
     if(!broker_live()) return;
     if(leave_room && broker_calls.leave) broker_calls.leave();
@@ -1197,6 +1213,7 @@ void host_marker_follow(void* menu) {
 }
 void bind_broker(void* menu,screen s) {
     if(!broker_live()) {
+        service_seen=service_observation::unknown;
         if(!offline_fixture) {
             bind_text(menu,"service","Unavailable");bind_text(menu,"self_state","Unavailable");
             // No service: nothing connected, no error scene for a service that was never asked, and a host card whose
@@ -1211,10 +1228,12 @@ void bind_broker(void* menu,screen s) {
     const auto& v=broker_view();
     const bool waiting=v.state==broker::phase::authenticating || v.state==broker::phase::listing || v.state==broker::phase::hosting || v.state==broker::phase::resolving;
     const bool failed=v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused;
-    const char* service=v.authenticated ? "Connected" : failed ? "Unavailable" : "Connecting...";
+    observe_service(v);
+    const bool known_connected=v.authenticated || (!waiting && !failed && v.state!=broker::phase::room && service_seen==service_observation::connected);
+    const char* service=known_connected ? "Connected" : failed || (!waiting && service_seen==service_observation::unavailable) ? "Unavailable" : "Connecting...";
     // A plainly connected service is drawn by the lc_service_ok scene (green diamond + localized word); its text fields
     // stay empty then so the word is never drawn twice. Every other state keeps the neutral text.
-    const bool connected_plain=v.authenticated && !waiting && !failed && v.state!=broker::phase::room;
+    const bool connected_plain=known_connected && !waiting && !failed && v.state!=broker::phase::room;
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "In a room" : service);
@@ -1252,7 +1271,7 @@ void bind_broker(void* menu,screen s) {
     // their step in the copy itself and log the fixed internal reason.
     // Another build: the diagnostic field names both tokens instead (<= 8 allowlisted characters each; the host's token only
     // exists for this failure).
-    std::string diag=!failed ? std::string() : wait ? "Retry in "+std::to_string(wait_seconds(wait))+" s" : diagnostic(operation_name(int(v.action)),v.error);
+    std::string diag=failed && wait ? "Retry in "+std::to_string(wait_seconds(wait))+" s" : std::string();
     if(failed && cause==error_cause::version_mismatch && !v.error_detail.empty()) {
         const auto own=broker_calls.version ? broker_calls.version() : std::string();
         if(!own.empty()) diag=display(v.error_detail,8)+" vs your "+display(own,8);
@@ -1461,8 +1480,12 @@ unsigned lobby_screen_mask(void* menu,unsigned raw) {
     return (lobby_state.role_keyboard || lobby_state.role_key_pending) ? (mapped & ~mask_next) | mask_other : mapped;
 }
 unsigned __fastcall lobby_input(void* mgr,void*) {
-    if(text_entry_ticking) return 0;
+    if(text_entry_ticking || host_input_ticking) return 0;
     unsigned mask=0;lobby_mask(mgr,mask);
+    if(host_accept_guard) {
+        if(!(mask&(0x10|0x100000))) host_accept_guard=false;
+        else mask&=~(0x10|0x100000);
+    }
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
         mask=lobby_screen_mask(lobby_state.owner,mask);
@@ -2900,7 +2923,7 @@ int party_tone(int phase) {
 void party_focus(void* menu,const std::string& item) { if(!item.empty()) lobby_focus(menu,item.c_str()); }
 void party_frame(void* menu) {
     const auto id=reinterpret_cast<std::uintptr_t>(menu);
-    if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear(); }
+    if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear();host_keys.clear(); }
     if(broker_live() && broker_calls.tick) broker_calls.tick();
     native_note_local_record();
     const auto view=party_collect();
@@ -3091,6 +3114,160 @@ void native_history_trim(void* menu) {
     if(dropped>0) logger::write("online menus: native menu history trimmed at %s (%d stale entr%s)",
         static_cast<const char*>(menu)+0xc,dropped,dropped==1 ? "y" : "ies");
 }
+namespace host_controls {
+enum event { up=1,down,left,right,accept,change,back,open };
+constexpr const char* rows[]{"visibility","room_name","campaign","drop_in","open"};
+void* owner=nullptr;unsigned held=0;int last_row=0;
+void reset() {owner=nullptr;held=0;last_row=0;host_keys.clear();}
+bool enabled(void* menu,const char* name) {
+    __try {
+        auto* p=static_cast<unsigned char*>(item_try(menu,name));
+        return p && (p[0x54]&0xc)==8 && !(p[0x54]&0x20);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+int row(void* menu) {
+    auto* selected=focus_of(menu);
+    for(int i=0;i<5;++i) if(selected && selected==item_try(menu,rows[i])) return i;
+    if(selected && selected==item_try(menu,"edit_room")) return 1;
+    if(selected && selected==item_try(menu,"prompt_open")) return 4;
+    return -1;
+}
+void apply(void* menu,int e) {
+    const auto id=reinterpret_cast<std::uintptr_t>(menu);
+    if(e==back) {pending.post(int(intent::back),id,screen::host);return;}
+    if(native_flow.phase!=native_phase::idle) return;
+    int selected=row(menu);if(selected>=0) last_row=selected;
+    if(e==up || e==down) {
+        int i=selected>=0 ? selected : last_row;
+        for(i+=e==up ? -1 : 1;i>=0 && i<5;i+=e==up ? -1 : 1)
+            if(enabled(menu,rows[i])) {lobby_focus(menu,rows[i]);last_row=i;break;}
+        return;
+    }
+    if(pending.action) return; // mouse/usecmd already owns this frame
+    if(e==open) {if(enabled(menu,"open")) {host_accept_guard=true;pending.post(int(intent::open_room),id,screen::host);}return;}
+    if(e==accept && focus_of(menu)==item_try(menu,"retry") && enabled(menu,"retry")) {
+        pending.post(int(intent::retry),id,screen::host);return;
+    }
+    if(e==accept && focus_of(menu)==item_try(menu,"desctext4")) {pending.post(int(intent::back),id,screen::host);return;}
+    if(selected<0) selected=last_row;
+    if(selected<0 || selected>4 || !enabled(menu,rows[selected])) return;
+    if(e!=accept && selected==4) return;
+    const auto action=selected==0 ? intent::visibility : selected==3 ? intent::drop_in : intent::open_room;
+    if(action==intent::open_room) host_accept_guard=true; // no same-edge Post in the native chooser
+    pending.post(int(action),id,screen::host);
+}
+void frame(void* menu,unsigned raw) {
+    if(owner!=menu) {owner=menu;held=raw;last_row=0;} // retire the opening button edge
+    const int selected=row(menu);if(selected>=0) last_row=selected;
+    if(host_keys.source==reinterpret_cast<std::uintptr_t>(menu))
+        for(unsigned i=0;i<host_keys.count;++i) apply(menu,host_keys.values[i]);
+    host_keys.clear();
+    const auto edge=raw&~held;held=raw;
+    if(edge&0x200000) apply(menu,back);
+    else if(edge&0x100000) apply(menu,open);
+    else if(edge&0x1000000) apply(menu,change); // raw Y, before custom-menu X/Y remapping
+    else {
+        const auto action=online_text_entry_rules::pad(edge);
+        if(action==online_text_entry_rules::accept) apply(menu,accept);
+        else if(action==online_text_entry_rules::up) apply(menu,up);
+        else if(action==online_text_entry_rules::down) apply(menu,down);
+        else if(action==online_text_entry_rules::left) apply(menu,left);
+        else if(action==online_text_entry_rules::right) apply(menu,right);
+    }
+}
+void keyboard(void* menu,unsigned char* state,const std::array<bool,256>& edges,bool modified) {
+    const std::pair<unsigned,int> keys[]{{0xc8,up},{0xd0,down},{0xcb,left},{0xcd,right},{0x1c,accept},{0x9c,accept},{0xd3,change},{1,back}};
+    for(const auto& [scan,e]:keys) {
+        if(!modified && edges[scan]) {host_keys.push(reinterpret_cast<std::uintptr_t>(menu),e);if(e==accept)host_accept_held=true;}
+        state[scan]=0;
+    }
+}
+}
+const char* prompt_key(void* menu,const char* name) {
+    const bool pad=pad_probe && pad_probe(menu_player);
+    if(which(menu)==screen::hub) {
+        if(!std::strcmp(name,"desctext1") || !std::strncmp(name,"lc_hub_select_",14)) return pad ? "A" : "Enter";
+        if(!std::strcmp(name,"desctext2")) return pad ? "B" : "Esc";
+        if(!std::strcmp(name,"desctext3")) return pad ? "X" : "Del";
+        if(!std::strcmp(name,"desctext4")) return pad ? "Y" : "F4";
+    }
+    if(which(menu)==screen::host) {
+        if(!std::strcmp(name,"desctext1")) return pad ? "A" : "Enter";
+        if(!std::strcmp(name,"desctext2")) return pad ? "Y" : "Del";
+    }
+    return nullptr;
+}
+bool prompt_identity(void* item,void*& menu,char (&name)[64]) {
+    __try {menu=*reinterpret_cast<void**>(static_cast<char*>(item)+4);engine_name_raw(item,name);return menu && name[0] && !*reinterpret_cast<unsigned*>(static_cast<char*>(item)+0xa0);}
+    __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+const char* first_prompt_text(void* item,const char* raw) {
+    if(!ready || !raw || !std::strstr(raw,"$MENU_")) return raw;
+    void* menu=nullptr;char name[64]{};
+    if(!prompt_identity(item,menu,name)) return raw;
+    const auto* key=prompt_key(menu,name);if(!key) return raw;
+    const char* start=std::strstr(raw,"$MENU_"),*end=std::strchr(start,' ');if(!end) return raw;
+    std::string shown(raw,std::size_t(start-raw));shown+=key;shown+=end;
+    if(!assign_owned_text(menu,item,shown.c_str())) return raw;
+    std::snprintf(owned_texts[item].prompt_native.data(),128,"%s",raw);
+    return owned_value(item);
+}
+bool bind_prompt_native(void* menu,void* item,const char* name,const char* text) {
+    if(!prompt_key(menu,name)) return false;
+    const char* raw=at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+    auto old=owned_texts.find(item);
+    const char* saved=old!=owned_texts.end() && text_identity(item,old->second) && old->second.prompt_native[0] ? old->second.prompt_native.data() : nullptr;
+    if(!saved && (!raw || !std::strstr(raw,"$MENU_"))) return false;
+    char token[128]{};std::snprintf(token,sizeof token,"%s",saved ? saved : raw);
+    if(!assign_owned_text(menu,item,text)) return false;
+    std::snprintf(owned_texts[item].prompt_native.data(),128,"%s",token);
+    // Display labels are owned; native hit/hover routing still reads $MENU at +9c.
+    at<set_text_fn>(0x5adcf0)(menu,name,"%s",text[0] ? token : "");return true;
+}
+void device_prompt(void* menu,const char* key,const char* words,const char* palette=nullptr) {
+    char current[128]{},colors[128]{};const bool readable=authored_text(menu,key,current);
+    if(!palette || !authored_text(menu,palette,colors)) std::memcpy(colors,current,sizeof colors);
+    const auto prefix=[](const char* value) {
+        unsigned n=0;
+        while(value[n]=='~' && value[n+1]>='0' && value[n+1]<='9') {
+            ++n;while(value[n]>='0' && value[n]<='9') ++n;
+        }
+        return n;
+    };
+    const char* body=current+prefix(current);
+    std::string text;
+    if(*words) {
+        // Replace only a known binding prefix, preserving authored translations.
+        const char* suffix=nullptr;
+        for(const char* key_prefix:{"$MENU_ACCEPT ","$MENU_BACK ","$MENU_OTHER ","$MENU_NEXT ",
+                "[Enter] ","[Esc] ","[Del] ","[KP4] ","[KP6] ","[KP5] ","Enter ","Esc ","Del ","F4 ","A ","B ","X ","Y "}) {
+            const auto n=std::strlen(key_prefix);
+            if(!std::strncmp(body,key_prefix,n)) {suffix=body+n;break;}
+        }
+        text.assign(colors,prefix(colors));
+        if(suffix) {const auto space=std::strchr(words,' ');text.append(words,space ? std::size_t(space-words)+1 : std::strlen(words));text+=suffix;}
+        else text+=*body ? body : words;
+    }
+    const auto cached=bindings.text.find(key);
+    if(cached!=bindings.text.end() && cached->second==text && (!readable || text==current)) return;
+    bindings.text.erase(key);bind_text(menu,key,text.c_str());
+}
+void screen_device_prompts(void* menu,screen s) {
+    const bool pad=pad_probe && pad_probe(menu_player);
+    if(s==screen::hub) {
+        int hover=-1;hover_index(hover);
+        device_prompt(menu,"desctext1",pad ? "A Select" : "Enter Select",hover==0 ? "lc_hub_select_hover" : "lc_hub_select_normal");
+        device_prompt(menu,"desctext2",pad ? "B Back" : "Esc Back",hover==1 ? "lc_hub_select_hover" : "lc_hub_select_normal");
+        device_prompt(menu,"desctext3",pad ? "X Change name" : "Del Change name");
+        device_prompt(menu,"desctext4",pad ? "Y Rejoin" : "F4 Rejoin");
+    } else if(s==screen::host) {
+        const int row=host_controls::row(menu);
+        const int selected=row>=0 ? row : host_controls::last_row;
+        const bool change=selected<4 && native_flow.phase==native_phase::idle && host_controls::enabled(menu,host_controls::rows[selected]);
+        device_prompt(menu,"desctext1",pad ? "A Select" : "Enter Select");
+        device_prompt(menu,"desctext2",!change ? "" : pad ? "Y Change" : "Del Change");
+    }
+}
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         if(native_guest_end_pending && which(menu)!=screen::hub && native_guest_return()) {
@@ -3100,10 +3277,12 @@ void tick_impl(void* menu,bool& native_called) {
         }
         // The native mask is rising-edge input (controller +2f8 XOR +374).
         // Keyboard text already posted by DirectInput wins over X/Y bindings.
-        const auto mask=screen_mask(input_mask());
+        const auto raw_mask=input_mask();
+        const auto mask=screen_mask(raw_mask);
         if(!(mask&0x200000)) back_held=false;
         const auto s=which(menu);
-        if(!pending.action && !keyboard_input.count) {
+        if(s==screen::host) host_controls::frame(menu,raw_mask);
+        if(s!=screen::host && !pending.action && !keyboard_input.count) {
             int shortcut=0;
             if(s==screen::code) {
                 if(mask&0x400000) shortcut=int(intent::paste); // MENU_NEXT: pad Y (screen_mask), RT, keyboard KP5
@@ -3124,9 +3303,11 @@ void tick_impl(void* menu,bool& native_called) {
         }
     }
     native_called=true;
+    host_input_ticking=ready && live(menu) && which(menu)==screen::host;
     at<tick_fn>(0x5aaeb0)(menu);
+    host_input_ticking=false;
     if(tick_fault) tick_fault();
-    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
+    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();host_keys.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
     if(s==screen::party) { native_history_trim(menu);party_frame(menu);return; }
     native_history_trim(menu);
@@ -3147,7 +3328,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(s==screen::hub && int(action) && action!=intent::rejoin) rejoin_seed.reset();
     if(s==screen::code && action!=intent::back && keyboard_input.source==reinterpret_cast<std::uintptr_t>(menu))
         for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
-    keyboard_input.clear();
+    keyboard_input.clear();host_keys.clear();
     const char* destination=nullptr;
     if(s==screen::hub && !int(action) && broker_live() && broker_calls.take_preset) {
         broker::launch_preset preset;
@@ -3171,7 +3352,10 @@ void tick_impl(void* menu,bool& native_called) {
         else if(s==screen::code && !code.text.empty()) { code.erase(); error_visible=false; }
         else destination=s==screen::hub ? "main" : "lc_online";
         break;
-    case intent::edit_name: if(s==screen::hub && !modal && begin_name()) return; break;
+    case intent::edit_name:
+        if(s==screen::host) host_controls::apply(menu,focus_of(menu)==item_try(menu,"desctext1") ? host_controls::accept : host_controls::change);
+        else if(s==screen::hub && !modal && begin_name()) return;
+        break;
     case intent::paste: case intent::erase: case intent::clear: case intent::done: case intent::invalid_key:
         if(s==screen::code) code_input(int(action));break;
     case intent::rejoin: if(s==screen::hub && recent && !modal) {
@@ -3235,7 +3419,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(destination) {
         if(s==screen::hub) host_left_state.dismiss(); // leaving the Hub by any route (a launcher preset included) ends the panel
         if(s==screen::code) { code.close(); fixture_ticket=0; }
-        pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
+        pending.clear();keyboard_input.clear();host_keys.clear();error_visible=false;accepted=-1;
         if(!abandon_name()) { show_notice(menu);return; }
         // Original manager request deliberately bypasses our Online interception:
         // Other ways selects verified LC scenes with native name/profile/Host/Join services.
@@ -3313,13 +3497,15 @@ void tick_impl(void* menu,bool& native_called) {
     bind_broker(menu,s);
     compact_focus_follow(menu,s);
     compact_footer_follow(menu,s);
+    screen_device_prompts(menu,s);
 }
 void __fastcall tick(void* menu,void*) {
     bool native_called=false;
     if(!input_thread("tick",false)) { at<tick_fn>(0x5aaeb0)(menu);return; }
     try { tick_impl(menu,native_called); }
     catch(...) {
-        pending.clear();keyboard_input.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
+        host_input_ticking=false;
+        pending.clear();keyboard_input.clear();host_keys.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
         feedback.clear();error_visible=true;
         logger::write("online menus: UI update threw; frame contained");
         if(!native_called) {
@@ -3330,9 +3516,10 @@ void __fastcall tick(void* menu,void*) {
 }
 void deactivate_state(void* menu,bool departure) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
-    pending.clear();keyboard_input.clear();
+    pending.clear();keyboard_input.clear();host_keys.clear();
     if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
     const auto s=which(menu);
+    if(s==screen::host) host_controls::reset();
     if(s==screen::hub) hub_footer_visual(menu,-1);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
@@ -3373,8 +3560,12 @@ void keyboard(unsigned char* state) {
     escape_down=down;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
-    if(!state) { text_entry_ui::reset_input();keyboard_edges.reset();keyboard_input.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
+    if(!state) { text_entry_ui::reset_input();keyboard_edges.reset();keyboard_input.clear();host_keys.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
+    if(host_accept_held) {
+        if(!((state[0x1c]|state[0x9c])&0x80)) host_accept_held=false;
+        else if(which(current_peek())!=screen::host) state[0x1c]=state[0x9c]=0;
+    }
     if(pause_accept_held) {
         if(!((state[0x1c]|state[0x9c])&0x80)) pause_accept_held=false;
         state[0x1c]=state[0x9c]=0;
@@ -3416,6 +3607,8 @@ void keyboard(unsigned char* state) {
     const auto address=reinterpret_cast<std::uintptr_t>(menu);
     const bool control=(state[0x1d]|state[0x9d])&0x80;
     const bool alt=(state[0x38]|state[0xb8])&0x80;
+    if(s==screen::host) {host_controls::keyboard(menu,state,edges,alt || control);return;}
+    if(s==screen::hub && !alt && !control && edges[0x3e]) {pending.post(int(intent::rejoin),address,s);state[0x3e]=0;return;}
     if(s==screen::party) {
         if(!alt && !control && edges[1]) {
             pending.post(int(intent::back),address,s);
@@ -3618,6 +3811,6 @@ void install(HMODULE game,const install_hooks* hooks) {
     ready=true;
     logger::write("online menus: lc-online-no-gamespy/1; rebuilt entry and failed optional scenes use the plain LC message");
     ::display::set_network_overlay(&network_status_ui::draw);
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s; host input API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability,host_input_capability);
 }
 }

@@ -16,6 +16,7 @@ namespace online_menus_rules {
 inline constexpr char capability[] = "lc-online-menus/1\n";
 // Additive input API probe: LC must require this before selecting intents 9..62.
 inline constexpr char input_capability[] = "lc-online-input/1";
+inline constexpr char host_input_capability[] = "lc-online-host-controls/1";
 inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 // /2: per-row status/pip/build/dim scenes, list count + age, per-cause error scenes, service scene (docs/online-menus.md).
 inline constexpr char broker_capability[] = "lc-online-broker/2";
@@ -331,8 +332,8 @@ inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","
     "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name","too_many_public_rooms","too_many_joins","session_started"};
 static_assert(std::size(error_cause_key)==std::size_t(error_cause::count));
 // What the failure's copy tells the player to do next. LC's copy names it; retry is the only one that is a control.
-enum class next_action { retry, edit_code, browse, other_ways, back, wait, close_room, leave_game, lobby };
-inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait","close_room","leave_game","lobby"};
+enum class next_action { retry, edit_code, browse, other_ways, back, wait, close_room, leave_game, new_session };
+inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait","close_room","leave_game","new_session"};
 struct cause_row { error_cause cause; next_action next; bool retry; };
 // One row per cause, in enum order.
 inline constexpr cause_row cause_table[] = {
@@ -353,7 +354,7 @@ inline constexpr cause_row cause_table[] = {
     {error_cause::invalid_name,    next_action::back,       false},
     {error_cause::too_many_public_rooms,next_action::close_room,false},
     {error_cause::too_many_joins,  next_action::leave_game, false},
-    {error_cause::session_started,next_action::lobby,      false}};
+    {error_cause::session_started,next_action::new_session,      false}};
 static_assert(std::size(cause_table)==std::size_t(error_cause::count));
 inline constexpr const cause_row& row_of(error_cause c) { return cause_table[std::size_t(c)]; }
 inline error_cause classify_error(std::string_view id,std::string_view detail={}) {

@@ -164,12 +164,13 @@ void __cdecl text_stub(void* menu,const char* item,const char* format,...) {
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
     // Production DATA retains a native name token and supplies its displayed
     // value through the getter. Keep this recorder faithful to that contract.
-    if(texts[item]==item || texts[item].empty()) if(auto* found=item_stub(menu,nullptr,item)) {
+    const bool prompt_token=texts[item].find("$MENU_")!=std::string::npos;
+    if(texts[item]==item || texts[item].empty() || prompt_token) if(auto* found=item_stub(menu,nullptr,item)) {
         auto* p=static_cast<unsigned char*>(found);const auto* vt=*reinterpret_cast<unsigned**>(p);
         const auto getter=*reinterpret_cast<unsigned*>(0x6a02c0);
         if(*reinterpret_cast<void**>(p+4)==menu && *reinterpret_cast<unsigned*>(p+8) && getter!=0x5c67f0 && vt[0x7c/4]==getter) {
             const char* value=reinterpret_cast<const char*(__thiscall*)(void*)>(vt[0x7c/4])(found);
-            texts[item]=value;*reinterpret_cast<unsigned*>(p+0x9c)=value[0] ? *reinterpret_cast<unsigned*>(p+8) : 0;
+            texts[item]=value;if(!prompt_token) *reinterpret_cast<unsigned*>(p+0x9c)=value[0] ? *reinterpret_cast<unsigned*>(p+8) : 0;
         }
     }
 }
@@ -539,6 +540,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_model.inl"
 #include "online_menus_hub.inl"
 #include "online_menus_strings.inl"
+#include "online_forwarded_fixture.inl"
 #include "online_menus_data.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
@@ -640,7 +642,7 @@ int main(int argc,char** argv) {
     if((mode=="r24-visibility" || mode=="r25-visibility") || mode=="r5-broker" || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one") || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
     if(mode=="r15-errors" || mode=="r16-hits-live" || mode.starts_with("r22-retry") || mode=="r23-empty-paging") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
-    if(mode=="r25-drop-in") install_hooks.broker=&drop_api;
+    if(mode=="r25-drop-in" || mode=="r29-host-input" || mode=="r29-service") install_hooks.broker=&drop_api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -854,6 +856,7 @@ int main(int argc,char** argv) {
     if(mode=="r16-hits-live" || mode.starts_with("r22-retry")) { live_input_fixture::run();return 0; }
     if(mode=="r20-hub-select" || mode=="r22-hub-footer" || mode=="r23-footer-expanded") { live_input_fixture::hub_select();return 0; }
     if(mode=="r25-drop-in") { live_input_fixture::ac_drop_controls();return 0; }
+    if(mode=="r29-host-input" || mode=="r29-service") { forwarded_fixtures::run();return 0; }
     if((mode=="r24-party-native" || mode.starts_with("r25-party")) || (mode=="r24-visibility" || mode=="r25-visibility")) { live_input_fixture::ab_native_controls((mode=="r24-visibility" || mode=="r25-visibility"));return 0; }
     if(mode=="r23-empty-paging") { live_input_fixture::empty_paging();return 0; }
     if(mode=="r23-compact-footer") { live_input_fixture::compact_footer();return 0; }

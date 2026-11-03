@@ -2190,3 +2190,35 @@ Code-room cards keep the existing broker facts and controls.
 The native LAN row formatter separates game name and difficulty with a space.
 The companion LC builder uses amber focus art for this list, matching its navy
 selected-text style.
+
+
+### Forwarded beta.2 Host controls and service state
+
+Host setup uses an explicit row order: Visibility, Room name, Campaign, Drop-in,
+Open. Up/Down move between enabled rows; Left/Right change a value and never
+move focus. Binary values toggle; Room name and Campaign open the existing
+native Game Options editor. Enter/A activates, Del/Y changes the selected value,
+and Escape/B goes Back. The Host tick owns these input edges, preventing the
+base menu from dispatching a second navigation/Accept. A held Host Enter and
+the same pad Accept edge are fenced across the native-chooser transition.
+Mouse/usecmd retains first action priority. The footer hides Change on Open or
+a locked value. Host's Select/Change footer uses the existing Host-scoped intent
+9; no new public number, wire field, or release identity is added.
+
+Service status remembers the last observed Connected/Unavailable state across
+operation cancellation; cancellation still invalidates its tickets and clears
+request-specific errors. A new pending request displays Connecting until it has
+an outcome. The UI shows localized failure scenes and retry countdowns, without
+raw operation/error IDs. Hub fallback prompts are readable on the first authored
+frame; runtime prompts follow keyboard/pad use. F4 is the keyboard Rejoin alias
+(the legacy native keypad alias remains). A closed started session asks the
+host to start a new session, rather than promising a return to its old lobby.
+
+
+Native footer input still reads the interned $MENU token. Stable key labels are
+provided through widget-owned text at the first getter call; serialized Hub/Host
+prompts retain native tokens. Binding updates preserve the original token and
+localized suffix, and cached tokens remain tied to the widget owner/name and
+resource lifetime. This keeps native mouse hover/activation while preventing
+startup binding-row names from flashing on screen. Native first-getter and raw
+getter assertions cover both sides of that contract.

@@ -45,7 +45,7 @@ void error_table_pure() {
         assert(std::string(error_cause_key[int(cause)]).size() && row_of(cause).cause==cause);
     }
     assert(classify_error("room_not_joinable","session_started")==error_cause::session_started);
-    assert(cause_next(error_cause::session_started)==next_action::lobby && !cause_retryable(error_cause::session_started));
+    assert(cause_next(error_cause::session_started)==next_action::new_session && !cause_retryable(error_cause::session_started));
     assert(classify_error("timeout","session_started")==error_cause::timeout);
     assert(classify_error("room_not_joinable","session_started ")==error_cause::room_closed);
     assert(std::size(cause_table)==std::size(error_cause_key));
@@ -228,7 +228,7 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
         tick(child.data(),nullptr);tick(child.data(),nullptr);
         assert(shown(old_assets ? "lc_broker_err_generic" : "lc_broker_err_session_started"));
         assert(gone("lc_broker_err_room_closed") && gone("retry") && !enabled_items["retry"]);
-        assert(texts["broker_error"]=="join: room_not_joinable" && menu_view().error=="room_not_joinable");
+        assert(texts["broker_error"].empty() && menu_view().error=="room_not_joinable");
         unsigned visible=0;for(const auto* key:error_cause_key) visible+=shown(std::string("lc_broker_err_")+key);
         assert(visible==1);
         absent_items.clear();menu_error_detail.clear();settle();
@@ -247,7 +247,7 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
     assert(!enabled_items["prompt_refresh"]);
     const auto lists=menu_lists;post(intent::refresh);post(intent::retry);tick(child.data(),nullptr);assert(menu_lists==lists && menu_view().state==bm::phase::retry_wait);
     ticks+=1000;tick(child.data(),nullptr);assert(texts["broker_error"]=="Retry in 1 s" && !enabled_items["retry"]);
-    ticks+=1000;tick(child.data(),nullptr);assert(texts["broker_error"]=="list: timeout" && enabled_items["retry"]);
+    ticks+=1000;tick(child.data(),nullptr);assert(texts["broker_error"].empty() && enabled_items["retry"]);
     settle();
     assert(menu_begin(bm::operation::list));menu_auth=true;menu_error="rate_limited";menu_complete=true;tick(child.data(),nullptr);tick(child.data(),nullptr);
     assert(texts["broker_error"]=="Retry in 10 s" && shown("lc_broker_err_rate_limited") && !enabled_items["retry"]); // the service limit is at least 10 s
