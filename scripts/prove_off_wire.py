@@ -104,10 +104,11 @@ raw = capture("gns-off-fast", mine, setter(fast=True), 24)
 assert raw == ref24
 print("FastTransfer on, Transport absent = 0.2.3f", records["gns-off-fast"]["sha256"], flush=True)
 # 0.6 preview fix F: Transport=gns also registers rule 64 OnlineRemovalNotice (with rule 25), one more rule on each gns line.
-on = capture("gns-on", mine, setter(transport="gns"), 25)
+# 0.6.0-beta.2 (linked frame rate): Transport=gns also registers rule 29 TickRate revision 2 {1,1,10,60}; one more again.
+on = capture("gns-on", mine, setter(transport="gns"), 26)
 assert on != ref
-print("Transport=gns differs (25 rules)", records["gns-on"]["sha256"], flush=True)
-on2 = capture("gns-on-fast", mine, setter(fast=True, transport="gns"), 26)
+print("Transport=gns differs (26 rules)", records["gns-on"]["sha256"], flush=True)
+on2 = capture("gns-on-fast", mine, setter(fast=True, transport="gns"), 27)
 assert on2 != ref24
 (R / "evidence/off-wire-compatibility.json").write_text(json.dumps({"method": __doc__, "records": records}, indent=1))
 print("Transport OFF wire compatibility PASS")

@@ -78,10 +78,11 @@ def jip(cfg):
 mine = R / "native-map/bin/Release"
 # 32 rules since XML2 Fix 1.9.0-beta.1: run023's six non-stock [Limits] (ActorSlots, ResourceNames, ItemEnhancements,
 # FightStyles, EffectCurves, MoveTriggers) are agreement rules 32-37 now (limits wave 1); 26 before. 33 since the 0.6 preview
-# fix F: Transport=gns also registers rule 64 OnlineRemovalNotice.
-capture("gns-jip", mine, jip, 33)
+# fix F: Transport=gns also registers rule 64 OnlineRemovalNotice. 34 since 0.6.0-beta.2: Transport=gns also registers rule 29
+# TickRate revision 2 (linked frame rate).
+capture("gns-jip", mine, jip, 34)
 log = (R / "union/wire-gns-jip/xml2-fix.log").read_text()
-for needle in ("receive validation installed", "Transport=gns installed", "JoinInProgress installed", "33 rules"):
+for needle in ("receive validation installed", "Transport=gns installed", "JoinInProgress installed", "34 rules"):
     assert needle in log, needle
 assert "refused" not in log.split("startup transaction")[-1].lower().replace("save refused", ""), "a subsystem refused"
-print("combined install PASS (receive validation, GNS, FastTransfer, join in progress, 33 rules)")
+print("combined install PASS (receive validation, GNS, FastTransfer, join in progress, 34 rules)")
