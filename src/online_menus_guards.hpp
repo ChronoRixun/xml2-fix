@@ -4,6 +4,17 @@
 // ABI/site guards, independently checked by scripts/check_online_menus_guards.py.
 namespace online_menus_guards {
 inline constexpr script_functions_rules::guard guards[]{
+    {0x0060a5d0, "8b81f8010000c1e0048b8c08c801000085c9750333c0c351e8f38500008bc8e8fc670000c3", "native active network message getter and formatter"},
+    {0x00610df0, "8b4424045750688c84680068fb00000068582fa500e8e6f6f4ff", "native network notice bounded formatter"},
+    {0x0061c35a, "bfd0fd69008bf0b90b00000033d2f3a6750d", "initial input context text-entry name comparison"},
+    {0x0061c429, "bfd0fd69008bf0b90b00000033d2f3a67504", "refreshed input context text-entry name comparison"},
+    {0x0069f07c, "c06e5e00", "text entry activation slot"},
+    {0x0069f080, "10f45a00", "text entry deactivation slot"},
+    {0x0069f0a4, "f0725e00", "text entry tick slot"},
+    {0x005e72f0, "51a1f8386f00890424a061a0a00084c05657", "native text entry character tick"},
+    {0x005e7395, "f7d88dbe101c00001ac08bd755fec08d6a01", "native text entry buffer and charset decision"},
+    {0x005e73ae, "8b8e101d00002bd53bd15d741f", "native text entry byte limit"},
+    {0x005e6f30, "535556578be933ff33f68d9d101c0000", "native text entry Done result service"},
     {0x006a362c, "e0f25e00", "text-stream deferred render callback"},
     {0x005ef1a0, "55578bf98b8704140200", "text-stream reset trampoline ABI"},
     {0x005ef2e0, "558bec83e4f881ec84040000", "text-stream render pass ABI"},

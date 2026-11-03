@@ -11,6 +11,7 @@ namespace join_in_progress
 	// The host's bring-in between zone loads; the game's thread (the GNS receive pump).
 	void tick();
 	bool bringing_in(); // service the waiting/load scheduler states where the ordinary receive pump does not run
+	const char* hold_overlay_text(); // render thread: a hold panel takes priority over ordinary network notices
 	bool can_service(); // control-message draining is safe only outside synchronous world construction
 	bool pending_player(const void* record); // admission stays on the stock/tunnelled socket until native add
 	bool requested();

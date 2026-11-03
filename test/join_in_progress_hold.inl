@@ -515,6 +515,18 @@ void run_join_hold() {
     run_lost_newcomer_fixture(); // p060fix/AR: a newcomer lost between its admission and the shared start
 
     // ---- 7. The overlay's other paths: 16-bit back buffer (blend), multisampled (clear, viewport restored), refusals ----
+    {
+        const char* notice="Synthetic network notice with a participant name and a longer explanation. The active native message remains readable on a small display, in the normal aspect ratio and on a wide display.";
+        for(const auto size:{std::pair{320u,240u},std::pair{640u,360u},std::pair{1920u,1080u}}) {
+            const auto wrapped=hold_overlay::render(notice,size.first,size.second,true);
+            const auto single=hold_overlay::render(notice,size.first,size.second);
+            assert(wrapped.width<=size.first && wrapped.height>single.height && wrapped.height<=size.second);
+            assert(std::count(wrapped.text_mask.begin(),wrapped.text_mask.end(),std::uint8_t(1))>0);
+            const auto where=hold_overlay::place(wrapped,size.first,size.second);
+            assert(where.left>=0 && where.top>=0 && where.right<=LONG(size.first) && where.bottom<=LONG(size.second));
+        }
+        std::cout<<"PASS wrapped native network notices at small, widescreen and HD sizes\n";
+    }
     hold_overlay::release();
     {
         join_in_progress::hold_message="A player is joining...";join_in_progress::hold_message_logged=false;join_in_progress::hold_message_failed=false;

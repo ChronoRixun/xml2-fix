@@ -49,6 +49,7 @@ namespace display
 		bool paused = false; // RunInBackground=0: Present reports the device lost while unfocused
 		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
 		void (*overlay_hook)(void*) = nullptr;   // p060fix/AQ2: the join hold's on-screen message, drawn before the screenshot hook
+		void (*network_overlay_hook)(void*) = nullptr;
 		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
 		const char* no_activate = nullptr;       // why the window is shown without taking the focus, if it is
 		HWND window = nullptr;
@@ -419,6 +420,7 @@ namespace display
 			{
 				overlay_hook(self); // onto the finished frame, so the test pipe's screenshot below shows it too
 			}
+			if (network_overlay_hook) network_overlay_hook(self);
 			if (frame_hook)
 			{
 				frame_hook(self); // the back buffer holds the finished frame
@@ -582,9 +584,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
+			if (can_pause || frame_hook || overlay_hook || network_overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : overlay_hook ? "the join hold's on-screen message" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : overlay_hook ? "the join hold's on-screen message" : network_overlay_hook ? "the online network notice" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
@@ -1299,6 +1301,12 @@ namespace display
 		std::lock_guard lock(mutex);
 		overlay_hook = draw;
 		if (draw && device) hook_present("the join hold's on-screen message");
+	}
+	void set_network_overlay(void (*draw)(void* device))
+	{
+		std::lock_guard lock(mutex);
+		network_overlay_hook = draw;
+		if (draw && device) hook_present("the online network notice");
 	}
 
 	void disable_multisampling(const char* why)

@@ -22,7 +22,7 @@ def main():
     binary, retail, out = args.test.resolve(), args.exe.resolve(), args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parent.parent
-    modes = host_modes(root)
+    modes = ["r27-text", "r27-other", "r27-network"] + host_modes(root)
     results = []
     for mode in modes:
         result = subprocess.run([str(binary), str(retail), mode], cwd=out, capture_output=True,
