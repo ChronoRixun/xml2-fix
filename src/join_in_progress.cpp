@@ -54,6 +54,7 @@ namespace join_in_progress
 		bool execution_observer = false, execution_wrapper = false;
 		bool pause_guard = false; unsigned pause_guard_hits = 0; // AR6 (fable-ar6): [Online] RestartPauseGuard (Layer 3)
 		bool whole_inputs = false; // AR6 (fable-ar6): [Online] RestartEpochWholeInputs (Layers 1 + 2)
+		bool clock_step = false; unsigned clock_step_lines = 0; // AR7 (fable-ar7): [Online] SymmetricClockStep; `jip step:` line count
 		std::uint32_t layer2_zero_record[16] = {}; // AR6 Layer 2: the "previous" for an unresolvable delta (>= 0x28 bytes, 0x558c00 reads prev+0x27)
 		using execution_boundary = join_in_progress_diagnostics::boundary;
 		void execution_snapshot(execution_boundary, const std::uint32_t* saved = nullptr);
@@ -199,6 +200,7 @@ namespace join_in_progress
 				if (const auto* g = execution_mismatch(image,execution_observer,execution_wrapper)) return g;
 				if (pause_guard) if (const auto* g = pause_guard_mismatch(image)) return g; // AR6 L3
 				if (whole_inputs) if (const auto* g = whole_input_mismatch(image)) return g; // AR6 L1/L2
+				if (clock_step || execution_observer) if (const auto* g = clock_step_mismatch(image)) return g; // AR7
 				return nullptr;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
@@ -1954,6 +1956,57 @@ namespace join_in_progress
 			mov eax, dword ptr [ebx+2f8h]
 			jmp dword ptr [pause_guard_resume]
 		} }
+		// AR7 (fable-ar7): the `jip step:` observer at the set-step site 0x559525 (JoinDiagnostics=1 only). CALL-shaped: the
+		// bridge runs with the run function's frame intact: args[0] = the return address 0x55952b, args[6] = the caller's
+		// [esp+0x14] = A, the frame's clock step (max over participants, float bits). One line per lockstep frame for frames
+		// 0..40 of every epoch: the applied step, the placeholder-mode byte (0x79fbb0 + 0xc68b) and every ring block's head
+		// record (index:frame:step word, bit 15 = flagged on its owner). Reads only, SEH-guarded; the stock fld follows.
+		void __cdecl clock_step_note(const std::uint32_t* args)
+		{
+			if (!execution_observer || clock_step_lines >= join_in_progress_core::step_observe_lines) return;
+			__try
+			{
+				const auto frame = *reinterpret_cast<const std::uint16_t*>(native_frame);
+				if (frame >= join_in_progress_core::step_observe_frames) return;
+				const auto manager = static_cast<std::uintptr_t>(0x79fbb0);
+				const auto mode = *reinterpret_cast<const std::uint8_t*>(manager + 0xc68b);
+				std::uint32_t read[4]{}, head_frame[4]{}, head_word[4]{};
+				for (unsigned i = 0; i < 4; ++i)
+				{
+					const auto block = manager + i * 0x3184u;
+					read[i] = *reinterpret_cast<const std::uint32_t*>(block + 0x3170);
+					if (read[i] >= 300u) continue;
+					const auto slot = block + 0x268u + read[i] * 0x28u;
+					head_frame[i] = *reinterpret_cast<const std::uint16_t*>(slot + 4);
+					head_word[i] = *reinterpret_cast<const std::uint16_t*>(slot + 6);
+				}
+				++clock_step_lines;
+				logger::write("jip step: frame=%u applied=%08x mode=%u heads=[0:%u:%04x:%u 1:%u:%04x:%u 2:%u:%04x:%u 3:%u:%04x:%u] reads=[%u %u %u %u]",
+					unsigned(frame), args[6], unsigned(mode),
+					head_frame[0], head_word[0] & 0x7fffu, head_word[0] >> 15, head_frame[1], head_word[1] & 0x7fffu, head_word[1] >> 15,
+					head_frame[2], head_word[2] & 0x7fffu, head_word[2] >> 15, head_frame[3], head_word[3] & 0x7fffu, head_word[3] >> 15,
+					read[0], read[1], read[2], read[3]);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:step-fault", "jip step: a read faulted; the observer line is skipped"); }
+		}
+		__declspec(naked) void clock_step_bridge() { __asm {
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			lea eax, [ebp+24h]
+			push eax
+			call clock_step_note
+			add esp, 4
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			fld dword ptr ds:[680030h]
+			ret
+		} }
 	}
 
 	void note_party_change()
@@ -1975,6 +2028,7 @@ namespace join_in_progress
 		execution_wrapper = ini::flag(L"Online", L"JoinStallWrapper", false);
 		pause_guard = ini::flag(L"Online", L"RestartPauseGuard", true); // AR6 Layer 3: default ON; every peer must agree (see the install line)
 		whole_inputs = ini::flag(L"Online", L"RestartEpochWholeInputs", true); // AR6 Layers 1 + 2: default ON
+		clock_step = ini::flag(L"Online", L"SymmetricClockStep", true); // AR7: default ON; every peer must agree (the clock step is part of the lockstep)
 		if (execution_observer) execution_log = new (std::nothrow) join_in_progress_diagnostics::execution_capture();
 		if (execution_observer && !execution_log) { logger::write("join in progress: JoinDiagnostics allocation failed - observer disabled"); execution_observer = false; }
 		probe_enabled = ini::flag(L"Dev", L"LateJoinProbe", false);
@@ -2144,8 +2198,13 @@ namespace join_in_progress
 			writes.push_back({whole_input_site, bytes(whole_input_original), rel(0xe9, whole_input_site, reinterpret_cast<const void*>(&whole_input_bridge), whole_input_original.size())});
 			writes.push_back({delta_zero_site, bytes(delta_zero_original), rel(0xe9, delta_zero_site, reinterpret_cast<const void*>(&delta_zero_bridge), delta_zero_original.size())});
 		}
+		if (clock_step) writes.push_back({clock_step_site, bytes(clock_step_original), bytes(clock_step_patch)}); // AR7: in-place, no bridge
+		if (execution_observer) writes.push_back({clock_step_observe_site, bytes(clock_step_observe_original), rel(0xe8, clock_step_observe_site, reinterpret_cast<const void*>(&clock_step_bridge), clock_step_observe_original.size())});
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
+			if (clock_step) logger::write("join in progress: AR7 symmetric clock step installed at 0x%06X - a placeholder record's frame time counts the same on its owner as on every other peer (the stock owner-side 0.025 s is gone), so the lockstep clock step is the same on every peer; [Online] SymmetricClockStep=0 turns it off (every peer of a session must use the same setting: the clock step is part of the lockstep)", unsigned(clock_step_site));
+			else logger::write("join in progress: AR7 symmetric clock step OFF ([Online] SymmetricClockStep=0) - two peers in placeholder mode apply each other's frame times and their game clocks drift");
+			if (execution_observer) logger::write("join in progress: AR7 `jip step:` observer at 0x%06X for frames 0..%u of every epoch (JoinDiagnostics=1)", unsigned(clock_step_observe_site), join_in_progress_core::step_observe_frames - 1);
 			if (pause_guard) logger::write("join in progress: AR6 pause guard installed at the controller apply 0x550fb0 - a lockstep record of frame < %u is applied without UI code 0x13 (the pause code) on every peer; [Online] RestartPauseGuard=0 turns it off (every peer of a session must use the same setting: the applied inputs are part of the lockstep)", join_in_progress_core::pause_guard_frames);
 			else logger::write("join in progress: AR6 pause guard OFF ([Online] RestartPauseGuard=0) - a stray frame-0 pause code can hold one peer on the native online pause");
 			if (whole_inputs) logger::write("join in progress: AR6 whole-input fix installed - the sender keeps the first %u frames after a ring reset FULL (0x5597d2) and the receiver resolves an unresolvable delta against zero (0x559660), so a late-resetting peer decodes the real inputs rather than stack garbage; [Online] RestartEpochWholeInputs=0 turns it off (a full record is the stock wire format, so a stock peer is unaffected; the beta.2 build gates cross-build joins)", join_in_progress_core::whole_input_frames);

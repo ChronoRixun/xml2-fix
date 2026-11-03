@@ -842,6 +842,31 @@ int main(int argc, char** argv)
 				check(restart_whole_input(0) == send_form::force_full && restart_whole_input(31) == send_form::force_full, "AR6 L1: frames 0 and 31 go out full");
 				check(restart_whole_input(32) == send_form::stock && restart_whole_input(2000) == send_form::stock, "AR6 L1: frame 32 and later use the stock delta decision");
 			}
+			// AR7 (fable-ar7): the symmetric clock step - a record's contribution to the frame's clock step is the same on its
+			// owner as on every other peer; the stock rule was owner-relative for placeholder (bit-15) records.
+			{
+				using namespace join_in_progress_core;
+				const std::uint16_t capped = std::uint16_t(step_word_cap | step_placeholder_bit), frame33 = std::uint16_t(333u | step_placeholder_bit);
+				check(step_seconds(step_word_cap) == 1.0f && step_seconds(capped) == 1.0f && step_seconds(0) == 0.0f, "AR7: the step word is 0.1 ms units, bit 15 is not part of the value");
+				check(stock_clock_step(capped, true) == step_placeholder_seconds && stock_clock_step(capped, false) == 1.0f, "AR7: stock - a flagged 1.0 s record counts 0.025 s on its owner and 1.0 s elsewhere (the asymmetry)");
+				check(stock_clock_step(step_word_cap, true) == 1.0f && stock_clock_step(step_word_cap, false) == 1.0f, "AR7: stock - an unflagged record counts its value everywhere");
+				check(stock_clock_step(wire_step_word(capped), false) == step_seconds(capped), "AR7: the wire strips bit 15, so a remote peer always sees the value");
+				bool symmetric = true;
+				for (unsigned w = 0; w < 0x10000u; ++w)
+					if (symmetric_clock_step(std::uint16_t(w), true) != symmetric_clock_step(std::uint16_t(w), false) || symmetric_clock_step(std::uint16_t(w), true) != stock_clock_step(wire_step_word(std::uint16_t(w)), false)) symmetric = false;
+				check(symmetric, "AR7: for every step word the symmetric step on the owner equals what every other peer applies (the stock remote rule)");
+				check(symmetric_clock_step(frame33, true) == step_seconds(333) && stock_clock_step(frame33, true) == step_placeholder_seconds, "AR7: a flagged 33.3 ms record now counts 33.3 ms on its owner (stock: 25 ms)");
+				check(std::uint32_t(0x3ccccccd) == [] { float f = step_placeholder_seconds; std::uint32_t u; std::memcpy(&u, &f, 4); return u; }(), "AR7: the stock constant at 0x55923f is 0.025f");
+				// The patch: 2 bytes at 0x559233 (the first instruction after `and eax, 0x7fff`) jump to the unflagged path.
+				using namespace join_in_progress_rules;
+				check(clock_step_site + 2 + clock_step_patch[1] == clock_step_target && clock_step_patch[0] == 0xeb && clock_step_patch[2] == 0x90 && clock_step_patch[3] == 0x90, "AR7: eb 1a at 0x559233 lands on 0x55924f (movzx ecx, ax), then two nops");
+				const std::string region(clock_step_guards[0].hex);
+				const auto at = [&](std::uint32_t va, std::size_t n) { return region.substr((va - clock_step_guards[0].va) * 2, n * 2); };
+				check(clock_step_guards[0].va == 0x559222 && region.size() == 2 * (0x55926b - 0x559222), "AR7: the guard covers 0x559222..0x55926a (the read, both paths and the join)");
+				check(at(clock_step_site, 4) == "89442410" && at(clock_step_target, 3) == "0fb7c8" && at(0x55922e, 5) == "25ff7f0000" && at(0x55923b, 8) == "c7442414cdcccc3c", "AR7: the guarded bytes hold the original mov, the jump target's movzx, the mask and the 0.025 s constant");
+				check(std::string(clock_step_guards[2].hex).substr(0, 12) == "d90530006800" && clock_step_guards[2].va == clock_step_observe_site && clock_step_observe_resume == clock_step_observe_site + clock_step_observe_original.size(), "AR7: the observer site is the guarded fld dword [0x680030] (6 bytes), resume right after it");
+				check(step_observe_frames == 41 && step_observe_lines == 2048, "AR7: the observer covers frames 0..40 and at most 2048 lines per process");
+			}
 			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
 			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
 			// epoch saw the loading flags, and never before.

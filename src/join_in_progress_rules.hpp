@@ -698,6 +698,35 @@ namespace join_in_progress_rules
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
 		return nullptr;
 	}
+	// AR7 (fable-ar7): the symmetric clock step. The input-manager run 0x559190 derives every lockstep frame's clock step
+	// from the participants' head records: 0x559222 movzx eax, word [block + read*0x28 + 0x26e] = the record's step word
+	// (0.1 ms units, capped at 0x2710 = 1.0 s by the producer 0x558f90; bit 15 = produced in placeholder mode, 0x558fc3).
+	// Stock: a flagged record counts 0.025 s for the clock on its OWNER (0x55923b: s14 = 0x3ccccccd) but its full value on
+	// every other peer, because the sender strips bit 15 for the wire (0x5597f1 and the delta kinds). Two peers both in
+	// placeholder mode therefore apply each other's measured frame times, and the one whose partner produced one more capped
+	// 1.0 s record runs 0.1 s (= 2 frames after the 0x46ef25 dt clamp) ahead for the rest of the epoch (fable-ar7 X-2a).
+	// The fix: at 0x559233 (mov [esp+0x10], eax - the first instruction after the mask) jump to the unflagged path 0x55924f,
+	// which computes s10 = s14 = value * 1e-4 from ax (already masked), so a record counts the same on its owner as on every
+	// other peer. Two bytes (eb 1a) + two nops; no bridge, no wire change. The step A = max over participants (0x559282) is
+	// then the same function of the same frame-keyed records on every peer.
+	constexpr std::uint32_t clock_step_site = 0x559233, clock_step_target = 0x55924f;
+	inline constexpr std::array<unsigned char, 4> clock_step_original{0x89,0x44,0x24,0x10};
+	inline constexpr std::array<unsigned char, 4> clock_step_patch{0xeb,0x1a,0x90,0x90};
+	static_assert(clock_step_site + 2 + 0x1a == clock_step_target, "AR7: the short jump lands on the unflagged step path");
+	// The `jip step:` observer (JoinDiagnostics=1 only) and the optional belt share the set-step site 0x559525 (fld dword
+	// [0x680030] = 0.0f, 6 bytes; the caller's A is at [esp+0x14] when the fld runs), replaced by a CALL + nop.
+	constexpr std::uint32_t clock_step_observe_site = 0x559525, clock_step_observe_resume = 0x55952b;
+	inline constexpr std::array<unsigned char, 6> clock_step_observe_original{0xd9,0x05,0x30,0x00,0x68,0x00};
+	inline constexpr guard clock_step_guards[]{
+		{0x559222,"0fb784c56e02000084e4792125ff7f000089442410db442410c7442414cdcccc3cd80d18056800d95c2410eb190fb7c8894c2410db442410d80d18056800d9542410d95c24148b5708","AR7: step-word read, flag test, flagged and unflagged step paths"},
+		{0x559282,"d9442414d85c241cdfe0f6c441","AR7: A = max(A, s14) over the participants"},
+		{0x559525,"d90530006800d9442414dae9dfe0f6c4447b11e8d32000008b4c24148b10518bc8ff523c","AR7: A compared with 0.0 and set into the clock (vt+0x3c)"},
+	};
+	inline const guard* clock_step_mismatch(const std::uint8_t* image) {
+		for (const auto& g : clock_step_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
 		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;

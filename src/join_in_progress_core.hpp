@@ -796,6 +796,24 @@ namespace join_in_progress_core
 	{
 		return frame < pause_guard_frames ? (mask & ~pause_code_bit) : mask;
 	}
+
+	// AR7 (fable-ar7): the clock step a participant's head record contributes to a lockstep frame (0x559222..0x559268; the
+	// frame's step is the max over the participants, 0x559282, set into the clock at 0x559546). The record's step word is
+	// the producer's frame time in 0.1 ms units capped at 1.0 s (0x2710); bit 15 marks a placeholder record (produced while
+	// the input manager is in placeholder mode, +0xc68b != 0). The stock rule is OWNER-RELATIVE: the owner counts a flagged
+	// record as 0.025 s (0x3ccccccd), every other peer - which receives the word with bit 15 stripped - counts its full value.
+	// The symmetric rule counts the value everywhere, so the frame's step, and with it the game clock, is the same function
+	// of the same frame-keyed records on every peer. Offline nothing changes: a record is only flagged in placeholder mode.
+	constexpr std::uint16_t step_placeholder_bit = 0x8000u, step_word_cap = 0x2710u;
+	constexpr float step_placeholder_seconds = 0.025f; // 0x3ccccccd, the stock owner-side value of a flagged record
+	constexpr float step_unit_seconds = 1e-4f;         // 0x680518
+	inline float step_seconds(std::uint16_t word) { return float(word & 0x7fffu) * step_unit_seconds; }
+	inline float stock_clock_step(std::uint16_t word, bool own) { return own && (word & step_placeholder_bit) ? step_placeholder_seconds : step_seconds(word); }
+	inline float symmetric_clock_step(std::uint16_t word, bool) { return step_seconds(word); }
+	// What the wire carries for a record (0x5597f1 and the delta kinds: bit 15 stripped); the receiver stores it verbatim.
+	inline std::uint16_t wire_step_word(std::uint16_t word) { return word & 0x7fffu; }
+	constexpr unsigned step_observe_frames = 41; // `jip step:` lines for frames 0..40 of every epoch (JoinDiagnostics=1)
+	constexpr unsigned step_observe_lines = 2048;
 	// The apply's mask argument must be a lockstep ring record's code-mask field (synchronizer 0x79fbb0: four blocks of 0x3184,
 	// 300 slots of 0x28 at +0x268, record bytes at slot +4, frame u16 at record +0, code mask at record +4): the guard reads the
 	// frame at mask - 4 only for such a pointer; any other caller of vt+0x24 (offline play, menus) is left alone.
