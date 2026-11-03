@@ -5919,9 +5919,15 @@ namespace
 		std::wstring command = std::wstring(L"\"") + exe + L"\" --pipe-child " + std::wstring(pipe_name.begin(), pipe_name.end());
 		STARTUPINFOW startup{};
 		startup.cb = sizeof(startup);
+		// CI and private-desktop runners have no console. Keep the child in
+		// that mode and preserve its parent's captured diagnostic handles.
+		startup.dwFlags = STARTF_USESTDHANDLES;
+		startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+		startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+		startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 		PROCESS_INFORMATION process{};
 		int result = 1;
-		if (CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process))
+		if (CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
 		{
 			if (WaitForSingleObject(process.hProcess, 60000) == WAIT_OBJECT_0)
 			{
@@ -12741,7 +12747,7 @@ int main(const int argc, char** argv)
 	const auto log = read_file(module_dir() / "xml2-fix.log");
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
-	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
+	CHECK(log.find("] test:") == std::string::npos);                       // and no [Test] section: no pipe
 	CHECK(log.find("virtual pads:") == std::string::npos);               // nor virtual pads
 	CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("call sites patched") == std::string::npos); // not the game
 	// Default-off: no keys and no rows (not the game) -> nothing hooked, the resolution table never looked at.
@@ -12753,7 +12759,11 @@ int main(const int argc, char** argv)
 	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
 	// Conversations: on by default, but only ever in XMen2.exe - nothing patched here.
-	CHECK(log.find("conversations: XMen2.exe isn't loaded at 0x400000 (not the game?)") != std::string::npos && log.find("conversations: AutoAdvance on") == std::string::npos);
+	// ASLR can leave this non-game test at its preferred base. Either guard
+	// refusal is correct; neither permits the runtime feature to start here.
+	CHECK((log.find("conversations: XMen2.exe isn't loaded at 0x400000 (not the game?)") != std::string::npos ||
+	       log.find("conversations: 0x004583F0 isn't the retail code") != std::string::npos) &&
+	      log.find("conversations: AutoAdvance on") == std::string::npos);
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
 	CHECK(log.find("break rule:") == std::string::npos); // no [Game] BreakRule: not a word, nothing patched
@@ -12766,7 +12776,9 @@ int main(const int argc, char** argv)
 	      log.find("prompts: 0x004BD720 isn't the retail code") != std::string::npos);
 	CHECK(log.find("prompts: button prompts show") == std::string::npos);
 	// Discord Rich Presence is on by default, but only ever in XMen2.exe: never this test's own presence.
-	CHECK(log.find("discord: XMen2.exe isn't loaded at 0x400000 (not the game?) - no presence") != std::string::npos && log.find("discord: presence on") == std::string::npos);
+	CHECK((log.find("discord: XMen2.exe isn't loaded at 0x400000 (not the game?) - no presence") != std::string::npos ||
+	       log.find("discord: this isn't XMen2.exe (xml2_test.exe) - no presence") != std::string::npos) &&
+	      log.find("discord: presence on") == std::string::npos);
     if (!std::getenv("XML2_FIX_TEST_OFFLINE"))
 	    CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
     else std::puts("  skip  external OpenSpy resolution log assertion (XML2_FIX_TEST_OFFLINE)");

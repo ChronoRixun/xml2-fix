@@ -8,7 +8,7 @@ constexpr int body_font=6;
 constexpr float body_view_scale=10.0f/64.0f; // LC body: 12.5 on the 640 canvas
 constexpr unsigned stream_bytes=0x21634, queue_at=0x2142c, count_at=0x21630, font_at=0x2140c;
 constexpr unsigned queue_capacity=(count_at-queue_at)/sizeof(unsigned), colors_at=0x21410, colors_bytes=24;
-struct marks { void* stream=nullptr;unsigned count=0;std::array<unsigned,queue_capacity> tokens{}; };
+struct marks { void* stream=nullptr;void* renderer=nullptr;int viewport=0;unsigned count=0;std::array<unsigned,queue_capacity> tokens{}; };
 std::array<marks,16> streams{}; // renderer thread; keyed by stream AND full generation-bearing command id
 marks* marked(void* stream,bool create=false) {
     for(auto& m:streams) if(m.stream==stream) return &m;
@@ -41,6 +41,17 @@ void __fastcall reset(void* stream,void*) {
     forget(stream); // also covers native reset/destruction outside a draw pass
     native_reset(stream,nullptr);
 }
+// Native viewport initialization binds a texture ONCE to its render material.
+// Selecting another font in the command stream changes UV metrics, not that
+// material. Every split batch must bind the atlas matching its selected font.
+void atlas(const marks& selected,int font) {
+    auto* node=*reinterpret_cast<void**>(static_cast<char*>(selected.renderer)+0x858d4+selected.viewport*4);
+    if(!node) return;
+    auto* material=at<void*(__thiscall*)(void*)>((*static_cast<unsigned**>(node))[0xc/4])(node);
+    auto* fonts=at<getter>(0x597c20)();void* texture=nullptr;
+    auto* result=at<void**(__thiscall*)(void*,void**,int)>((*static_cast<unsigned**>(fonts))[0x1c/4])(fonts,&texture,font);
+    at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(material))[0x1c/4])(material,*result);
+}
 using render_fn=void(__thiscall*)(void*,void*,unsigned,void*);
 // A separate slow path keeps the large snapshot off every ordinary text-stream
 // callback's stack. Validate and partition completely BEFORE consuming tokens.
@@ -64,9 +75,9 @@ __declspec(noinline) void render_marked(void* stream,void* context,unsigned time
     std::memcpy(saved.data(),stream,stream_bytes);
     split_state state{stream};
     struct render_scope {
-        void* stream;int original_font;split_state* previous;
-        ~render_scope() { field<int>(stream,font_at)=original_font;splitting=previous; }
-    } scope{stream,original_font,splitting};
+        void* stream;int original_font;split_state* previous;const marks& selected;
+        ~render_scope() { field<int>(stream,font_at)=original_font;atlas(selected,original_font);splitting=previous; }
+    } scope{stream,original_font,splitting,selected};
     splitting=&state;
     for(int begin=0;begin<count;) {
         int end=begin+1;while(end<count && fonts[end]==fonts[begin]) ++end;
@@ -77,6 +88,7 @@ __declspec(noinline) void render_marked(void* stream,void* context,unsigned time
         // Use the actual traversal's context/time/viewport. Each disjoint group
         // uses native draw+cleanup once. Remaining global command references
         // keep shared strings alive until the final group is consumed.
+        atlas(selected,fonts[begin]);
         render(stream,context,time,viewport);
         begin=end;
     }
@@ -129,6 +141,7 @@ void __fastcall text(void* renderer,void*,int viewport,int x,int y,int w,int h,f
     if(before==0) forget(stream); // a fresh queue cannot inherit marks from an earlier stream generation
     auto* selected=marked(stream,true);
     if(!selected || selected->count==queue_capacity) { draw(renderer,viewport,x,y,w,h,scale,flags,color,value);return; }
+    selected->renderer=renderer;selected->viewport=viewport;
     const auto original=font;font=body_font;
     draw(renderer,viewport,x,y,w,h,body_scale(),flags,color,value);
     font=original;

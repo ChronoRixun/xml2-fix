@@ -77,6 +77,8 @@ struct broker_api {
     bool (*drop_in_editable)()=nullptr;
 };
 void keyboard(unsigned char* state);
+// LC editor uses DirectInput edges; suppress duplicate physical WM_CHAR.
+bool text_entry_active();
 bool requested();
 bool installed();
 // Diagnostics: how often the native session-end wrapper ran (one kick may clear twice; review E finding 6).

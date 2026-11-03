@@ -1,6 +1,7 @@
 // Owned retail PE mapped in reserved fixture memory. Never starts XMen2.exe.
 // Actual production installer, hooks, mailbox, ABI adapters and transaction.
 #include "online_menus.hpp"
+#include "online_text_entry_rules.hpp"
 #include "hold_overlay.hpp"
 #include "options_menu.hpp"
 #include "options_menu_rules.hpp"
@@ -33,6 +34,11 @@
 #include <intrin.h>
 
 namespace lc_fonts { extern bool body_ready; }
+namespace frame_rate {
+unsigned fixture_local=30,fixture_session=0;
+unsigned local_rate() {return fixture_local;}
+unsigned session_rate() {return fixture_session;}
+}
 
 namespace {
 using namespace online_menus_rules;
@@ -186,6 +192,10 @@ bool model_scene(std::string_view name) {
 }
 void* __fastcall item_stub(void*,void*,const char* name) {
     if(absent_items.count(name)) return nullptr;
+    if(mode=="r27-text" && (std::string_view(name).starts_with("text_inputkeys") || std::string_view(name)=="lc_text_cancel")) {
+        static std::map<std::string,std::array<unsigned char,0xb0>> keys;
+        auto& key=keys[name];if(!*reinterpret_cast<unsigned*>(key.data())) key=text_item;return key.data();
+    }
     if(mode.starts_with("r4-")) {
         if(std::string_view(name)=="lc_lobby_v1" && !lobby_marker) return nullptr;
         if(std::string_view(name)=="text_playername1") return missing_list ? nullptr : lobby_names.data();

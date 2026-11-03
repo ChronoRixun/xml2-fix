@@ -99,6 +99,7 @@ void run(const script_functions_rules::func_entry* entry) {
     put(table.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(nodes[0].data())));put(table.data(),0xc,3);
     selected=0;mask=0;reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b9900)(child.data(),nullptr);
     assert(rows.size()==2 && child[0x1968] && row_enabled[0] && row_enabled[1]);
+    assert(rows[0].starts_with("Synthetic open (Synthetic state)"));
     mask=0x10;reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b9800)(child.data(),nullptr);
     assert(admissions==1 && admitted==records[0].data());
     selected=2;reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5b9800)(child.data(),nullptr);assert(admissions==1);

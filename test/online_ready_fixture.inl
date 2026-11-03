@@ -60,16 +60,18 @@ void run() {
     methods[0x38/4]=unsigned(reinterpret_cast<std::uintptr_t>(&height));
     auto* font=methods.data();
     constexpr char value[]="Test player (Test hero): Not ready";
-    *reinterpret_cast<int*>(0xa0a000)=768;
+    for(int screen_height:{480,720,768,1080}) {
+    *reinterpret_cast<int*>(0xa0a000)=screen_height;
+    const float expected_scale=(10.f/64.f)*(float(screen_height)/384.f);
     for(bool available:{false,true}) {
         lc_fonts::body_ready=available;
         for(const auto site:{0x5d958bu,0x5d9644u}) {
             assert(invoke_width(target(site),&font,value,1.f,0)==123.25f);
-            assert(measured_font==(available?6:0) && measured_scale==(available?.3125f:1.f));
+            assert(measured_font==(available?6:0) && measured_scale==(available?expected_scale:1.f));
         }
         for(const auto site:{0x5d941du,0x5d9673u}) {
             assert(invoke_height(target(site),&font,value,1.f,0,true)==17.25f);
-            assert(measured_font==(available?6:0) && measured_scale==(available?.3125f:1.f));
+            assert(measured_font==(available?6:0) && measured_scale==(available?expected_scale:1.f));
         }
         *reinterpret_cast<unsigned*>(0x67f9ac)=unsigned(reinterpret_cast<std::uintptr_t>(&color));
         for(const auto site:{0x5d9742u,0x5d97d7u,0x5d9c40u,0x5d9d14u}) {
@@ -89,7 +91,7 @@ void run() {
             // byte-for-byte; drawing never sets ready/paused/member flags.
             for(const auto* label:{value,"Test player (Test hero): Ready","Test player (Spectating): Slow"}) {
                 text(renderer.data(),nullptr,2,11,22,333,444,1.f,18,rgba.data(),label);
-                assert(drawn_text==label && drawn_font==(available?6:1) && drawn_scale==(available?.3125f:1.f));
+                assert(drawn_text==label && drawn_font==(available?6:1) && drawn_scale==(available?expected_scale:1.f));
                 assert(renderer==before);
             }
             viewport_ok=false;
@@ -98,7 +100,8 @@ void run() {
             viewport_ok=true;
         }
     }
-    lc_fonts::body_ready=true;
+    }
+    *reinterpret_cast<int*>(0xa0a000)=768;lc_fonts::body_ready=true;
     std::cout<<"PASS ready roster: 4 measure sites, 4 panel sites, 2 text sites; native/LC arguments, Ready/Not ready/Spectating/Slow text, viewport fallback, font restoration\n";
 }
 
@@ -109,6 +112,7 @@ std::map<unsigned,command> queued;
 std::vector<std::tuple<std::string,int,float,int>> rendered;
 std::map<unsigned,unsigned> freed_tokens;
 unsigned next_token=0x01000000,passes=0;
+int atlas_font=1;
 constexpr unsigned queue_at=0x2142c,count_at=0x21630,font_at=0x2140c;
 template<class T> T& f(void* p,unsigned offset) { return *reinterpret_cast<T*>(static_cast<char*>(p)+offset); }
 void __fastcall enqueue(void* renderer,void*,int index,int,int,int,int,float scale,int,const void*,const char* value) {
@@ -136,6 +140,7 @@ void __fastcall render_later(void* stream,void*,void* context,unsigned time,void
     assert(context==reinterpret_cast<void*>(0x11223344) && time==0x3f800000 && viewport_object==reinterpret_cast<void*>(0x55667788));
     ++passes;
     const auto font=f<int>(stream,font_at);
+    assert(atlas_font==font || font<0);
     if(font<0) return;
     auto& depth=f<unsigned>(stream,0x21424);
     for(int i=0;i<f<int>(stream,count_at);++i) {
@@ -149,11 +154,22 @@ void __fastcall render_later(void* stream,void*,void* context,unsigned time,void
     // native cleanup. The native tail is replaced by our token ledger only.
     reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5ef1a0)(stream,nullptr);
 }
+std::array<unsigned,8> material_vt{},node_vt{},font_vt{};
+unsigned* material_object=material_vt.data();unsigned* node_object=node_vt.data();unsigned* font_object=font_vt.data();
+void* __fastcall material_get(void*,void*) { return &material_object; }
+void* __cdecl font_get() { return &font_object; }
+void** __fastcall texture_get(void*,void*,void** out,int index) { *out=reinterpret_cast<void*>(index+1);return out; }
+void __fastcall texture_set(void*,void*,void* texture) { atlas_font=int(reinterpret_cast<std::uintptr_t>(texture))-1; }
 void deferred() {
     lc_fonts::body_ready=true;viewport_ok=true;
     redirect(0x5f0fd0,&viewport);redirect(0x5f11b0,&enqueue);
     redirect(0x5ef2e0,&render_later);redirect(0x5ef1aa,&cleanup_tail);
     std::vector<unsigned char> renderer(0x90000,0);
+    material_vt[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&texture_set));
+    node_vt[0xc/4]=unsigned(reinterpret_cast<std::uintptr_t>(&material_get));
+    font_vt[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&texture_get));
+    redirect(0x597c20,&font_get);
+    *reinterpret_cast<void**>(renderer.data()+0x858d4+2*4)=&node_object;
     auto* stream=renderer.data()+2*0x21634;f<int>(stream,font_at)=1;f<unsigned>(stream,0x21404)=123;
     using text_fn=void(__fastcall*)(void*,void*,int,int,int,int,int,float,int,const void*,const char*);
     using render_fn=void(__fastcall*)(void*,void*,void*,unsigned,void*);
@@ -177,7 +193,7 @@ void deferred() {
     assert(rendered[0]==std::make_tuple(std::string("PUSH"),1,1.f,5));
     assert(rendered[1]==std::make_tuple(std::string("Peer: Not ready"),6,.3125f,5) && rendered[2]==rendered[1]);
     assert(rendered[3]==std::make_tuple(std::string("POP"),1,1.f,0));
-    assert(f<int>(stream,font_at)==1 && f<int>(stream,count_at)==0 && f<unsigned>(stream,0x21408)==123 && f<unsigned>(stream,0x21424)==0);
+    assert(atlas_font==1 && f<int>(stream,font_at)==1 && f<int>(stream,count_at)==0 && f<unsigned>(stream,0x21408)==123 && f<unsigned>(stream,0x21424)==0);
     // The next native command retains its font, with no stale marks or replay.
     enqueue(renderer.data(),nullptr,2,0,0,0,0,1,0,nullptr,"Native after roster");flush();
     assert(std::get<1>(rendered.back())==1 && queued.empty() && passes==4);

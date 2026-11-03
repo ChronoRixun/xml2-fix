@@ -1,3 +1,4 @@
+#include "online_menus.hpp"
 #include "display.hpp"
 #include "no_activate.hpp"
 #include "pool_counters.hpp"
@@ -902,6 +903,7 @@ namespace display
 			{
 				return engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, l) : DefWindowProcA(handle, what, w, l);
 			};
+			if (message == WM_CHAR && online_menus::text_entry_active()) return 0;
 			if (test_pointer_enabled && test_pointer_message && message == test_pointer_message)
 			{
 				const UINT what = static_cast<UINT>(wparam);

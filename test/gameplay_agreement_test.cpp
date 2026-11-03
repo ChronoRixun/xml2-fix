@@ -753,7 +753,9 @@ void games_list_notice(){
        "both empty-row lookups call the notice thunk and the update slot is wrapped");
  // Before any refusal (and after the loop's refusal expired or cleared) the list is native.
  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
- auto local=runtime_peer(true);input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
+ auto local=runtime_peer(true);
+
+input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
  context.fill(0);put(4,0x12345678);sender[0x19]=1;event e{0x18,input.data(),std::uint16_t(request_size+local.bytes().size()),0,context.data(),sender.data()};
  forwarded=0;check(receiver(&e)==73 && forwarded==1,"a compatible host's 0x18 is filed natively");
  check(games_list_row(5)=="No Games Found" && games_list_row(0)=="Searching for games","with no refusal current the retail refresh adds its native rows (the thunk forwards the string lookup)");
@@ -877,6 +879,16 @@ void runtime(){
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73 && iat_hook::calls==1,"verified final record opens actual socket gate");
  check(begin(context.data(),sender.data(),123)==73,"verified pending join forwards native continuation with original ABI");
  auto local=runtime_peer(true);
+ { // Started guests inherited the query callback; only host authority advertises.
+  input.fill(0);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);
+  const std::uint16_t length=request_size;std::memcpy(header.data()+8,&length,2);header[0x10]=0x18;
+  entry=request_send;ret(entry+5);
+  for(bool active:{false,true}) for(bool host:{false,true}) {
+   context[0x420]=active;context[0x421]=host;send_count=0;invoke_direct();
+   check(send_count==(host ? 1 : 0),host ? "host alone advertises in lobby and started discovery" : "guest cannot advertise a duplicate session in lobby or play");
+  }
+  context[0x420]=0;context[0x421]=1; // host authority for the sender ABI matrix below
+ }
  for(const auto [site,opcode,base,mode]:std::array<std::array<std::uint32_t,4>,5>{{{request_send,0x18,request_size,0},{reply_broadcast,0x1f,reply_size,2},{reply_send,0x1f,reply_size,1},{info_send,0x1a,info_size,1},{ack_send,0x1b,ack_size,1}}}){
   input.fill(0x5a);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);const auto length=std::uint16_t(base);std::memcpy(header.data()+8,&length,2);header[0x10]=std::uint8_t(opcode);header[0x11]=1;entry=site;ret(site+5);send_count=0;
   if(mode==0)invoke_direct();else if(mode==1)invoke_single();else invoke_broadcast();
@@ -889,6 +901,7 @@ void runtime(){
  online_tick::link_fixture=true;
  for(unsigned host_rate : {30u,60u}) {
   frame_rate::clear_session_rate();frame_rate::host_setting=host_rate;
+  context[0x421]=1;
   for(const auto [site,opcode,base,mode]:std::array<std::array<std::uint32_t,4>,5>{{{request_send,0x18,request_size,0},{reply_broadcast,0x1f,reply_size,2},{reply_send,0x1f,reply_size,1},{info_send,0x1a,info_size,1},{ack_send,0x1b,ack_size,1}}}) {
    input.fill(0x5a);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);const auto length=std::uint16_t(base);std::memcpy(header.data()+8,&length,2);header[0x10]=std::uint8_t(opcode);header[0x11]=1;entry=site;ret(site+5);send_count=0;
    if(mode==0)invoke_direct();else if(mode==1)invoke_single();else invoke_broadcast();

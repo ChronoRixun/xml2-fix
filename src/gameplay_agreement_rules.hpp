@@ -44,7 +44,7 @@ namespace gameplay_agreement_rules
  constexpr std::uint32_t native_peer_disconnect=0x6106f0;
  constexpr std::uint32_t rejection_registration=0x609e3e;
  constexpr std::uint32_t join_resume=native_join+5;
- inline constexpr std::array<limits_rules::guard,21> transport_guards{{
+ inline constexpr std::array<limits_rules::guard,22> transport_guards{{
   {request_send,"e81e5c0000","request send"},
   {reply_broadcast,"e8f48d0000","reply broadcast"},
   {reply_send,"e836890000","reply send"},
@@ -66,6 +66,7 @@ namespace gameplay_agreement_rules
   {0x608c46,"8db1b4050000", "discovery pool base"},
   {0x615760,"568b742408578bf9b911000000f3a55f5ec20400", "discovery 0x44-byte row copy"},
   {0x612be0,"64a1000000008a0db834a500", "discovery version getter"},
+  {0x610d10,"8a8121040000c3", "session host authority byte"},
  }};
  inline constexpr std::array<limits_rules::guard,10> failure_guards{{
   {native_peer_disconnect,"8a442404884119c20400","native refused peer connected flag"},

@@ -1,13 +1,31 @@
-// PC retail retains the 40 keyboard widgets but only implements WM_CHAR.
+// LC uses menu context 1 (normal pad bindings) plus scoped DI characters.
 // Pad/mouse feed that same lane: native tags, charset, limits and results win.
 namespace text_entry_ui {
 constexpr int first=100,last=140;
-struct state { void* owner=nullptr;int page=0,pending=-1,tag=4; } edit;
+struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0; } edit;
+online_text_entry_rules::inbox input;
+void reset_input() { input.clear();edit.pending=-1;edit.held=0; }
 bool live(void* menu) {
     __try {
         return ready && menu && *static_cast<unsigned*>(menu)==0x69f06c &&
             !std::strcmp(static_cast<const char*>(menu)+0xc,"lc_text_entry");
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool keyboard(void* menu,unsigned char* state,const std::array<bool,256>& edges) {
+    if(!live(menu)) return false;
+    if(edit.owner!=menu) return true;
+    if(keyboard_note) for(unsigned scan=0;scan<256;++scan) if(edges[scan]) { keyboard_note();break; }
+    const bool control=(state[0x1d]|state[0x9d]|state[0x38]|state[0xb8])&0x80;
+    const bool shift=(state[0x2a]|state[0x36])&0x80;
+    const bool caps=(GetKeyState(VK_CAPITAL)&1)!=0;
+    for(unsigned scan=0;scan<256;++scan) if(const int value=online_text_entry_rules::key(scan,shift,caps)) {
+        if(!control && edges[scan]) {
+            if(value==27) { input.clear();edit.pending=40; }
+            else input.push_back(value);
+        }
+        state[scan]=0;
+    }
+    return true;
 }
 const char* characters() {
     if(edit.tag==3) return "1234567890.";
@@ -53,6 +71,26 @@ void bind(void* menu) {
         enable(menu,key,enabled);hide(menu,key,!enabled);
     }
 }
+void focus(void* menu,int key) {
+    char name[32]{};
+    if(key==40) std::snprintf(name,sizeof(name),"lc_text_cancel");
+    else std::snprintf(name,sizeof(name),"text_inputkeys%02d",key+1);
+    lobby_focus(menu,name);edit.focus=key;
+}
+void navigate(void* menu,int direction) {
+    focus(menu,online_text_entry_rules::move(edit.focus,direction,int(std::strlen(characters())),edit.tag==3));
+}
+void sync_focus(void* menu) {
+    __try {
+        auto* selected=*reinterpret_cast<void**>(static_cast<char*>(menu)+0x324);
+        for(int i=0;i<=40;++i) {
+            char name[32]{};
+            if(i==40) std::snprintf(name,sizeof(name),"lc_text_cancel");
+            else std::snprintf(name,sizeof(name),"text_inputkeys%02d",i+1);
+            if(selected && selected==item(menu,name)) { edit.focus=i;break; }
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+}
 bool native_tick(void* menu) {
     __try { at<tick_fn>(0x5e72f0)(menu);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -68,8 +106,24 @@ bool inject(unsigned char character) {
 }
 void __fastcall tick(void* menu,void*) {
     if(!live(menu)) { at<tick_fn>(0x5e72f0)(menu);return; }
+    if(!input_thread("text entry",false)) return;
+    bool native_called=false;
     try {
-        if(edit.owner!=menu) edit={menu,0,-1,request_tag()};
+        if(edit.owner!=menu) { edit={menu,0,-1,request_tag()};input.clear(); }
+        sync_focus(menu);
+        const auto raw=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());
+        const auto edge=raw&~edit.held;edit.held=raw;
+        const int pad_action=online_text_entry_rules::pad(edge);
+        if(pad_action==27) { input.clear();edit.pending=40; }
+        else if(pad_action && (pad_action!=online_text_entry_rules::accept || edit.pending<0)) input.push_back(pad_action);
+        // A native/test WM_CHAR Enter also means press the focused key.
+        if(*at<unsigned char*>(0xa0a061)==13) { *at<unsigned char*>(0xa0a061)=0;input.push_back(online_text_entry_rules::accept); }
+        if(edit.pending<0 && !input.empty()) {
+            const int value=input.front();input.pop_front();
+            if(value==online_text_entry_rules::accept) edit.pending=edit.focus;
+            else if(value>=online_text_entry_rules::left) navigate(menu,value);
+            else if(!inject(static_cast<unsigned char>(value))) input.push_front(value);
+        }
         if(edit.pending>=0) {
             const int action=edit.pending;
             if(request_tag()!=edit.tag || current()!=menu) edit.pending=-1;
@@ -85,60 +139,37 @@ void __fastcall tick(void* menu,void*) {
             }
         }
         bind(menu);
-        if(!native_tick(menu)) edit={};
-    } catch(...) { edit={};native_tick(menu); }
+        if(!online_text_entry_rules::enabled(edit.focus,int(std::strlen(characters())),edit.tag==3)) focus(menu,0);
+        text_entry_ticking=true;
+        native_called=true;const bool ok=native_tick(menu);text_entry_ticking=false;
+        if(!ok) {edit={};input.clear();}
+        else if(current()==menu) {
+            const bool pad=pad_probe && pad_probe(menu_player);
+            const char* prompts[]{pad ? "B Cancel" : "Esc Cancel","Backspace Delete",pad ? "D-pad Move" : "Arrows Move","",pad ? "A Select" : "Enter Select"};
+            for(unsigned i=0;i<5;++i) {
+                const auto key="desctext"+std::to_string(i+1);bindings.text.erase(key);
+                bind_text(menu,key.c_str(),prompts[i]);
+            }
+        }
+    } catch(...) { text_entry_ticking=false;edit={};input.clear();if(!native_called) native_tick(menu); }
 }
 void __fastcall activate(void* menu,void*,int argument) {
-    edit={};bindings.clear();
+    input_thread("text entry activation",false);
+    edit={};input.clear();bindings.clear();
     at<void(__thiscall*)(void*,int)>(0x5e6ec0)(menu,argument);
     if(live(menu)) {
-        try { edit={menu,0,-1,request_tag()};bind(menu); }
+        try { edit={menu,0,-1,request_tag()};bind(menu);
+            edit.held=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());focus(menu,0); }
         catch(...) { edit={}; } // native keyboard/result service remains available
     }
 }
 void __fastcall deactivate(void* menu,void*) {
-    if(edit.owner==menu) edit={};
+    if(edit.owner==menu) { edit={};input.clear(); }
     at<tick_fn>(0x5af410)(menu);
 }
-// The PC input-context selectors recognize text entry by name rather than by
-// native class. Preserve their context 2 for both definitions (keyboard chars
-// otherwise become ordinary menu bindings). Every other context stays native.
-bool __cdecl editor_name(const char* name) {
-    return name && (!std::strcmp(name,"text_entry") || !std::strcmp(name,"lc_text_entry"));
-}
-const unsigned context_one_yes=0x61c36c,context_one_no=0x61c379;
-const unsigned context_two_yes=0x61c43b,context_two_no=0x61c43f;
-__declspec(naked) void context_one() {
-    __asm { pushad
-        push eax
-        call editor_name
-        add esp,4
-        test al,al
-        jz other
-        popad
-        jmp dword ptr [context_one_yes]
-    other:
-        popad
-        jmp dword ptr [context_one_no] }
-}
-__declspec(naked) void context_two() {
-    __asm { pushad
-        push eax
-        call editor_name
-        add esp,4
-        test al,al
-        jz other
-        popad
-        jmp dword ptr [context_two_yes]
-    other:
-        popad
-        jmp dword ptr [context_two_no] }
-}
+// Keep the native name selectors intact: text_entry remains context 2;
+// lc_text_entry is an ordinary menu (context 1), with the normal pad map.
 void contribute(patch_transaction::contribution& c) {
-    c.writes.push_back(patch_transaction::relocation(0x61c35a,"e9",true,
-        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&context_one)),13,"text entry input context by both names"));
-    c.writes.push_back(patch_transaction::relocation(0x61c429,"e9",true,
-        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&context_two)),13,"text entry refreshed input context by both names"));
     c.writes.push_back(patch_transaction::relocation(0x69f07c,"",false,
         static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&activate)),0,"online text keyboard activation"));
     c.writes.push_back(patch_transaction::relocation(0x69f080,"",false,

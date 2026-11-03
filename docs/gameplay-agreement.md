@@ -372,3 +372,16 @@ Their room dispatch runs before generic GNS parsing. The roster maximum and
 truncated/extra trailers are covered by `online_room_test`; `online_party_test`
 checks the maximal wire-2 reports/tables. The local menu replacements introduce
 no additional network message.
+
+
+### LAN discovery authority
+
+The `0x607cd0` reply builder copies the current session's game info and sends
+opcode `0x18` at `0x607d9d`. A started guest can retain that query path. The
+agreement send adapter now checks native host authority (session `+0x421`, the
+byte returned by `0x610d10`) before advertising; a guest sends no discovery
+reply. Only the host should supply a joinable endpoint. The receive-side
+IPv4/port refresh remains: it prevents repeated host replies from duplicating a
+row while retaining separate hosts on one PC or distinct addresses. Names are
+not session identities and are never used to merge rows. This adds no wire
+field, gameplay rule, or simulation change.

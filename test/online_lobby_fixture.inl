@@ -84,6 +84,7 @@ unsigned* dialog_object=dialog_vt.data();
 void* __cdecl dialog_getter() { return &dialog_object; }
 void __fastcall show_dialog(void*,void*,const char*,float,int) { calls.push_back("native-admission-error"); }
 bool lobby_fields_stub(online_menus::lobby_fixture& out) {
+    if(mode=="r4-lan-join") return false;
     if(fixture_throw) throw std::bad_alloc();
     std::strcpy(out.code,fixture_bad_code ? "BAD" : "ABCD-EFGH");out.count=3;
     out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};
@@ -888,6 +889,25 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     auto post=[&](intent action) {
         int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(reinterpret_cast<void*>(1));
     };
+    if(mode=="r4-lan-join") {
+        frame_rate::fixture_session=30;
+        auto* session=reinterpret_cast<unsigned char*>(0xa53058);
+        std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");
+        session[0x3dd]=4;session[0x3df]=1;session[0x3e0]=1;
+        activate(child.data(),nullptr,0);tick(child.data(),nullptr);
+        assert(texts["lc_room_name"]=="Synthetic host room" && texts["lc_room_visibility"]=="LAN");
+        assert(visibility["lc_code_label"] && visibility["lc_room_code"] && visibility["lc_copy_code"]);
+        assert(visibility["lc_p4_empty_help"] && !visibility["lc_p4_empty_title"]);
+        assert(texts["lc_p1_hero_fallback"]=="30 online" && visibility["lc_p1_measuring"]);
+        assert(texts["lc_p2_hero_fallback"]=="30 local / 30 online");
+        assert(texts["desctext3"].empty());
+        // A later code-bearing view restores controls and the sharing hint.
+        mode="r4-join";tick(child.data(),nullptr);
+        assert(!visibility["lc_code_label"] && !visibility["lc_room_code"] && !visibility["lc_copy_code"]);
+        assert(!visibility["lc_p4_empty_help"] && enabled_items["lc_copy_code"]);
+        std::cout<<"PASS LAN lobby: native title, no code or sharing hint, actual session rate, code controls restored\n";
+        return;
+    }
     if(mode.starts_with("r4-native-slots")) { native_slot_tests(host);return; }
     if(mode=="r4-retail-list" || mode=="r4-back-combos" || mode=="r4-unknown-kick" || mode=="r4-dismiss-invalid") {
         retail_list_review_tests(registration);return;
@@ -967,7 +987,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         assert(leave_label_native_writes>=1 && texts["text_leaveroom"].empty());
         // 060r live (failure 6): the guest header read "Room details pending" for the whole visit (no broker name to bind). The room is
         // the host's game: its name comes from the host's native row (the browser's default naming); the campaign line is authored text.
-        if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Online game"); // Other ways has no broker room.
+        if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Logan?n?'s game"); // native host row without a broker room.
         auto* session=reinterpret_cast<unsigned char*>(0xa53058);
         std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");session[0x3dd]=4;session[0x3df]=2;session[0x3e0]=1;
         put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400);session[0x3e1]=0;

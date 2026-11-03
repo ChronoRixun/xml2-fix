@@ -2028,7 +2028,12 @@ uses native `0x5ef2e0` with the actual traversal arguments and native cleanup,
 consuming each token once. The `0x5ef1a0` reset adapter carries color scopes
 between groups before cleanup resets their depth, and retires bookkeeping on
 normal reset/destruction. Unmarked streams retain one native render call. The
-large stream snapshot is allocated only in the marked slow path. Host fixtures
+large stream snapshot is allocated only in the marked slow path. Each group also
+binds its matching font atlas to the viewport material, using the borrowed
+texture getter and material setter used by `0x5f1049..0x5f105c`. The viewport
+initializer only binds its original atlas once: changing deferred font metrics
+alone samples the wrong texture and produces sliced glyphs. The original atlas
+is restored after the split. Host fixtures
 cover the installed adapters and deferred batches; actual graphics traversal,
 clipping and final appearance still need live acceptance on host and guest.
 
@@ -2049,9 +2054,20 @@ Backspace, Space and Done, plus a clickable Escape/Cancel button. Constant
 intents 100..140 are consumed only by the
 live LC editor and enter the original character lane (`0xa0a061`). Native
 `0x5e72f0` still validates the request tag's charset and byte limit and handles
-Enter/Back/Escape; `0x5e6f30` owns acceptance. Two native input-context name
-comparisons recognize both editor names. Closing/deactivating retires pending
-input, and physical typing takes precedence over a queued on-screen character.
+Enter/Back/Escape; `0x5e6f30` owns acceptance. The native input-context name
+comparisons stay unchanged: the stock editor uses text-only context 2, while the
+LC editor uses normal menu context 1 so pad bindings are available. Closing/deactivating retires pending
+input. The LC editor consumes DirectInput character/control edges itself,
+including the input pipe's keyboard path; physical WM_CHAR is suppressed only
+while this editor owns input, preventing duplicate characters. The explicit
+`chars` test lane still enters the native character buffer. ASCII letters,
+digits, punctuation, Space and Backspace feed native validation. Keyboard arrows
+and menu D-pad bits move focus across enabled keys in the generated 9-column
+layout; Enter/A presses that key, including Done. Escape/B cancel. The native
+menu mask is suppressed only during the wrapped editor tick, so its old
+Enter/Start terminal shortcut cannot also close the grid. Mouse commands retain
+the same 100..140 lane. Owner activation/deactivation and input loss retire queued
+input; page changes repair focus if a cell becomes unavailable.
 The native tag 3 IP editor exposes digits and period only. Hub and Game Options
 names retain their 31-byte limit; the Other ways name and IP requests retain
 their native 15-byte limit. Unscoped requests for this legacy editor also select the plain failure page.
@@ -2158,3 +2174,19 @@ The second header describes the native composite column as CAMPAIGN / PLAYERS.
 The details textbox retains its native metrics. Both repositories must be
 integrated and content regenerated together; older companions lacking the
 list-font capability are refused by builder preflight.
+
+
+### LAN lobby facts
+
+A native LAN/direct-IP lobby without a room hides ROOM CODE and Copy (including
+the footer), labels its visibility LAN, and hides the empty-card room-sharing
+hint. The existing empty-card title remains Waiting for a player. The native
+accepted game-info name takes precedence over the host participant's name when
+no broker title is known. The local card can show its local/session rate pair;
+remote cards show the known session rate alone when no party report supplies
+their local setting. Such cards do not claim a ping measurement is in progress.
+Code-room cards keep the existing broker facts and controls.
+
+The native LAN row formatter separates game name and difficulty with a space.
+The companion LC builder uses amber focus art for this list, matching its navy
+selected-text style.

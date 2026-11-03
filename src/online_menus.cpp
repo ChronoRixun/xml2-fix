@@ -3,6 +3,8 @@
 #include "hold_overlay.hpp"
 #include "online_menus_anchors.hpp"
 #include "lc_fonts.hpp"
+#include "frame_rate.hpp"
+#include "online_text_entry_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
@@ -1029,6 +1031,9 @@ void enable(void* menu,const char* item,bool enabled) {
     if(enable_native(menu,item,enabled,true)) bindings.enabled.insert_or_assign(item,enabled);
 }
 namespace broker = online_browser_core;
+bool text_entry_ticking=false;
+bool lobby_focus(void* menu,const char* target);
+void* item(void* menu,const char* name);
 bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
@@ -1456,6 +1461,7 @@ unsigned lobby_screen_mask(void* menu,unsigned raw) {
     return (lobby_state.role_keyboard || lobby_state.role_key_pending) ? (mapped & ~mask_next) | mask_other : mapped;
 }
 unsigned __fastcall lobby_input(void* mgr,void*) {
+    if(text_entry_ticking) return 0;
     unsigned mask=0;lobby_mask(mgr,mask);
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
@@ -1786,7 +1792,9 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const bool named=broker_live() && broker_view().state==broker::phase::room && !broker_view().room_name.empty();
         if(!named) {
             std::string title="Online game";
-            if(broker_live() && broker_view().state==broker::phase::room && valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            if(valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            native_host_settings settings;
+            if(native_host_read(settings) && settings.name[0]) title=display(settings.name,32);
             bind_text(menu,"lc_room_name",title.c_str());
         }
         // The host knows its own campaign: say what the native Game Options chose. The guest's line is authored text (the host's choice).
@@ -1815,6 +1823,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     }
     std::string shown=code_value ? code_value->substr(0,4)+"-"+code_value->substr(4) : "---- ----";
     const bool room_card_facts=broker_live() && broker_view().state==broker::phase::room; // a room whose members' build facts can arrive
+    const bool lan_lobby=!room_card_facts && !code_value;
     const bool host=which(menu)==screen::lobby_host;
     lobby_native_state native{};const bool native_valid=lobby_state_read(menu,native);
     // Extra Copy never manufactures an Accept or invokes a native action.
@@ -1834,6 +1843,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     if(lobby_state.copied && now_ms()-lobby_state.copied_at>=lobby_copied_ms) lobby_state.copied=false;
     bind_text(menu,"lc_room_code",shown.c_str());
     enable(menu,"lc_copy_code",bool(code_value));
+    for(const auto* key:{"lc_code_label","lc_room_code","lc_copy_code"}) hide(menu,key,!code_value);
+    if(lan_lobby) bind_text(menu,"lc_room_visibility","LAN");
     for(unsigned i=0;i<4;++i) {
         const auto prefix="lc_p"+std::to_string(i+1)+"_";
         const bool member=valid && i<view.count;
@@ -1842,7 +1853,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const auto* waiting_member=fixture && pending_slot<extra.pending_count ? &extra.pending[pending_slot] : nullptr;
         const bool card_shown=member || waiting_member;
         hide(menu,(prefix+"card").c_str(),!card_shown);
-        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),card_shown);
+        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"})
+            hide(menu,(prefix+field).c_str(),card_shown || (!code_value && !std::strcmp(field,"empty_help")));
         for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!card_shown);
         hide(menu,(prefix+"pending").c_str(),!waiting_member);
         if(waiting_member) {
@@ -1892,13 +1904,15 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const bool rate_known=data && data->local_fps!=linked_frame_rate_core::unknown_rate && data->session_fps;
         const auto rate=rate_known ? (data->rate_capacity==linked_frame_rate_core::capacity::slow ?
             linked_frame_rate_core::warning_text(data->local_fps,data->session_fps,data->rate_capacity) :
-            linked_frame_rate_core::rate_text(data->local_fps,data->session_fps)) : "Hero assigned at start";
+            linked_frame_rate_core::rate_text(data->local_fps,data->session_fps)) : lan_lobby && frame_rate::session_rate() ?
+            (self_row ? linked_frame_rate_core::rate_text(frame_rate::local_rate(),frame_rate::session_rate()) :
+             std::to_string(frame_rate::session_rate())+" online") : "Hero assigned at start";
         bind_text(menu,(prefix+"hero_fallback").c_str(),rate.c_str());
         const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && !self_row;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);
         hide(menu,(prefix+"ms").c_str(),!measured);
-        hide(menu,(prefix+"measuring").c_str(),measured || self_row);
+        hide(menu,(prefix+"measuring").c_str(),measured || self_row || lan_lobby);
         hide(menu,(prefix+"to_host").c_str(),!(measured && data->ping_to_host));
         bind_text(menu,(prefix+"route").c_str(),measured ? route_text(data->route) : "");
         // Build: round-7 stage when supplied (0 checking, 1 other, 2 same, 3 agreed), else round 4's same_build.
@@ -1998,7 +2012,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     lobby_focus_enabled(menu);
     {   // Native focus/description refreshes write behind the bind cache. Restore every owned footer slot after the native tick.
         const char* const prompts[]{host ? "$MENU_BACK Leave" : "",host ? "$MENU_OTHER Kick player" : "$MENU_OTHER Ready / Unready",
-            lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code","","$MENU_ACCEPT Select"};
+            code_value ? (lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code") : "","","$MENU_ACCEPT Select"};
         for(unsigned i=0;i<5;++i) {
             const auto key="desctext"+std::to_string(i+1);
             bindings.text.erase(key);
@@ -3347,6 +3361,8 @@ std::uint32_t __fastcall join_text_close(void* menu,void*) {
 }
 }
 
+bool text_entry_active() { return ready && text_entry_ui::live(current_peek()); }
+
 void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;
     // Diagnostics must also work before the first custom-menu tick. This
@@ -3357,7 +3373,7 @@ void keyboard(unsigned char* state) {
     escape_down=down;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
-    if(!state) { keyboard_edges.reset();keyboard_input.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
+    if(!state) { text_entry_ui::reset_input();keyboard_edges.reset();keyboard_input.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
     if(pause_accept_held) {
         if(!((state[0x1c]|state[0x9c])&0x80)) pause_accept_held=false;
@@ -3385,6 +3401,7 @@ void keyboard(unsigned char* state) {
             }
         }
     }
+    if(text_entry_ui::keyboard(menu,state,edges)) return;
     const auto s=which(menu);
     if(s==screen::main && native_guest_end_pending) native_guest_return();
     // mainmenuexit 1 completes asynchronously. Show the pending panel as soon
@@ -3463,6 +3480,9 @@ bool pad_prompt_scope() {
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";
+    static const char lan_row_format[]="%s (%s)\t%s [%d/%d]";
+    c.writes.push_back(patch_transaction::relocation(0x5b9b1c,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(lan_row_format)),0,"LAN game name and difficulty spacing"));
     ready_roster::contribute(c);
     text_entry_ui::contribute(c);
     c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,

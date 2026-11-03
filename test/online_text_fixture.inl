@@ -66,7 +66,7 @@ void run(const script_functions_rules::func_entry* entry) {
         int_value[1]=unsigned(100+key);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(entry->handler))(nullptr);
     };
     const auto begin=[&](int tag,int limit,const char* seed="") {
-        editor.fill(0);put(editor.data(),0,0x69f06c);std::strcpy(reinterpret_cast<char*>(editor.data()+0xc),"lc_text_entry");
+        editor.fill(0);editor[4]=1;put(editor.data(),0,0x69f06c);std::strcpy(reinterpret_cast<char*>(editor.data()+0xc),"lc_text_entry");
         put(editor.data(),0x1d10,limit);std::strcpy(reinterpret_cast<char*>(editor.data()+0x1c10),seed);
         std::strcpy(reinterpret_cast<char*>(editor.data()+0x1d14),seed);
         std::strcpy(reinterpret_cast<char*>(0xa3e168+0x200),seed);
@@ -76,6 +76,63 @@ void run(const script_functions_rules::func_entry* entry) {
     const auto text=[&]() { return std::string(reinterpret_cast<char*>(editor.data()+0x1c10)); };
     const auto key=[&](int k) { command(k);tick(editor.data(),nullptr); };
     const auto typed=[&](unsigned char c) { *reinterpret_cast<unsigned char*>(0xa0a061)=c;tick(editor.data(),nullptr); };
+    online_text_entry_rules::inbox inbox;
+    for(int i=0;i<70;++i) inbox.push_back(i);assert(inbox.size()==64);
+    inbox.push_front(99);assert(inbox.front()==99 && inbox.size()==64);inbox.pop_front();
+    assert(inbox.front()==0);inbox.clear();assert(inbox.empty());
+    for(unsigned scan=2;scan<=11;++scan) assert(online_text_entry_rules::key(scan,false,false)=="1234567890"[scan-2]);
+    assert(online_text_entry_rules::key(0x1e,false,false)=='a' && online_text_entry_rules::key(0x1e,true,false)=='A' && online_text_entry_rules::key(0x1e,true,true)=='a');
+    assert(online_text_entry_rules::key(0x34,false,false)=='.' && online_text_entry_rules::key(0x0e,false,false)==8 && online_text_entry_rules::key(0x1c,false,false)==online_text_entry_rules::accept);
+    for(int count:{5,11,36}) {
+        std::array<bool,41> reached{};reached[0]=true;
+        for(int pass=0;pass<41;++pass) for(int i=0;i<41;++i) if(reached[i])
+            for(int d:{online_text_entry_rules::left,online_text_entry_rules::right,online_text_entry_rules::up,online_text_entry_rules::down}) {
+                const int target=online_text_entry_rules::move(i,d,count,count==11);assert(online_text_entry_rules::enabled(target,count,count==11));reached[target]=true;
+            }
+        for(int i=0;i<41;++i) if(online_text_entry_rules::enabled(i,count,count==11)) assert(reached[i]);
+    }
+    // Give every key its own actual item pointer, just as the native menu does.
+    redirect(0x5adf40,focus_stub);
+    // Mapping is exercised through production DirectInput delivery, not WM_CHAR.
+    const auto press=[&](unsigned scan) {
+        std::array<unsigned char,256> state{};online_menus::keyboard(state.data());
+        state[scan]=128;online_menus::keyboard(state.data());assert(state[scan]==0);
+        tick(editor.data(),nullptr);
+    };
+    begin(3,15);press(2);press(0x34);press(3);assert(text()=="1.2");press(0x0e);assert(text()=="1.");
+    press(0xcd);press(0x1c);assert(text()=="1.2"); // focus 1 -> 2, Enter types 2
+    mask=0x1000;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr); // D-pad Down
+    const auto pad_before=text();mask=0x10;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);
+    assert(text().size()==pad_before.size()+1); // A presses the focused key, never Done
+    press(1);assert(text().empty());
+    begin(0,31);press(0x1e);press(0x30);assert(text().size()==2 && std::tolower(text()[0])=='a' && std::tolower(text()[1])=='b');
+    mask=0x200000;tick(editor.data(),nullptr);mask=0;assert(text().empty());
+    const auto pad=[&](unsigned value) {mask=value;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);};
+    const auto action_mask=[](int action) {
+        const auto native_action=reinterpret_cast<int(__cdecl*)(int)>(0x619c40);
+        unsigned out=0;for(unsigned code=0;code<32;++code) {
+            assert(native_action(int(code))==pad_prompts_rules::actions[code]);
+            if(native_action(int(code))==action) out|=1u<<code;
+        }
+        return out;
+    };
+    // The console layout binds D-pad to native actions 12..15, stick to 0..3.
+    for(const auto actions:{std::array<int,4>{15,14,13,12},std::array<int,4>{3,2,1,0}}) {
+        begin(3,15);pad(action_mask(actions[0]));assert(focused=="text_inputkeys02");
+        pad(action_mask(actions[1]));assert(focused=="text_inputkeys01");
+        pad(action_mask(actions[2]));assert(focused=="text_inputkeys10");
+        pad(action_mask(actions[3]));assert(focused=="text_inputkeys01");
+    }
+    begin(0,31);command(0);mask=0x10;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);assert(text()=="a");
+    // Enter/A accept Done only while that actual item owns focus.
+    focus_stub(editor.data(),nullptr,"text_inputkeys40",true);const auto enter_done=closed;
+    press(0x1c);assert(closed==enter_done+1);
+    begin(0,31);key(0);focus_stub(editor.data(),nullptr,"text_inputkeys40",true);
+    const auto pad_done=closed;pad(0x10);assert(closed==pad_done+1);
+    // Queued DI input belongs to this activation, even at a reused menu address.
+    begin(0,31);std::array<unsigned char,256> queued_keys{};online_menus::keyboard(queued_keys.data());
+    queued_keys[0x1e]=128;online_menus::keyboard(queued_keys.data());deactivate(editor.data(),nullptr);
+    begin(0,31);tick(editor.data(),nullptr);assert(text().empty());
     begin(0,31);assert(texts["text_inputkeys01"]=="a");key(0);assert(text()=="a");
     key(38);assert(texts["text_inputkeys01"]=="A");key(0);assert(text()=="aA");
     key(38);assert(texts["text_inputkeys01"]=="<" && !enabled_items["text_inputkeys06"]);key(0);key(37);assert(text()=="aA< ");
@@ -102,10 +159,10 @@ void run(const script_functions_rules::func_entry* entry) {
     *reinterpret_cast<unsigned char*>(0xa53ee8)=0;put(reinterpret_cast<void*>(0xa6abfc),0,1);
     for(const auto* name:{"text_entry","lc_text_entry","lc_online","team"}) {
         std::strcpy(reinterpret_cast<char*>(editor.data()+0xc),name);set_current(editor.data());
-        const int expected=std::string_view(name)=="text_entry" || std::string_view(name)=="lc_text_entry" ? 2 : std::string_view(name)=="team" ? 3 : 1;
+        const int expected=std::string_view(name)=="text_entry" ? 2 : std::string_view(name)=="team" ? 3 : 1;
         context=-1;reinterpret_cast<void(__cdecl*)()>(0x61c300)();assert(context==expected);
         put(reinterpret_cast<void*>(0xa6adb4),0,5);context=-1;reinterpret_cast<void(__cdecl*)()>(0x61c3b0)();assert(context==expected);
     }
-    std::cout<<"PASS both native keyboard context selectors: retail/LC editors, Team and ordinary menu\n";
+    std::cout<<"PASS both native input context selectors: retail editor 2; LC editor 1 with pad bindings; Team and ordinary menu\n";
 }
 }

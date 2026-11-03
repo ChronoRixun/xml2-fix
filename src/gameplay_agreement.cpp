@@ -339,8 +339,17 @@ namespace gameplay_agreement
     const auto* data=body.data();std::memcpy(header.data(),&data,4);std::memcpy(header.data()+8,&size,2);return true;
    }
   };
+  // Query callbacks survive on guests after start. Never offer their ephemeral
+  // source port as another joinable endpoint for the host's session.
+  bool guest_advertisement(const std::uint8_t* header) {
+   if(!header || header[0x10]!=0x18)return false;
+   __try {
+    const auto* session=static_cast<const std::uint8_t*>(reinterpret_cast<void*(__cdecl*)()>(0x612be0)());
+    return !session || !session[0x421];
+   } __except(EXCEPTION_EXECUTE_HANDLER){return true;}
+  }
   int __fastcall send_direct(void* transport,void*,const void* address,int port,const std::uint8_t* header)
-  { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
+  { if(guest_advertisement(header)) { logger::write_once("online:guest-discovery","online: guest discovery reply suppressed; only the session host advertises");return 0;} packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
   void __fastcall send_single(void* session,void*,void* transport,const std::uint8_t* header,int flags)
   {
    packet p;if(!p.build(header)){show_install_failure();return;}reinterpret_cast<send>(native_send)(session,transport,p.header.data(),flags);

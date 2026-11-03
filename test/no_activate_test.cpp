@@ -203,6 +203,7 @@ namespace pool_counters { void sample() { ++sampled; } bool enabled() { return f
 namespace script_pools { void sample() {} }
 namespace e4_observe { void sample() {} bool enabled() { return false; } }
 namespace options_menu { void install(HMODULE) {} bool installed() { return false; } }
+namespace online_menus { bool fixture_editor=false;bool text_entry_active() { return fixture_editor; } }
 namespace logger
 {
     void write_once(std::string_view, const char*, ...) {}
@@ -292,6 +293,17 @@ int main()
     check(TlsSetValue(cbt_index, nullptr)); fail_hook = true; count = forwarded;
     check(create_window(0, game_class, "fake", WS_VISIBLE, 0, 0, 1, 1, nullptr, nullptr, nullptr, nullptr) == nullptr && forwarded == count);
     check(!ours(nullptr));
+    // LC's DI editor owns physical text delivery; the explicit test lane stays
+    // available, and other native screens retain their original WM_CHAR path.
+    const auto saved_engine=display::engine_window_procedure;
+    display::engine_window_procedure=&fake_engine;count=forwarded;
+    check(display::filtered_window_procedure(fake,WM_CHAR,'a',1)==19 && forwarded==count+1);
+    online_menus::fixture_editor=true;
+    check(display::filtered_window_procedure(fake,WM_CHAR,'a',1)==0 && forwarded==count+1);
+    display::test_pointer_enabled=true;display::test_char_message=WM_APP+123;
+    check(display::filtered_window_procedure(fake,WM_APP+123,'a',1)==1 && forwarded==count+2);
+    display::test_pointer_enabled=false;display::test_char_message=0;
+    online_menus::fixture_editor=false;display::engine_window_procedure=saved_engine;
     system_host();
     check(TlsFree(cbt_index)); cbt_index = TLS_OUT_OF_INDEXES;
     for (const auto& line : logs) std::puts(line.c_str());
