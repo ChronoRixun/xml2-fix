@@ -727,6 +727,35 @@ namespace join_in_progress_rules
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
 		return nullptr;
 	}
+	// AR8 (fable-ar8): the input-stream epoch marker. Sender sites (CALL replacements; the bridge re-pushes the one stack
+	// argument, calls the native and posts the markers after it): the release's ring reset 0x613f68 `call 0x559150` inside
+	// the network setup's campaign-start branch (0x613f03.., flags & 1: clock 2.0, RNG seeds, all four blocks reset, then
+	// 0x60c230(0)) and the start's send-enable 0x6140b3 `call 0x558850` (flags & 2: 0x559e00 resets the blocks and sets
+	// +0xc68c, 0x558850(1) sets +0xc689 = sending on). Receiver site: the store 0x559560's entry (push ecx; mov eax,[esp+0xc];
+	// imul eax,eax,0x3184 - 11 bytes re-executed by the bridge; JMP shape; args record, index, kind; ret 0xc).
+	constexpr std::uint32_t input_epoch_release_call = 0x613f68, input_epoch_start_call = 0x6140b3;
+	constexpr std::uint32_t input_epoch_store_site = 0x559560, input_epoch_store_resume = 0x55956b;
+	constexpr std::uint32_t input_ring_reset_all = 0x559150, input_send_enable = 0x558850, input_block_reset = 0x558740;
+	constexpr std::uint32_t input_post_event = 0x55a370, local_participant_index = 0x611250, input_block_counter = 0x317e;
+	inline constexpr std::array<unsigned char, 5> input_epoch_release_original{0xe8,0xe3,0x51,0xf4,0xff};
+	inline constexpr std::array<unsigned char, 5> input_epoch_start_original{0xe8,0x98,0x47,0xf4,0xff};
+	inline constexpr std::array<unsigned char, 11> input_epoch_store_original{0x51,0x8b,0x44,0x24,0x0c,0x69,0xc0,0x84,0x31,0x00,0x00};
+	static_assert(input_epoch_release_call + 5 - 0x000bae1d == input_ring_reset_all, "AR8: 0x613f68 calls the all-blocks ring reset 0x559150");
+	static_assert(input_epoch_start_call + 5 - 0x000bb868 == input_send_enable, "AR8: 0x6140b3 calls the send-enable 0x558850");
+	inline constexpr guard input_epoch_guards[]{
+		{0x613f5f,"6a00e82a64f4ff8bc8e8e351f4ff6a00e86c88ffff8bc8e8b582ffff","AR8: release - push 0; manager; call 0x559150; push 0; pause object; call 0x60c230"},
+		{0x61409e,"e8ed62f4ff8bc8e8565df4ff6a01e8df62f4ff8bc8e89847f4ff","AR8: start - manager; call 0x559e00; push 1; manager; call 0x558850"},
+		{0x559560,"518b44240c69c08431000053568b7424108bd18d1c10668b06662b837c310000","AR8: store entry (push ecx; index * 0x3184; record; label - next)"},
+		{0x55a370,"8b5424046a008d44240c5052e87ff3ffffc20800","AR8: lockstep event post 0x55a370(index, code) -> 0x559700(index, &code, 0)"},
+		{0x558740,"8bd133c057b9b80b00008dba68020000f3ab","AR8: per-block ring reset 0x558740 (slots, history, +0x3148, read/write/next/counter)"},
+		{0x611250,"e89bffffff85c074078bc8e9b02f0000","AR8: the local participant index getter 0x611250"},
+		{0x559ee7,"8bc769c0843100008d84287e31000033d2668b10668954241042668910","AR8: decoder - a single record's label is the block's counter +0x317e, then counter++"},
+	};
+	inline const guard* input_epoch_mismatch(const std::uint8_t* image) {
+		for (const auto& g : input_epoch_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
 		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
