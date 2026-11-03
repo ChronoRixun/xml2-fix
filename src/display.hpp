@@ -76,6 +76,9 @@ namespace display
 	// of the frame hook (so screenshots include what it draws): the join hold's on-screen message (hold_overlay.hpp).
 	// Set before install() to have the device hooked for it in every display mode.
 	void set_overlay(void (*draw)(void* device));
+	// Ordinary native network notices, behind Online/Menus. The callback yields
+	// to an admission hold and runs before the screenshot hook as well.
+	void set_network_overlay(void (*draw)(void* device));
 
 	// Creates and resets the device without multisampling (a multisampled back buffer can't be
 	// copied). Set before install(); `why` goes in the log.

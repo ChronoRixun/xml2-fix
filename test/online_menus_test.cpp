@@ -1,6 +1,7 @@
 // Owned retail PE mapped in reserved fixture memory. Never starts XMen2.exe.
 // Actual production installer, hooks, mailbox, ABI adapters and transaction.
 #include "online_menus.hpp"
+#include "hold_overlay.hpp"
 #include "options_menu.hpp"
 #include "options_menu_rules.hpp"
 #include "display.hpp"
@@ -13,6 +14,7 @@
 #include <Windows.h>
 #include <cassert>
 #include <cmath>
+#include <cctype>
 #include <clocale>
 #include <algorithm>
 #include <atomic>
@@ -493,6 +495,9 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
 #include "online_ready_fixture.inl"
+#include "online_text_fixture.inl"
+#include "online_other_fixture.inl"
+#include "online_network_fixture.inl"
 #include "online_anchor_fixture.inl"
 #include "options_close_fixture.inl"
 #include "online_party_menu_fixture.inl"
@@ -514,6 +519,7 @@ bool online_body_ready() { return active() && body_ready; }
 }
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace display {
+void set_network_overlay(void (*draw)(void*)) { network_fixture::draw_hook=draw; }
 display_rules::options test_options;
 display_rules::options read_ini_options() { return test_options; }
 const display_rules::options& current_options() { return test_options; }
@@ -522,6 +528,14 @@ void set_frame_rate(const frame_rate_rules::cap&) {}
 bool set_vsync(std::optional<bool>) { return true; }
 void set_run_in_background(bool) {}
 void set_resolution(unsigned width,unsigned height) { test_options.width=int(width);test_options.height=int(height); }
+}
+namespace join_in_progress { const char* hold_overlay_text() { return network_fixture::hold_text; } }
+namespace hold_overlay {
+outcome draw(void* device,const char* text,bool,bool wrap) {
+    assert(wrap);
+    if(device) { network_fixture::drawn=text;++network_fixture::draws; }
+    outcome result;result.drawn=device ? path::blend : path::none;return result;
+}
 }
 namespace logger {
 const std::filesystem::path& module_dir() { return root; }
@@ -634,6 +648,9 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r27-text") { text_fixture::run(entry);return 0; }
+    if(mode=="r27-other") { other_fixture::run(entry);return 0; }
+    if(mode=="r27-network") { network_fixture::run();return 0; }
     if(mode=="r26-ready") { ready_fixture::run();ready_fixture::deferred();return 0; }
     if(mode=="r21-data-churn") { data_text_fixture::run(entry);return 0; }
     if(mode=="r20-code-open-close") { frontend_strings_fixture::open_close();return 0; }

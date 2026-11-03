@@ -2163,6 +2163,7 @@ namespace join_in_progress
 		return true;
 	}
 	bool bringing_in() { return installed() && (machine.holding() || epoch.active); }
+	const char* hold_overlay_text() { return hold_message; }
 	bool can_service() { return bringing_in() && !deferred_start_running && !zone_load_pending(); }
 	bool pending_player(const void* record) { return installed() && machine.pending(record); }
 	// p060fix/AR (gns_transport.cpp host_newcomer_decision / carry_decisions / vanished_links)

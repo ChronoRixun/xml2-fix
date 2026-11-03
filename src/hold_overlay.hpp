@@ -31,7 +31,8 @@ namespace hold_overlay
 		unsigned border = 0;
 	};
 	// Renders `text` for a back buffer of bb_width x bb_height (GDI into a DIB). Empty panel on failure.
-	panel render(const char* text, unsigned bb_width, unsigned bb_height);
+	// wrap: network notices may use multiple lines; admission holds retain their existing single line.
+	panel render(const char* text, unsigned bb_width, unsigned bb_height, bool wrap = false);
 	// Where the panel goes on that back buffer (clipped to it).
 	RECT place(const panel& p, unsigned bb_width, unsigned bb_height);
 	// One straight-alpha ARGB source pixel over one destination X8R8G8B8 pixel (the result has alpha 0xff).
@@ -50,7 +51,7 @@ namespace hold_overlay
 	};
 	// Draws `text` (nothing when null/empty) onto the device's back buffer. Game/render thread only. force_clear: the
 	// clear path even where the blend path would work (tests).
-	outcome draw(void* device, const char* text, bool force_clear = false);
+	outcome draw(void* device, const char* text, bool force_clear = false, bool wrap = false);
 	// Frees the cached system-memory surface (device reset / release).
 	void release();
 }

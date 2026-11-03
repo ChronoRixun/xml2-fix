@@ -2032,3 +2032,55 @@ normal reset/destruction. Unmarked streams retain one native render call. The
 large stream snapshot is allocated only in the marked slow path. Host fixtures
 cover the installed adapters and deferred batches; actual graphics traversal,
 clipping and final appearance still need live acceptance on host and guest.
+
+### Optional native online scenes and text entry
+
+With `Online/Menus=1`, the companion can select `lc_text_entry`,
+`lc_other_online`, `lc_campaign_lobby`, `lc_games_list` and
+`lc_player_game_options`. Each keeps its original native menu class, mode
+predicates, values, policy/information content, list services and return chain.
+The builder retains the original resources and publishes a separate exact
+`Data/lc_online_skin_<native>.cap` only for a supported template and companion
+DLL. Selection checks the complete scene/menu/package/backdrop/focus closure;
+missing assets or an invalid marker retain the native resource.
+
+The PC editor implements keyboard characters but leaves the retained 40-key
+pad grid unpopulated. The scoped LC adapter supplies lower/upper/symbol pages,
+Backspace, Space and Done, plus a clickable Escape/Cancel button. Constant
+intents 100..140 are consumed only by the
+live LC editor and enter the original character lane (`0xa0a061`). Native
+`0x5e72f0` still validates the request tag's charset and byte limit and handles
+Enter/Back/Escape; `0x5e6f30` owns acceptance. Two native input-context name
+comparisons recognize both editor names. Closing/deactivating retires pending
+input, and physical typing takes precedence over a queued on-screen character.
+The native tag 3 IP editor exposes digits and period only. Hub and Game Options
+names retain their 31-byte limit; the Other ways name and IP requests retain
+their native 15-byte limit. Offline editor callers retain the original page.
+
+The native campaign chooser's Join action requests `player_game_options` on
+PC, whose handler owns Connect by IP and queues `openmenu games_list`. Its
+optional scene is therefore part of the connected family. The browser retains
+the actual LISTBOX, columns, selection, search, filtering and admission;
+TEXTBOX/LISTBOX font metrics remain native because those renderers bypass the
+private CText scale hook. Original policy content is retained in all four
+informational modes; no replacement policy is authored.
+
+### Network notice lane
+
+`0x60a600` queues native network notices; `0x60aa40`/`0x60a690` own their
+expiry and retirement. Audit address `0x4029f0` polls the active message through
+`0x60a5d0` to keep GUI/HUD rendering during a stall; it is not a drawing entry.
+The existing hold-overlay evidence documents timed native notices failing to
+appear during holds. Menus now registers a separate pre-Present callback that
+draws the active native message with the fix's own geometric panel and GDI text.
+It uses the bounded native formatter, strips native inline colour scopes,
+requires a running campaign, and yields to admission holds and the online
+pages' existing inline/footer notices. It never changes queue priority, expiry,
+readiness, the simulation clock or the stall decision. Failed reads/draws leave
+the native queue intact. This works independently of the JoinInProgress switch.
+
+The host matrix modes `r27-text`, `r27-other` and `r27-network` cover editor
+effects, both keyboard context selectors, native Host/Join and browser services,
+resource fallbacks and network queue observation. Actual keyboard/pad/mouse
+rendering, policy scrolling, aspect ratios and overlay placement still require
+live acceptance; no synthetic fixture establishes those visual results.

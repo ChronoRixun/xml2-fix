@@ -1,4 +1,6 @@
 #include "online_menus.hpp"
+#include "display.hpp"
+#include "hold_overlay.hpp"
 #include "online_menus_anchors.hpp"
 #include "lc_fonts.hpp"
 #include "gameplay_agreement.hpp"
@@ -33,6 +35,7 @@
 namespace online_menus {
 namespace {
 using namespace online_menus_rules;
+using online_menus_rules::display;
 template<class T> T at(std::uintptr_t p) { return reinterpret_cast<T>(p); }
 using getter=void*(__cdecl*)();
 using tick_fn=void(__thiscall*)(void*);
@@ -386,6 +389,56 @@ const char* game_options_menu() noexcept {
     } catch(...) { return "game_options"; }
 }
 
+// Optional native-class scenes. All editing/state/input remains in retail.
+// Check the complete authored dependency set before selecting another name.
+const char* native_skin_menu(const char* name,bool online_editor=false) noexcept {
+    if(!ready || !name || !mod_loader::generation()) return name;
+    struct skin { const char *native,*variant,*capability;std::initializer_list<const char*> models; };
+    const skin skins[]{
+        {"text_entry","lc_text_entry","lc-online-skin/text_entry/1\n",
+            {"lc_o_focus_-200_-208_200_0","lc_o_focus_-488_-224_488_0","lc_o_focus_-528_-224_528_0"}},
+        {"online","lc_other_online","lc-online-skin/online/1\n",
+            {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0","lc_o_picker_focus","lc_o_picker_up","lc_o_picker_down"}},
+        {"campaign_lobby","lc_campaign_lobby","lc-online-skin/campaign_lobby/1\n",{"lc_o_focus_0_-400_4144_0"}},
+        {"games_list","lc_games_list","lc-online-skin/games_list/1\n",{"lc_o_picker_focus","lc_o_picker_up","lc_o_picker_down"}},
+        {"player_game_options","lc_player_game_options","lc-online-skin/player_game_options/1\n",
+            {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0"}}
+    };
+    const skin* selected=nullptr;
+    for(const auto& candidate:skins) if(!std::strcmp(name,candidate.native)) selected=&candidate;
+    if(!selected || (!std::strcmp(name,"text_entry") && !online_editor)) return name;
+    try {
+        const auto root=std::filesystem::path(mod_loader::game_root());
+        const auto exists=[&](const std::filesystem::path& file) {
+            std::error_code error;
+            return std::filesystem::is_regular_file(mod_loader::resolve_file((root/file).wstring()),error);
+        };
+        const auto marker="Data/lc_online_skin_"+std::string(selected->native)+".cap";
+        std::ifstream cap(mod_loader::resolve_file((root/marker).wstring()),std::ios::binary);
+        std::array<char,80> bytes{};cap.read(bytes.data(),bytes.size());
+        const auto length=std::strlen(selected->capability);
+        if(cap.gcount()!=static_cast<std::streamsize>(length) || std::memcmp(bytes.data(),selected->capability,length)) return name;
+        const std::string variant=selected->variant;
+        for(const auto* ext:{".XMLB",".engb",".IGB"}) if(!exists("UI/menus/"+variant+ext)) return name;
+        if(!exists("Textures/menus/"+variant+".IGB") ||
+           !exists("Packages/generated/maps/package/menus/"+variant+".PKGB") ||
+           !exists("UI/models/lc_o_backdrop_"+variant+".IGB") || !exists("UI/models/lc_o_field.IGB")) return name;
+        for(const auto* model:selected->models) if(!exists("UI/models/"+std::string(model)+".IGB")) return name;
+        return selected->variant;
+    } catch(...) { return name; }
+}
+bool native_online_editor_source(void* menu) {
+    __try {
+        if(!menu) return false;
+        const auto* name=static_cast<const char*>(menu)+0xc;
+        const auto type=*static_cast<const unsigned*>(menu);
+        return (type==0x69f65c && (!std::strcmp(name,"game_options") || !std::strcmp(name,"lc_game_options"))) ||
+            (type==0x69efa4 && (!std::strcmp(name,"online") || !std::strcmp(name,"lc_other_online"))) ||
+            (type==0x69f724 && (!std::strcmp(name,"player_game_options") || !std::strcmp(name,"lc_player_game_options"))) ||
+            (type==0x69f8b4 && (!std::strcmp(name,"games_list") || !std::strcmp(name,"lc_games_list")));
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 struct native_engine {
     void *seats=nullptr,*network_object=nullptr,*session_object=nullptr,*campaign_object=nullptr,*profile=nullptr,*console=nullptr;
     bool preflight(int p) {
@@ -600,7 +653,7 @@ bool name_native(name_operation operation,name_io& io) {
             at<name_fn>(0x60c710)(request,name_edit.title.data());
             auto* m=*reinterpret_cast<void**>(0x8aff18);
             if(!m || *static_cast<unsigned*>(m)!=0x6a236c) return false;
-            at<request_fn>(0x5d5db0)(m,"text_entry",nullptr);
+            at<request_fn>(0x5d5db0)(m,native_skin_menu("text_entry",true),nullptr);
         } else if(operation==name_operation::poll) {
             io.result=at<bool(__thiscall*)(void*)>(0x60b960)(request);
             io.tag=at<int(__thiscall*)(void*)>(0x60b9a0)(request);
@@ -662,7 +715,7 @@ void request_impl(void* m,const char* name,const char* args) {
     const bool routed=console_routed;console_routed=false;
     if(ready && !routed && !native_route_request(name)) return;
     pending.clear();keyboard_input.clear();
-    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
+    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
     const auto source_id=reinterpret_cast<std::uintptr_t>(source);
     // The main menu is the root: leaving it with itself still stacked (Hub Back -> main pushed lc_online) would let a
@@ -700,7 +753,9 @@ void request_impl(void* m,const char* name,const char* args) {
     } else if(name && which(source)==screen::main && std::strcmp(name,"lc_online")) {
         entry.clear();accept_hint(source,true);
     }
-    at<request_fn>(0x5d5db0)(m,ready && name && !std::strcmp(name,"game_options") ? game_options_menu() : name,args);
+    const char* destination=ready && name && !std::strcmp(name,"game_options") ? game_options_menu() :
+        native_skin_menu(name,name_edit.owned || native_online_editor_source(source));
+    at<request_fn>(0x5d5db0)(m,destination,args);
 }
 void __fastcall request(void* m,void*,const char* name,const char* args) {
     try {
@@ -723,10 +778,12 @@ int argument(void* args) {
     } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 bool party_expired_confirmation(int action);
+namespace text_entry_ui { bool capture(void* menu,int action); }
 void* __cdecl handler(void* args) {
     if(ready) {
         auto* menu=current();
         const auto value=argument(args);
+        if(text_entry_ui::capture(menu,value)) return nullptr;
         if(value!=int(intent::invalid_key) && live(menu) && !(which(menu)==screen::party && party_expired_confirmation(value))) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
     }
     return nullptr;
@@ -740,6 +797,10 @@ const script_functions_rules::func_entry registration{reinterpret_cast<const voi
 bool party_expired_confirmation(int action);
 bool party_mouse_action(void* menu,void* chosen,int message);
 bool __fastcall queue(void* console,void*,const char* line) {
+    if(ready && line) for(int value=100;value<=140;++value) {
+        char command[48]{};std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
+        if(!std::strcmp(command,line)) return text_entry_ui::capture(current(),value);
+    }
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
     if(ready && line) for(int value=2;value<=int(intent::last);++value) {
@@ -995,6 +1056,8 @@ void broker_cancel(bool leave_room=false) {
 }
 #include "online_native_flow.inl"
 #include "online_ready_roster.inl"
+#include "online_text_entry.inl"
+#include "online_network_status.inl"
 void broker_scope(screen s) {
     if(!broker_live()) return;
     if(broker_screen!=s) {
@@ -3133,7 +3196,7 @@ void tick_impl(void* menu,bool& native_called) {
         if(!abandon_name()) { show_notice(menu);return; }
         // Original manager request deliberately bypasses our Online interception:
         // Other ways opens the full native name/profile/Host/Join chain.
-        at<request_fn>(0x5d5db0)(manager(),destination,nullptr);
+        at<request_fn>(0x5d5db0)(manager(),native_skin_menu(destination),nullptr);
         return; // never bind after requesting a transition
     }
     const auto name=display(local_name,31);
@@ -3372,6 +3435,7 @@ patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";
     ready_roster::contribute(c);
+    text_entry_ui::contribute(c);
     c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_refusal_bridge)),1,"started-session refusal from the proven host"));
     for(const auto& g:online_menus_guards::guards)
@@ -3503,6 +3567,7 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
+    ::display::set_network_overlay(&network_status_ui::draw);
     logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability);
 }
 }
