@@ -14,6 +14,61 @@ It updates the current process, leaves the INI startup default unchanged, and
 never rewrites the frozen gameplay agreement. JoinInProgress=0 keeps the module
 off; enabling that module still requires configuration and relaunch.
 
+## AR5 diagnostic candidate (both switches default OFF)
+
+For the lost sole newcomer investigation, `[Online] JoinDiagnostics=1` installs a
+bounded observer. `[Online] JoinStallWrapper=1` independently enables the experimental
+stalled-render wrapper. Both require the installed JoinInProgress module. Use the
+same settings on every surviving peer for an A/B round; neither changes gameplay
+rule 26's revision or the release identity. An absent key or `0` leaves the option off.
+With both off there are no additional raw-poll, input, stalled-helper, menu-query,
+PDA/pause, or RNG observation hooks or allocated capture buffers.
+
+The observer retains the first 16,384 boundary samples and 32,768 draw records per
+captured interval, with explicit omission counts. It writes `jip execution`,
+`jip execution camera`, `jip execution input`, and `jip execution rng` lines to the
+existing log at session end or restart replacement. Exit the session normally to
+flush it; terminating the process cannot flush an in-memory capture. Records carry
+the outer raw-poll iteration, local restart generation, native gate frame/flags/phase,
+run permission, applied and retired input observations, world-call count, synchronized
+seed/count, independently counted visual draws, raw camera eye/target/basis, game-time
+bits, and clock ticks/steps. `readable & 1` means the full snapshot was read;
+`readable & 2` means effective ticks could be reconstructed from the paused/fixed-step
+clock fields. The observer never calls a lazy getter to sample time or camera state.
+Event-head digests and pointers are local observations, not cross-PC identities.
+
+The `video` field uses bit 0 for a validated video object/predicate layout and bit 1
+for active video. Participant-ring indices, each record's controller field, logical
+controllers and mapped controller objects are labeled separately in input lines.
+With JoinDiagnostics and the legacy LateJoinProbe both enabled, draw output uses
+the deferred `jip execution rng` ring; legacy touch formatting is bypassed on draws.
+
+The protected generation begins at the authorized deferred late-restart entry,
+observes the mode-2 load return, and becomes world-ready only after raw zone loading
+bits and the native start menu clear. It survives cohort bookkeeping and the
+late-restart marker clearing at frame 0, and has no frame-number or timeout cutoff.
+An unrelated area load or validated session end clears it. The wrapper passes
+through loading, all current menus or pauses, active video, unknown gate states, and contradictory
+run permission. No early ESC result is filtered and no input or pause state is cleared.
+
+This candidate implements the design's smaller, permitted **render-tail subset**.
+At the original `0x4021b7` CALL it runs the native helper, preserving first-stall
+feedback, seat service, filtered controller-continuation/save-load commands, manager
+service and message selection. At `0x402a09`, after those services, it reads eligibility
+again. Only world-ready input waits with flags exactly 1, phase 1 or 2, no modal/load,
+and input permission 0 bypass the video/menu/HUD/draw/presentation tail through the
+helper's existing non-render epilogue `0x402b50`. The native caller then reaches its
+common cleanup unchanged. A protected wait yields `Sleep(1)` once after native
+service; the simulation clock is never used for pacing or advanced to escape a wait.
+
+The seat manager and native manager tick are **not certified inert**. This subset
+does not establish the complete gameplay-freeze invariant or prove a deterministic
+recovery fix. All modal states keep native behavior; PDA/pause callers and observed
+menu replacements are logged, but complete Team/PDA provenance is not certified.
+Live paired traces must identify the first differing writer and show whether the
+subset removes it. A missing PDA alone is insufficient: compare consumed input,
+clock steps, synchronized draws, camera vectors, and actual continued world updates.
+
 The 060x saved X-Mansion late-join round failed twice at the first checksum
 after restore, despite earlier three-instance coverage. No complete restoration
 fix is certified. Recommend `LateJoin=0` for 0.6.0-beta.1. The builder writes that

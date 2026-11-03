@@ -603,4 +603,68 @@ namespace join_in_progress_rules
 		return campaign_receive + 5 + relative == owned_target;
 	}
 	constexpr std::uint16_t agreement_revision = 7;
+
+	// AR5 optional call-site contracts. These guards participate only with the corresponding switch.
+	constexpr std::uint32_t execution_raw = 0x401e81;
+	inline constexpr std::array<unsigned char, 8> execution_raw_original{0xff,0x52,0x14,0xc6,0x44,0x24,0x08,0x01};
+	constexpr std::uint32_t execution_input = 0x40219e;
+	inline constexpr std::array<unsigned char, 5> execution_input_original{0xe8,0x0d,0x81,0x15,0x00};
+	constexpr std::uint32_t execution_stall = 0x4021b7;
+	inline constexpr std::array<unsigned char, 5> execution_stall_original{0xe8,0x64,0x07,0x00,0x00};
+	constexpr std::uint32_t execution_render = 0x402a09;
+	inline constexpr std::array<unsigned char, 5> execution_render_original{0xe8,0xf2,0x88,0x1e,0x00};
+	constexpr std::uint32_t execution_world = 0x40235a;
+	inline constexpr std::array<unsigned char, 6> execution_world_original{0xff,0x92,0x6c,0x01,0x00,0x00};
+	constexpr std::uint32_t execution_query = 0x5dae69;
+	inline constexpr std::array<unsigned char, 6> execution_query_original{0xff,0x92,0x34,0x01,0x00,0x00};
+	constexpr std::uint32_t execution_gate_fail = 0x606cc1;
+	inline constexpr std::array<unsigned char, 5> execution_gate_fail_original{0xe8,0xfa,0x1a,0xf5,0xff};
+	constexpr std::uint32_t execution_produce = 0x55a31a;
+	inline constexpr std::array<unsigned char, 5> execution_produce_original{0xe8,0xe1,0xf3,0xff,0xff};
+	constexpr std::uint32_t execution_apply = 0x558da9;
+	inline constexpr std::array<unsigned char, 10> execution_apply_original{0xff,0x52,0x24,0x8b,0x14,0xad,0x78,0xad,0xa6,0x00};
+	constexpr std::uint32_t execution_retire = 0x5594ce;
+	inline constexpr std::array<unsigned char, 8> execution_retire_original{0x88,0x18,0x8b,0x8d,0x70,0x31,0x00,0x00};
+	constexpr std::uint32_t execution_visual = 0x5600e0;
+	inline constexpr std::array<unsigned char, 6> execution_visual_original{0x8b,0x0d,0xb0,0xd8,0x7a,0x00};
+	inline constexpr guard execution_wrapper_guards[]{
+		{0x5d8920,"a118ff8a0085c0750ae882ffffffa118ff8a00c3","AR5: menu getter backing pointer (eligibility never calls it)"},
+		{0x5eb300,"a1ec138b0085c0750ae882ffffffa1ec138b00c3","AR5: video getter backing pointer (observer never calls it)"},
+		{0x6a33a4,"309e5e00","AR5: video active predicate virtual slot"},
+		{0x5e9e30,"8b813c40000085c07c1883f8037d1369c0601500008d4408188a805d1500002401c38d41188a805d1500002401c3","AR5: complete read-only active-video predicate"},
+		{0x55a3d9,"8b0c24b8b0fb790064890d0000000083c40cc3","AR5: input manager getter returns the observed singleton"},
+		{0x606d40,"b8d8bba300c3","AR5: native gate getter returns the observed singleton"},
+		{0x610d20,"8a8120040000c3","AR5: native online-state byte"},
+		{0x4021a3,"6a03e8564b20008bc8e8cf46200084c0740c8bcee864070000e91a070000806614fe","AR5: native wait test, stalled call, common-cleanup jump"},
+		{0x402920,"83ec105356578bf9","AR5: native helper stack frame"},
+		{0x4029e9,"e8228820008bc8e8db7b200085c07510e8024320008a480684c90f8447010000e8f2881e00","AR5: message/mode render choice after retained services"},
+		{0x402b50,"5f5e5b83c410c3","AR5: native no-render epilogue"},
+	};
+	inline constexpr guard execution_observer_guards[]{
+		{0x551f19,"8b0c24b8c0eb790064890d0000000083c40cc3","AR5: controller getter returns the observed singleton"},
+		{0x5cec00,"568bf18a8644190000","AR5: PDA-open entry, observation only"},
+		{0x60c230,"53568bf18a466c","AR5: native pause toggle, observation only"},
+		{0x402a19,"e8e2881e00","AR5: video render branch"},
+		{0x402a7c,"e89f5e1d00","AR5: ordinary render branch"},
+		{0x401e81,"ff5214c644240801","AR5: execution_raw"},
+		{0x40219e,"e80d811500","AR5: execution_input"},
+		{0x40235a,"ff926c010000","AR5: execution_world"},
+		{0x5dae69,"ff9234010000","AR5: execution_query"},
+		{0x606cc1,"e8fa1af5ff","AR5: execution_gate_fail"},
+		{0x55a31a,"e8e1f3ffff","AR5: execution_produce"},
+		{0x558da9,"ff52248b14ad78ada600","AR5: execution_apply"},
+		{0x5594ce,"88188b8d70310000","AR5: execution_retire"},
+		{0x5600e0,"8b0db0d87a00","AR5: execution_visual"},
+	};
+	inline constexpr std::array<unsigned char,5> execution_video_branch_original{0xe8,0xe2,0x88,0x1e,0x00};
+	inline constexpr std::array<unsigned char,5> execution_ordinary_branch_original{0xe8,0x9f,0x5e,0x1d,0x00};
+	inline constexpr std::array<unsigned char,9> execution_pda_original{0x56,0x8b,0xf1,0x8a,0x86,0x44,0x19,0,0};
+	inline constexpr std::array<unsigned char,7> execution_pause_original{0x53,0x56,0x8b,0xf1,0x8a,0x46,0x6c};
+	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
+		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		if (observer) for (const auto& g : execution_observer_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 }

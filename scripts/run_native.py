@@ -130,6 +130,7 @@ cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "restart"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "turrets"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "actorpools"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "execution"])
 # One log per boundary mode (the mode runs used to overwrite one +exe log).
 installer_modes |= {"xml2_online_menus_test", "xml2_join_in_progress_boundary_test"}
 

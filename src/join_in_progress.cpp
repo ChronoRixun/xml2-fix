@@ -48,6 +48,14 @@ namespace join_in_progress
 		join_in_progress_core::restart_reset restart; // the canonical cohort restart (camera image, first-frame RNG epoch)
 		bool late_restart = false;         // this epoch restarts a running session for a late joiner (host: its own image; guests: the 0x47 marker)
 		bool late_restart_sending = false; // the host is inside native_campaign_start for a late joiner: the 0x47 carries the marker
+		join_in_progress_core::restart_execution execution;
+		join_in_progress_diagnostics::execution_capture* execution_log = nullptr;
+		bool execution_observer = false, execution_wrapper = false;
+		using execution_boundary = join_in_progress_diagnostics::boundary;
+		void execution_snapshot(execution_boundary, const std::uint32_t* saved = nullptr);
+		void execution_end(const char* reason); void execution_flush(const char* reason);
+		void execution_note_draw(const std::uint32_t* stack, bool visual);
+		join_in_progress_core::restart_wait execution_wait_state();
 		alignas(16) std::uint8_t camera_pristine[join_in_progress_rules::camera_bytes]{};
 		std::uint32_t camera_construct_return = 0;
 		void probe_period(std::uint16_t frame); // [Dev] LateJoinProbe: the checksum sample milestones (join_in_progress_residue.inl)
@@ -179,6 +187,7 @@ namespace join_in_progress
 				}
 				if (probe_enabled) for (const auto& g : audit_probe_guards)
 					if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
+				if (const auto* g = execution_mismatch(image,execution_observer,execution_wrapper)) return g;
 				return nullptr;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
@@ -389,6 +398,11 @@ namespace join_in_progress
 			// p060fix/AR: a newcomer the host decided lost is gone from this PC's session before anything of the restart
 			// runs (every peer restarts with the same participants), and no own-timeout removal is pending for one.
 			gns_transport::newcomers_restart_entry("this PC's restart entry");
+			if (execution_observer || execution_wrapper) {
+				execution_end("restart replacement");
+				execution.begin(late_restart);
+				if (execution_log) { execution_log->iteration = execution_log->worlds = execution_log->visual_count = 0; for (auto& f : execution_log->consumed) f = ~0u; }
+			}
 			restart_restored = restart_zone_back = false;
 			restart_frame0_seen = false; host_sync_wait_since = 0; host_sync_wait_logged = false; // p060fix/AR2: per restart
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
@@ -445,6 +459,7 @@ namespace join_in_progress
 				}
 			}
 			fn<native_load_t>(at<std::uint32_t>(at<void*>(game, 0), 0x20c))(game, buffer, full);
+			if (full == 2 && (execution_observer || execution_wrapper)) execution.image_returned();
 			if (epoch.active && epoch.started) restart_restored = true; // p060fix/AR
 		}
 
@@ -527,6 +542,7 @@ namespace join_in_progress
 				// consumed and never ran; the joiner's `late_restart` had been cleared by `cohort synchronized` 245 ms before
 				// its frame 0, so its FPU step was skipped too - the epoch differed by role).
 				if (!restart.should_reseed(frame)) return;
+				execution_snapshot(execution_boundary::canonical_before);
 				restart_frame0_seen = true; // p060fix/AR2: the host's cohort sync may land now (the newcomer case's order)
 				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
@@ -545,6 +561,8 @@ namespace join_in_progress
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
+				execution.canonical();
+				execution_snapshot(execution_boundary::canonical_after);
 				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, AI move intent, periodic events by AI bit, queue rebuild %u); the late restart ends here", event_rebuilds);
 				camera_lines(true);
 				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
@@ -620,6 +638,10 @@ namespace join_in_progress
 
 		void observe_epoch()
 		{
+			if (execution_observer || execution_wrapper) {
+				execution_wait_state(); // independent of epoch.active
+				if (execution.phase == join_in_progress_core::restart_execution_phase::off) execution_flush("generation teardown");
+			}
 			if (!epoch.active) return;
 			void* pause = fn<getter_t>(pause_getter)();
 			void* menus = *reinterpret_cast<void**>(0x8aff18);
@@ -766,7 +788,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { execution_end("session end"); admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1782,6 +1804,7 @@ namespace join_in_progress
 			std::memcpy(out.data() + 1, &relative, 4);
 			return out;
 		}
+#include "join_in_progress_execution.inl"
 	}
 
 	void note_party_change()
@@ -1799,6 +1822,10 @@ namespace join_in_progress
 		trace = ini::flag(L"Dev", L"JoinInProgressTrace", false);
 		allow_late_join = ini::flag(L"Online", L"LateJoin", false);
 		restart_reset_enabled = ini::flag(L"Dev", L"LateJoinRestartReset", true);
+		execution_observer = ini::flag(L"Online", L"JoinDiagnostics", false);
+		execution_wrapper = ini::flag(L"Online", L"JoinStallWrapper", false);
+		if (execution_observer) execution_log = new (std::nothrow) join_in_progress_diagnostics::execution_capture();
+		if (execution_observer && !execution_log) { logger::write("join in progress: JoinDiagnostics allocation failed - observer disabled"); execution_observer = false; }
 		probe_enabled = ini::flag(L"Dev", L"LateJoinProbe", false);
 		if (probe_enabled)
 		{
@@ -1923,13 +1950,14 @@ namespace join_in_progress
 				writes.push_back({camera_construct_call, bytes(camera_construct_original), rel(0xe8, camera_construct_call, reinterpret_cast<const void*>(&camera_construct_bridge), 5)});
 			else
 				logger::write("join in progress: the camera singleton was constructed before the fix installed - cohort restarts keep the running camera");
-			writes.push_back({frame_gate_run_call, bytes(frame_gate_run_original), rel(0xe8, frame_gate_run_call, reinterpret_cast<const void*>(&frame_gate_run_bridge), 5)});
+			writes.push_back({frame_gate_run_call, bytes(frame_gate_run_original), rel(0xe8, frame_gate_run_call,
+				execution_observer || execution_wrapper ? reinterpret_cast<const void*>(&execution_gate_run_bridge) : reinterpret_cast<const void*>(&frame_gate_run_bridge), 5)});
 			writes.push_back({prepare_opcode_site, bytes(prepare_opcode_original), rel(0xe9, prepare_opcode_site, reinterpret_cast<const void*>(&prepare_opcode_bridge), 5)});
 			// P1/P2: the zone-load epochs (CALL replacements of argument-less getters); P3: the draw entry (JMP) only with the probe.
 			writes.push_back({zone_load_entry_call, bytes(zone_load_entry_original), rel(0xe8, zone_load_entry_call, reinterpret_cast<const void*>(&zone_load_entry_bridge), 5)});
 			writes.push_back({zone_start_entry_call, bytes(zone_start_entry_original), rel(0xe8, zone_start_entry_call, reinterpret_cast<const void*>(&zone_start_entry_bridge), 5)});
 			writes.push_back({zone_load_zone_entry_call, bytes(zone_load_zone_entry_original), rel(0xe8, zone_load_zone_entry_call, reinterpret_cast<const void*>(&zone_load_zone_entry_bridge), 5)});
-			if (probe_enabled) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
+			if (probe_enabled || execution_observer) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
 			// Follow-up 3: the zone-start camera anchor (CALL replacement of the 5-byte table load).
 			writes.push_back({camera_anchor_table_load, bytes(camera_anchor_table_original), rel(0xe8, camera_anchor_table_load, reinterpret_cast<const void*>(&camera_anchor_table_bridge), 5)});
 			// Follow-up 5: the game update's CSmartEntMgr getter call (CALL replacement; the site's return address stays) and,
@@ -1959,10 +1987,13 @@ namespace join_in_progress
 			// p060fix/AQ2: the hold's message is drawn by the fix before every Present (display::install follows).
 			display::set_overlay(&hold_overlay_draw);
 		}
+		execution_add_patches(writes);
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			if (composed_receiver) entity_transfer::observe_prepare(&campaign_notice);
 			state = 1;
+			if (execution_observer || execution_wrapper) logger::write("join in progress: AR5 JoinDiagnostics=%u JoinStallWrapper=%u (both default OFF); bounded observer; guarded render-tail subset at 0x4021b7, native prefix retained; live deterministic recovery unproven",
+				unsigned(execution_observer), unsigned(execution_wrapper));
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",

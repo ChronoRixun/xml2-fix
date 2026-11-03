@@ -145,6 +145,10 @@ void snapshot(const char* where)
 }
 void __cdecl note_draw(const std::uint32_t* sp)
 {
+	execution_note_draw(sp, false);
+	// AR5 owns a deferred-output trace when enabled, including alongside the legacy
+	// probe. Do not enter that probe's touch formatting/logging on an RNG path.
+	if (execution_observer) return;
 	if (!draws || draws->phase == 0) return; // the probe round: phase 0 (the warm host before its zone load) overflowed the ring
 	const auto caller = join_in_progress_core::normalise_draw_caller(sp, draw_wrapper_float_return, draw_wrapper_int_return_a, draw_wrapper_int_return_b);
 	// Follow-up 6: for the two per-actor deciders, the actor's identity (reads guarded; the ring is written either way).
@@ -201,10 +205,16 @@ __declspec(naked) void draw_trace_bridge()
 	__asm {
 		pushfd
 		pushad
-		lea eax, [esp+24h]
+		mov ebp, esp
+		sub esp, 210h
+		and esp, 0fffffff0h
+		fxsave [esp]
+		lea eax, [ebp+24h]
 		push eax
 		call note_draw
 		add esp, 4
+		fxrstor [esp]
+		mov esp, ebp
 		popad
 		popfd
 		inc dword ptr ds:[0x7ad8b4]
@@ -378,6 +388,7 @@ void probe_period(std::uint16_t frame)
 void hold_smart_update(); // follow-up 5, below
 void __cdecl zone_load_entry_notice()
 {
+	execution.area_load(); // restoring retains its own initial load; a later zone ends protection
 	audit_zone_load();
 	if (late_restart && restart.armed) { probe_epoch_late = true; spawn_notes = 0; spawn_notes_dropped = 0; touch_lines = 0; probe_milestone("zone load entry", 1); }
 	segment_reseed("the zone load (CMap::LoadMap or CMap::LoadZone)");
