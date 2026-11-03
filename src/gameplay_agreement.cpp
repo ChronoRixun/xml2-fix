@@ -216,6 +216,55 @@ namespace gameplay_agreement
   // games table (0x608c20/0x608d60, status 6). An incompatible host is not filed: this PC sees the native
   // dialog, as before, and the host is told why with 0x1d (it takes that from a queried peer, see
   // host_rejection_flags). The browser has no pending join or session to clean up.
+  // Retail 0x6090d0 allocates at 0x609122 and appends at 0x6091d3 on EVERY reply.
+  // Repeated LAN broadcasts/direct queries therefore list the same endpoint twice.
+  // Refresh the current table's existing row; never cache across a search/leave.
+  // Key = the proven reply source IPv4 + game port, not the untrusted advertised name.
+  // Return 0 for a new endpoint, 1 for an updated row, -1 for a malformed table.
+  int refresh_discovery(void* raw)
+  {
+   __try {
+    const auto& e=*static_cast<const event*>(raw);
+    if(!e.context || !e.sender || !e.body || e.length<request_size)return -1;
+    auto* campaign=static_cast<std::uint8_t*>(e.context);
+    const auto count=*reinterpret_cast<const unsigned*>(campaign+0x2214);
+    if(count>100)return -1;
+    if(!count)return 0;
+    using address=const std::uint8_t*(__thiscall*)(void*);
+    using port=std::uint16_t(__thiscall*)(void*);
+    const auto* source=reinterpret_cast<address>(native_address)(e.sender);
+    const auto source_port=reinterpret_cast<port>(native_port)(e.sender);
+    if(!source || !source_port)return -1;
+    auto* node=*reinterpret_cast<std::uint8_t**>(campaign+0x2208);
+    std::array<bool,100> seen{};std::uint8_t* match=nullptr;
+    for(unsigned i=0;i<count;++i) {
+     if(!node)return -1;
+     auto* row=*reinterpret_cast<std::uint8_t**>(node+0x10);
+     const auto offset=reinterpret_cast<std::uintptr_t>(row)-reinterpret_cast<std::uintptr_t>(campaign+0x5b4);
+     if(offset>=100*0x44 || offset%0x44 || seen[offset/0x44])return -1;
+     seen[offset/0x44]=true;
+     if(std::memcmp(row+8,source+8,4)==0 && *reinterpret_cast<const std::uint16_t*>(row+0xc)==source_port) {
+      if(match)return -1;
+      match=row;
+     }
+     node=*reinterpret_cast<std::uint8_t**>(node+8);
+    }
+    if(node)return -1;
+    if(!match)return 0;
+    using getter=const std::uint8_t*(__cdecl*)();
+    const auto* version=reinterpret_cast<getter>(0x612be0)()+0x410;
+    const auto* body=static_cast<const std::uint8_t*>(e.body);
+    if(!std::memchr(body+0x3e,0,6) || !std::memchr(version,0,6))return -1;
+    std::array<std::uint8_t,14> endpoint{};std::memcpy(endpoint.data(),match,endpoint.size());
+    // Same 0x44-byte copy as retail 0x615760; retain its canonical source endpoint.
+    std::memcpy(match,body,0x44);std::memcpy(match,endpoint.data(),endpoint.size());
+    match[0x11]=std::strcmp(reinterpret_cast<const char*>(body+0x3e),reinterpret_cast<const char*>(version))==0;
+    using status=void(__cdecl*)(int,void*,void*);
+    const auto callback=*reinterpret_cast<status*>(campaign+0x2298);
+    if(callback)callback(6,*reinterpret_cast<void**>(campaign+0x229c),match);
+    return 1;
+   } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
+  }
   enum class endpoint { host,joiner,browser };
   int receive(void* raw,std::size_t base,std::uint32_t native,endpoint role,std::uint8_t opcode)
   {
@@ -237,6 +286,13 @@ namespace gameplay_agreement
     // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
     // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
     // leaves (send_single), which retail sends only once the participant is taken.
+    if(role==endpoint::browser) {
+     const auto refreshed=refresh_discovery(raw);
+     if(refreshed) {
+      if(refreshed<0)logger::write("online: malformed discovery table or endpoint refused; no duplicate row allocated");
+      return 0;
+     }
+    }
     return reinterpret_cast<callback>(native)(raw);
    }
    // Nothing of a refused message reaches the native handler: a wrong protocol, a short, long or malformed body and

@@ -909,6 +909,33 @@ void runtime(){
   forwarded=0;admitted_session_rate=0;
   check(browser(&advert)==73 && forwarded==1 && admitted_session_rate==0 && frame_rate::session_rate()==0,
     "beta.2 Other ways browser: compatible 30/60 host is listed without adopting its rate");
+  // Reproduce repeated broadcast/direct replies against the CURRENT native table.
+  // The retail handler's old allocation path is our forwarding counter here.
+  context.fill(0);selected_session=context.data();
+  std::memcpy(context.data()+0x410,"LC24",5);std::memcpy(input.data()+0x3e,"LC24",5);
+  const std::uint16_t source_port=5165;std::memcpy(sender.data()+8,&source_port,2);
+  const std::array<std::uint8_t,4> source_ip{192,0,2,10};std::memcpy(sender.data()+0x14,source_ip.data(),4);
+  auto* row=context.data()+0x5b4;
+  std::memcpy(row+8,source_ip.data(),4);std::memcpy(row+0xc,&source_port,2);
+  std::array<std::uint8_t,20> node{};
+  auto* row_pointer=row;std::memcpy(node.data()+0x10,&row_pointer,4);
+  auto* head=node.data();std::memcpy(context.data()+0x2208,&head,4);put(0x2214,1);
+  const auto first_forwarded=forwarded;
+  for(unsigned n=0;n<64;++n) {
+   input[0x38]=std::uint8_t(n%4+1);
+   check(browser(&advert)==0 && forwarded==first_forwarded && get(0x2214)==1 && row[0x38]==input[0x38],
+    "repeated compatible LAN replies refresh one row and its live player count");
+  }
+  check(std::memcmp(row+8,source_ip.data(),4)==0 && *reinterpret_cast<std::uint16_t*>(row+0xc)==source_port && row[0x11]==1,
+    "refresh retains the proven source endpoint and native version flag");
+  ++sender[0x14];check(browser(&advert)==73 && forwarded==first_forwarded+1,"same game name at a different IPv4 remains a separate host");--sender[0x14];
+  ++sender[8];check(browser(&advert)==73 && forwarded==first_forwarded+2,"same IPv4 with a different game port remains a separate host");--sender[8];
+  put(0x2214,101);check(browser(&advert)==0 && forwarded==first_forwarded+2,"over-capacity discovery table refuses without allocating another row");
+  put(0x2214,1);std::memcpy(node.data()+8,&head,4);
+  check(browser(&advert)==0 && forwarded==first_forwarded+2,"cyclic discovery chain refuses without inserting");
+  node.fill(0);auto* foreign=input.data();std::memcpy(node.data()+0x10,&foreign,4);
+  check(browser(&advert)==0 && forwarded==first_forwarded+2,"out-of-pool discovery record refuses without dereferencing it");
+  context.fill(0);check(browser(&advert)==73 && forwarded==first_forwarded+3,"a cleared/new search has no stale dedupe cache");
   const auto listed=forwarded;advert.length=std::uint16_t(request_size+local.bytes().size());
   browser(&advert);
   check(forwarded==listed && frame_rate::session_rate()==0,

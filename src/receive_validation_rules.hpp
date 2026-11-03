@@ -12,6 +12,7 @@
 // legitimate body exceeds 0x505; the parser accepts up to 0x514, and anything past 0x505 is refused here.
 
 #include "entity_capacity_rules.hpp" // fast_chunk: the FastTransfer 'H' record shape
+#include "linked_frame_rate_core.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,8 +26,8 @@ namespace receive_validation_rules
 	// Admission and in-game index fields are bounded by the session's four player slots and the transport's six
 	// peer entries (net030-d3 section 3.3).
 	constexpr std::uint32_t admission_slots = 4, peer_slots = 6;
-	// 0x18 carries the native 0x74-byte game-info body plus the gameplay-agreement record (protocol 4, 108 bytes).
-	constexpr std::uint16_t game_info_max = 0x74 + 108;
+	// 0x18 carries native game info, the protocol-4 agreement and linked-rate settings.
+	constexpr std::uint16_t game_info_max = 0x74 + 108 + linked_frame_rate_core::settings_size;
 
 	struct rule
 	{
@@ -61,7 +62,7 @@ namespace receive_validation_rules
 	// and keep their minimum. The rows below keep a strict maximum on purpose:
 	//  * 0x10 ping: echoes the body as 0x11 with an allocation and copy sized by the event length (cap only).
 	//  * 0x18 join request: fixed 0x74-byte game-info copy, then strcmp from +0x3e to NUL; the maximum is the 0x74
-	//    struct plus the 108-byte agreement record.
+	//    struct plus the 108-byte agreement record and linked-rate settings trailer.
 	//  * 0x1a, 0x1b, 0x1f admission records: copied by length / indexed by body fields, bounded by the struct plus
 	//    the agreement record (0xe0).
 	//  * 0x44 roster / 0x45: count- or pointer-driven reads inside the body (0x44 also needs 0x2a + 4*count + 3).

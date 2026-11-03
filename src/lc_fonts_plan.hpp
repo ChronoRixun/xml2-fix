@@ -4,11 +4,11 @@
 
 namespace lc_fonts_plan {
 using namespace patch_transaction;
-enum class kind {manager,slots,count,counter,current,counter_offset,names,count8,style,render,scale_draw,scale_clip,map_pc,map_hd};
+enum class kind {manager,slots,count,counter,current,counter_offset,names,count8,style,render,scale_draw,scale_clip,list_clip,list_draw,list_height,map_pc,map_hd};
 struct site {address va;const char* hex;unsigned offset;kind type;};
 struct region_guard {address lo,hi;const char* hash;};
 #include "lc_fonts_sites.hpp"
-struct targets {address manager,names,style,render,scale_draw,scale_clip,map_pc,map_hd;};
+struct targets {address manager,names,style,render,scale_draw,scale_clip,map_pc,map_hd,list_clip,list_draw,list_height;};
 inline contribution make(const targets& t) {
  contribution c;c.owner="scoped Legends Classic fonts";
  c.guards.push_back({0x81d268,{0,0,0,0},"font manager must not exist"});
@@ -40,6 +40,9 @@ inline contribution make(const targets& t) {
    case kind::render:value=t.render;jump=true;break;
    case kind::scale_draw:value=t.scale_draw;jump=true;break;
    case kind::scale_clip:value=t.scale_clip;jump=true;break;
+   case kind::list_clip:value=t.list_clip;jump=true;break;
+   case kind::list_draw:value=t.list_draw;jump=true;break;
+   case kind::list_height:value=t.list_height;jump=true;break;
   }
   if(jump)c.writes.push_back(relocation(s.va,"e9",true,value,static_cast<unsigned>(original.size())-5,"font hook"));
   else {

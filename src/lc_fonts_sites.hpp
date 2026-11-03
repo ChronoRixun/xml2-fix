@@ -1,5 +1,8 @@
 // Generated interoperability guards; no game payloads.
 inline const site sites[]{
+ {0x5c2136,"680000803f",0,kind::list_clip},
+ {0x5c21f2,"680000803f",0,kind::list_draw},
+ {0x5c0b31,"8bc885c98986e0000000",0,kind::list_height},
  {0x598142,"be78da6900",1,kind::map_pc},
  {0x598157,"be60da6900",1,kind::map_hd},
  {0x597c3f,"c705f86181009cd66900",2,kind::manager},

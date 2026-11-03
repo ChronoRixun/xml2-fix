@@ -414,7 +414,7 @@ const char* native_skin_menu(const char* name,bool online_editor=false) noexcept
         {"online","lc_other_online","lc-online-skin/online/1\n",
             {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0","lc_o_picker_focus","lc_o_picker_up","lc_o_picker_down"}},
         {"campaign_lobby","lc_campaign_lobby","lc-online-skin/campaign_lobby/1\n",{"lc_o_focus_0_-400_4144_0"}},
-        {"games_list","lc_games_list","lc-online-skin/games_list/1\n",{"lc_o_picker_focus","lc_o_picker_up","lc_o_picker_down"}},
+        {"games_list","lc_games_list","lc-online-skin/games_list/1\n",{"lc_o_lan_focus","lc_o_picker_up","lc_o_picker_down"}},
         {"player_game_options","lc_player_game_options","lc-online-skin/player_game_options/1\n",
             {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0"}}
     };
@@ -1333,36 +1333,36 @@ void bind_broker(void* menu,screen s) {
         const bool present=index<v.rows.size();
         const auto* row=present ? &v.rows[index] : nullptr;
         std::string fields[7];
-        row_status status=row_status::lobby;build_relation build=build_relation::check;bool dim=false;int pips=0;
+        row_status status=row_status::lobby;build_relation build=build_relation::check;bool dim=false;
         if(row) {
             status=classify_row(row->players,row->max_players,row->joinable,row->in_progress);
             build=relate_build(row->version,version);
-            pips=pip_count(row->players);
             dim=status==row_status::full || status==row_status::closed || build==build_relation::other || row->password;
             fields[0]=display(row->name.empty() ? "Unnamed game" : row->name,24);
             fields[1]=display(row->host_name.empty() ? "Unknown" : row->host_name,12);
             fields[2]=display(row->zone.empty() ? "--" : row->zone,17);
             fields[3]=(row->players<0 ? std::string("--") : std::to_string(row->players))+"/"+std::to_string(row->max_players);
             // Status word, ping ("--": the broker sends no measurement and no connection is opened per row) and the
-            // SAME/CHECK words are drawn by the row scenes, so there are no cells [4]/[5]. [6]: only the other build's token.
+            // SAME/CHECK words use a compact DATA label. [6] holds only another build's token.
             fields[6]=build==build_relation::other ? display(row->version,8) : std::string();
         }
+        fields[5]=present ? "--" : "";
         if(broker_calls.room_rtt) {
             // Round 7: column 5 shows a measured RTT only for the room this PC is in (its host tunnel); no
-            // connection is opened per row, so every other row stays the neutral "--" scene.
+            // connection is opened per row, so every other row stays the neutral "--".
             const int rtt=row ? broker_calls.room_rtt(row->code) : -1;
             if(rtt>=0 && rtt<=60000) fields[5]=std::to_string(rtt)+" ms";
-            const auto key="room_"+std::to_string(i)+"_5";
-            bind_text(menu,key.c_str(),fields[5].c_str());
         }
+        bind_text(menu,("room_"+std::to_string(i)+"_5").c_str(),fields[5].c_str());
         for(const unsigned col:{0u,1u,2u,3u,6u}) {
             const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
             bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && rows_enabled);
         }
         const auto id=std::to_string(i);
         for(unsigned k=0;k<std::size(row_status_key);++k) hide(menu,("lc_row"+id+"_st_"+row_status_key[k]).c_str(),!(present && unsigned(status)==k));
-        for(int k=0;k<=4;++k) hide(menu,("lc_row"+id+"_pips_"+std::to_string(k)).c_str(),!(present && pips==k));
-        for(unsigned k=0;k<std::size(build_key);++k) hide(menu,("lc_row"+id+"_build_"+build_key[k]).c_str(),!(present && unsigned(build)==k));
+        const auto build_label="lc_row"+id+"_build";
+        bind_text(menu,build_label.c_str(),present ? (build==build_relation::same ? "SAME" : build==build_relation::check ? "CHECK" : "") : "");
+        hide(menu,build_label.c_str(),!present);
         hide(menu,("lc_row"+id+"_dim").c_str(),!(present && dim));
         const auto key="lc_row"+id+"_selected";hide(menu,key.c_str(),!present || index!=browse_selected);
     }
@@ -1847,9 +1847,10 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         hide(menu,(prefix+"pending").c_str(),!waiting_member);
         if(waiting_member) {
             const bool rate_known=waiting_member->local_fps!=linked_frame_rate_core::unknown_rate && waiting_member->session_fps;
-            bind_text(menu,(prefix+"fps").c_str(),rate_known ? linked_frame_rate_core::rate_text(waiting_member->local_fps,waiting_member->session_fps).c_str() : "");
-            bind_text(menu,(prefix+"fps_warning").c_str(),rate_known ? linked_frame_rate_core::warning_text(waiting_member->local_fps,waiting_member->session_fps,waiting_member->rate_capacity).c_str() : "");
-            hide(menu,(prefix+"fps").c_str(),!rate_known);hide(menu,(prefix+"fps_warning").c_str(),!rate_known);
+            const auto rate=rate_known ? (waiting_member->rate_capacity==linked_frame_rate_core::capacity::slow ?
+                linked_frame_rate_core::warning_text(waiting_member->local_fps,waiting_member->session_fps,waiting_member->rate_capacity) :
+                linked_frame_rate_core::rate_text(waiting_member->local_fps,waiting_member->session_fps)) : "Hero assigned at start";
+            bind_text(menu,(prefix+"hero_fallback").c_str(),rate.c_str());
             const auto* raw=waiting_member->name;
             const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string(waiting_member->host ? "Host" : "Player");
             bind_text(menu,(prefix+"name").c_str(),shown_name.c_str());
@@ -1866,11 +1867,9 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             hide(menu,(prefix+"other_build").c_str(),waiting_member->build!=1);
             hide(menu,(prefix+"checking_build").c_str(),waiting_member->build!=0);
             bind_text(menu,(prefix+"phase").c_str(),phase_text(waiting_member->phase));
-            hide(menu,(prefix+"hero_fallback").c_str(),rate_known);
             continue;
         }
         if(!member) {
-            hide(menu,(prefix+"fps").c_str(),true);hide(menu,(prefix+"fps_warning").c_str(),true);
             for(const auto* field:{"ready","not_ready","host","you","ping","ms","measuring","same_build","checking_build","selected","to_host","other_build"})
                 hide(menu,(prefix+field).c_str(),true);
             bind_text(menu,(prefix+"phase").c_str(),"");
@@ -1891,10 +1890,10 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         }
         const bool self_row=view.local_known && view.ids[i]==view.local;
         const bool rate_known=data && data->local_fps!=linked_frame_rate_core::unknown_rate && data->session_fps;
-        bind_text(menu,(prefix+"fps").c_str(),rate_known ? linked_frame_rate_core::rate_text(data->local_fps,data->session_fps).c_str() : "");
-        bind_text(menu,(prefix+"fps_warning").c_str(),rate_known ? linked_frame_rate_core::warning_text(data->local_fps,data->session_fps,data->rate_capacity).c_str() : "");
-        hide(menu,(prefix+"fps").c_str(),!rate_known);hide(menu,(prefix+"fps_warning").c_str(),!rate_known);
-        hide(menu,(prefix+"hero_fallback").c_str(),rate_known);
+        const auto rate=rate_known ? (data->rate_capacity==linked_frame_rate_core::capacity::slow ?
+            linked_frame_rate_core::warning_text(data->local_fps,data->session_fps,data->rate_capacity) :
+            linked_frame_rate_core::rate_text(data->local_fps,data->session_fps)) : "Hero assigned at start";
+        bind_text(menu,(prefix+"hero_fallback").c_str(),rate.c_str());
         const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && !self_row;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);

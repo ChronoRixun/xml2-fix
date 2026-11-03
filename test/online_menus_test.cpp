@@ -179,6 +179,7 @@ void __fastcall hide_stub(void*,void*,const char* item,bool value) {
 }
 std::array<unsigned char,0x100> model_item{};
 bool model_scene(std::string_view name) {
+    if(name.starts_with("lc_row") && name.ends_with("_build")) return false; // compact build facts are DATA text
     if(name=="lc_host_max_players" || name=="lc_broker_empty") return false; // DATA / empty-state nodes are plain text in the authored menus
     for(const std::string_view prefix:{"lc_host_","lc_broker_","lc_service_ok","lc_row","lc_code_complete"}) if(name.starts_with(prefix)) return true;
     return false;
@@ -200,7 +201,8 @@ void* __fastcall item_stub(void*,void*,const char* name) {
     // that only accepts the text setter fails these assertions instead of passing on a fake.
     if((mode=="r5b-views" || mode=="r20-browse-one") && model_scene(name)) return model_item.data();
     if((mode=="r5-broker" || mode.starts_with("r5-browse-") || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one")) &&
-        (std::string_view(name).starts_with("room_") || std::string_view(name).starts_with("prompt_"))) {
+        (std::string_view(name).starts_with("room_") || std::string_view(name).starts_with("prompt_") ||
+         (std::string_view(name).starts_with("lc_row") && std::string_view(name).ends_with("_build")))) {
         static std::map<std::string,std::array<unsigned char,0xb0>> rows;
         auto& it=rows[name];if(!*reinterpret_cast<unsigned*>(it.data())) it=text_item;
         return it.data();

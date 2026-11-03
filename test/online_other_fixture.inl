@@ -36,8 +36,10 @@ void run(const script_functions_rules::func_entry* entry) {
         const bool controls=std::string_view(native)!="games_list";
         if(controls) files.push_back("UI/models/lc_o_focus_0_-400_4144_0.IGB");
         if(std::string_view(native)=="online" || std::string_view(native)=="player_game_options") files.push_back("UI/models/lc_o_focus_0_-224_4144_0.IGB");
+        if(std::string_view(native)=="online") files.push_back("UI/models/lc_o_picker_focus.IGB");
+        if(std::string_view(native)=="games_list") files.push_back("UI/models/lc_o_lan_focus.IGB");
         if(std::string_view(native)=="online" || std::string_view(native)=="games_list")
-            for(const auto* model:{"focus","up","down"}) files.push_back("UI/models/lc_o_picker_"+std::string(model)+".IGB");
+            for(const auto* model:{"up","down"}) files.push_back("UI/models/lc_o_picker_"+std::string(model)+".IGB");
         for(const auto& file:files) { const auto path=root/file;std::filesystem::create_directories(path.parent_path());std::ofstream(path)<<"synthetic"; }
         const auto marker=root/("Data/lc_online_skin_"+std::string(native)+".cap");
         const auto capability="lc-online-skin/"+std::string(native)+"/1\n";

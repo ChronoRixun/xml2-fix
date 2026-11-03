@@ -99,6 +99,65 @@ __declspec(naked) void clip_scale_stub() {
   jmp dword ptr [clip_resume]
  }
 }
+// CListBox bypasses CText for clipping, drawing and row metrics. All three
+// must use the same private style scale; stock styles retain their exact path.
+DWORD list_clip_resume=0x5c213b,list_draw_resume=0x5c21f7,list_height_resume=0x5c0b3b;
+int __cdecl list_height(const void* style,int measured) {
+ const bool custom=style&&ready(*reinterpret_cast<const short*>(static_cast<const std::uint8_t*>(style)+8));
+ if(!custom)return measured;
+ for(const auto& entry:scales)if(entry.style==style) {
+  // Four view units of breathing room; stored once for drawing, scrolling and
+  // the native mouse hit division at 0x5c0e79. Resizing recalculates from retail.
+  const auto index=*reinterpret_cast<const short*>(static_cast<const std::uint8_t*>(style)+8);
+  const auto height=*reinterpret_cast<const short*>(manager.data()+index*stride+6);
+  const auto value=(height*entry.value+4)*pixel_factor(*reinterpret_cast<const volatile int*>(screen_height_va));
+  return std::max(1,static_cast<int>(value+0.5f));
+ }
+ return measured;
+}
+__declspec(naked) void list_clip_stub() {
+ __asm {
+  lea esp,[esp-4]
+  pushfd
+  pushad
+  push dword ptr [esi+94h]
+  call scale_bits
+  add esp,4
+  mov [esp+24h],eax
+  popad
+  popfd
+  jmp dword ptr [list_clip_resume]
+ }
+}
+__declspec(naked) void list_draw_stub() {
+ __asm {
+  lea esp,[esp-4]
+  pushfd
+  pushad
+  push dword ptr [esi+94h]
+  call scale_bits
+  add esp,4
+  mov [esp+24h],eax
+  popad
+  popfd
+  jmp dword ptr [list_draw_resume]
+ }
+}
+__declspec(naked) void list_height_stub() {
+ __asm {
+  pushad
+  push eax
+  push dword ptr [esi+94h]
+  call list_height
+  add esp,8
+  mov [esp+1ch],eax
+  popad
+  mov ecx,eax
+  test ecx,ecx
+  mov [esi+0e0h],eax
+  jmp dword ptr [list_height_resume]
+ }
+}
 void __fastcall render_item(void* item,void* edx) {
  auto* bytes=static_cast<std::uint8_t*>(item);
  const auto* style=*reinterpret_cast<std::uint8_t**>(bytes+0x94);
@@ -122,7 +181,8 @@ void install(HMODULE game) {
   if(error||!size) {logger::write("lc fonts: missing private font asset %s; classic fonts retained",name);return;}
  }
  auto c=lc_fonts_plan::make({address(manager.data()),address(font_names),address(reinterpret_cast<void*>(&style_stub)),
-  address(reinterpret_cast<void*>(&render_item)),address(reinterpret_cast<void*>(&draw_scale_stub)),address(reinterpret_cast<void*>(&clip_scale_stub)),address(map_pc),address(map_hd)});
+  address(reinterpret_cast<void*>(&render_item)),address(reinterpret_cast<void*>(&draw_scale_stub)),address(reinterpret_cast<void*>(&clip_scale_stub)),address(map_pc),address(map_hd),address(reinterpret_cast<void*>(&list_clip_stub)),
+  address(reinterpret_cast<void*>(&list_draw_stub)),address(reinterpret_cast<void*>(&list_height_stub))});
  std::string why;
  if(!patch_transaction::verify_expectations(c,why)) {logger::write("lc fonts: %s; classic fonts retained",why.c_str());return;}
  // The original entry's single stolen instruction has no relative operands.
@@ -140,6 +200,6 @@ void install(HMODULE game) {
  c.retain=[] {logger::write("lc fonts: rollback uncertified; stopping before engine startup");TerminateProcess(GetCurrentProcess(),1);};
  patch_transaction::transaction transaction;transaction.add(std::move(c));
  const auto result=transaction.commit();
- logger::write("lc fonts: %s (%s); eight slots, private style names and text scale per screen pixel (lc-fonts-screen/1)",patch_transaction::name(result),transaction.report().c_str());
+ logger::write("lc fonts: %s (%s); eight slots, private style names and text scale per screen pixel (lc-fonts-screen/1; lc-fonts-list/1)",patch_transaction::name(result),transaction.report().c_str());
 }
 }

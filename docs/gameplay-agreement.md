@@ -352,3 +352,23 @@ keeps native menus; a requested raise whose lookup did not install stays
 unverified and blocks online admission. If only the UI guard fails after a
 successful capacity raise, native UI fallback retains the correctly installed
 capacity value; it does not advertise a working custom dispatcher.
+
+## Linked-rate receive bounds
+
+The current sender appends the fixed 108-byte protocol-4 GCAP record and the
+8-byte FPSC settings trailer. The resulting native bodies are 232 bytes for
+0x18 (0x74 + 108 + 8), 164 for 0x1a (0x30 + 108 + 8), 124 for 0x1b
+(8 + 108 + 8), and 196 for 0x1f (0x50 + 108 + 8). The 0x18 receive cap includes
+both trailers; the other three remain within their existing 224-byte caps.
+`receive_validation_test` ties the join cap to the actual sender constants,
+feeds real encoded trailers through both receive boundaries and the installed
+native dispatch, and checks reliable wrapping and the one-byte-over rejection.
+The shared GNS/native table is `receive_validation_rules.hpp`.
+
+Room control messages bypass native opcode validation: room roster kind 12,
+wire 2, is at most 7 + 64 * 9 + 8 = 591 bytes including FPSC; Party wire-2
+reports are at most 124 bytes (cap 128), and four-row tables are 77 (cap 80).
+Their room dispatch runs before generic GNS parsing. The roster maximum and
+truncated/extra trailers are covered by `online_room_test`; `online_party_test`
+checks the maximal wire-2 reports/tables. The local menu replacements introduce
+no additional network message.

@@ -66,7 +66,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     screen("lc_browse");tick(child.data(),nullptr);assert(menu_lists==1 && !visibility["lc_broker_auth"]);
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
-    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
+    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build"] && texts["lc_row0_build"]=="SAME");
     if(mode=="r5-browse-empty") {
         assert(focused=="room_0_0");
         menu_rows_json="-";ticks+=2100;post(intent::refresh);tick(child.data(),nullptr);
@@ -290,17 +290,15 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     // Connected service: the scene shows, the plain text stays empty so the word is never drawn twice.
     assert(shown("lc_service_ok") && texts["service"].empty() && texts["self_state"].empty());
     const char* kinds[]{"lobby","progress","full","lobby","lobby","closed","lobby"};
-    const int pips[]{2,3,4,1,0,1,1};
     const char* builds[]{"same","same","same","other","check","same","same"};
     const bool dims[]{false,false,true,true,false,true,true};
     for(unsigned r=0;r<browse_rows;++r) {
         const auto id="lc_row"+std::to_string(r);
         for(const char* k:row_status_key) assert((std::string(k)==kinds[r] ? shown(id+"_st_"+k) : gone(id+"_st_"+k)));
-        for(int k=0;k<=4;++k) assert((k==pips[r] ? shown(id+"_pips_"+std::to_string(k)) : gone(id+"_pips_"+std::to_string(k))));
-        for(const char* k:build_key) assert((std::string(k)==builds[r] ? shown(id+"_build_"+k) : gone(id+"_build_"+k)));
+        assert(shown(id+"_build") && texts[id+"_build"]==(std::string(builds[r])=="same" ? "SAME" : std::string(builds[r])=="check" ? "CHECK" : ""));
         assert(dims[r] ? shown(id+"_dim") : gone(id+"_dim"));
-        // The status word, the ping "--" (no measurement exists) and SAME/CHECK are scenes: no DLL text, no cells [4]/[5].
-        assert(!texts.count("room_"+std::to_string(r)+"_4") && !texts.count("room_"+std::to_string(r)+"_5"));
+        // Status stays a scene; ping and SAME/CHECK use compact DATA labels.
+        assert(!texts.count("room_"+std::to_string(r)+"_4") && texts["room_"+std::to_string(r)+"_5"]=="--");
     }
     assert(texts["room_0_3"]=="2/4" && texts["room_4_3"]=="--/4" && texts["room_0_2"]=="Mansion" && texts["room_1_2"]=="--");
     assert(texts["room_3_6"]=="LC36" && texts["room_0_6"].empty() && texts["room_4_6"].empty()); // only the other build's token
@@ -369,7 +367,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(menu_view().rows.empty() && menu_view().list_known && !menu_view().stale);
     assert(texts["list_count"]=="No public games" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
     for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
-    for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
+    for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build"));
 
     // 060s live: an empty cached list read "0 last known games". Exercise the
     // production tick/binder after a failed refresh, preserving the real empty list.

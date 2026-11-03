@@ -3,6 +3,8 @@
 // the production contribute(). Handlers, dispatchers and registrations are synthetic; no game content is embedded.
 #include "receive_validation.hpp"
 #include "receive_validation_rules.hpp"
+#include "gameplay_agreement_rules.hpp"
+#include "network_validation.hpp"
 #include "entity_capacity.hpp"
 #include "patch_transaction.hpp"
 #include <Windows.h>
@@ -97,9 +99,9 @@ namespace
 	std::vector<std::uint8_t> dispatcher(0x12b3c + 256 * 0x10 + 0x10);
 	struct entry { std::uint32_t fn = 0, context = 0, flags = 0; };
 	struct node { std::uint32_t pad0[2]{}; std::uint32_t next = 0; std::uint32_t pad3 = 0; std::uint32_t handler = 0; };
-	std::array<node, 8> nodes{};
-	std::array<entry, 8> entries{};
-	std::array<std::uint32_t, 8> cells{};
+	std::array<node, 9> nodes{};
+	std::array<entry, 9> entries{};
+	std::array<std::uint32_t, 9> cells{};
 	node* heads[256]{};
 	node* tails[256]{};
 	unsigned registered = 0;
@@ -136,7 +138,7 @@ namespace
 	}
 
 	// ---- synthetic handlers ----
-	int calls[8]{}, last_context[8]{}, return_value[8]{};
+	int calls[9]{}, last_context[9]{}, return_value[9]{};
 	template <int N> int __cdecl handler(void* event)
 	{
 		++calls[N];
@@ -194,6 +196,39 @@ namespace
 			pop ebp
 			ret
 		}
+	}
+
+	std::vector<std::uint8_t> agreement_body(std::size_t base)
+	{
+		gameplay_capabilities::record agreement;
+		expect(agreement.finalize(), "synthetic installed gameplay record finalizes");
+		const auto record = agreement.bytes();
+		const auto settings = linked_frame_rate_core::encode(30);
+		std::vector<std::uint8_t> result(base, 0);
+		result.insert(result.end(), record.begin(), record.end());
+		result.insert(result.end(), settings.begin(), settings.end());
+		return result;
+	}
+	void admission_wire_tests()
+	{
+		using namespace gameplay_agreement_rules;
+		static_assert(receive_validation_rules::game_info_max == request_size + gameplay_capabilities::record_size + linked_frame_rate_core::settings_size,
+		              "join receive cap must track the actual sender's native body and both trailers");
+		for (const auto [opcode, base] : std::array<std::pair<std::uint8_t, std::size_t>,4>{{
+			{0x18,request_size},{0x1a,info_size},{0x1b,ack_size},{0x1f,reply_size}}})
+		{
+			const auto message = agreement_body(base);
+			expect(valid(opcode, message.data(), message.size()), "full native admission body plus real GCAP and FPSC trailers passes");
+			expect(network_validation::valid_message(opcode, message.data(), message.size()), "the same linked admission fits the GNS receive boundary");
+			const auto framed = gns_transport_core::frame({opcode, false, message});
+			expect(gns_transport_core::parse(framed.data(), framed.size()).valid, "the GNS game frame admits the current admission size");
+			std::vector<std::uint8_t> wrapped{opcode,0,0};
+			wrapped.insert(wrapped.end(), message.begin(), message.end());
+			expect(valid(0x00, wrapped.data(), wrapped.size()-1), "reliably wrapped admission with both trailers passes");
+		}
+		const auto message = agreement_body(request_size);
+		auto too_long = message; too_long.push_back(0);
+		expect(check(0x18, too_long.data(), too_long.size()) == drop_reason::body_too_long, "one byte past the linked join cap is refused");
 	}
 
 	void rule_table_tests()
@@ -379,7 +414,7 @@ namespace
 		std::memset(b.data(), 'a', 224); b[0x3e] = 0;
 		expect(valid(0x18, b.data(), 224), "game info with the agreement record and a terminated name passes");
 		std::memset(b.data(), 'a', 224); expect(check(0x18, b.data(), 224) == drop_reason::unterminated_string, "game info without a terminator is dropped");
-		expect(check(0x18, b.data(), 225) == drop_reason::body_too_long, "game info past the agreement size is dropped");
+		expect(check(0x18, b.data(), receive_validation_rules::game_info_max + 1) == drop_reason::body_too_long, "game info past both agreement trailers is dropped");
 		std::memset(b.data(), 0, 238); b[0xaa] = 0; expect(valid(0x44, b.data(), 238), "roster with no entries passes");
 		b[0xaa] = 0xff; expect(check(0x44, b.data(), 238) == drop_reason::roster_underflow, "roster with 255 entries in 238 bytes is dropped");
 		b[0xaa] = 3; expect(valid(0x44, b.data(), 238), "roster with 3 entries in 238 bytes passes");
@@ -451,6 +486,14 @@ namespace
 			expect(receive_validation::owns_dispatch_entry(), "the installed jump is recognised as this module's own (the GNS signature check accepts exactly it)");
 			expect(logger::has("receive validation installed"), "the install logs its one line");
 		}
+
+		// A real trailer-bearing 0x18 must cross the installed guard, not just the rule helper.
+		enroll(0x18, &handler<8>, 0xabc, 0);
+		const auto linked_join = agreement_body(gameplay_agreement_rules::request_size);
+		make_event(0x18, linked_join.size());
+		std::copy(linked_join.begin(), linked_join.end(), body.begin());
+		expect(dispatch(event.data()) == 0 && calls[8] == 1 && receive_validation::dropped() == 0,
+		       "installed validator forwards the 232-byte linked join to native dispatch");
 
 		// Valid traffic still reaches its handler, with the registration context and result intact.
 		enroll(0x01, &handler<0>, 0xabc, 0);
@@ -570,6 +613,7 @@ int main(int argc, char** argv)
 	DWORD old = 0;
 	if (!VirtualProtect(fixture_space, sizeof fixture_space, PAGE_EXECUTE_READWRITE, &old)) return 2;
 	rule_table_tests();
+	admission_wire_tests();
 	native_dispatch_tests();
 	std::printf("Receive validation: %d check(s), %d failure(s)\n", checks, failures);
 	return failures ? 1 : 0;

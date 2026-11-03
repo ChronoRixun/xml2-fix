@@ -2119,3 +2119,42 @@ online flow. Ordinary PC options and save dialogs retain their own routes.
 The companion capability is `lc-online-no-gamespy/1`; regenerate matching
 content before accepting the candidate. Live visual/input acceptance remains
 required, including guard/font/marker/resource failures and Back at both aspects.
+
+## Native item-map budget and LAN list fixes
+
+The scene-anchor expansion does not expand CMenu's separate item map.
+Retail item insertion at 0x5af490 refuses another item when the count at
+menu +0x1608 equals 0xaf (175); the check is at 0x5af4af. This was rechecked
+against the owned retail image during the beta.2 blocker fix. Lobby markers
+placed after that limit were absent, so `lobby_live()` selected native refresh
+and input. The companion builder now validates the independent 175-item limit,
+puts the marker before lobby content, and reuses `lc_pN_hero_fallback` as one
+DATA field for the local/session rate pair, or the slow warning naming the session
+target (unknown rate: the normal hero fallback). Native text stays on one line.
+Its owned host/join resources use 173/169 items including backdrops. Browse
+retains seven rows at 172 items: numeric occupancy replaces redundant pip
+variants and one DATA label per row carries SAME/CHECK; another build still
+shows its token and the existing dim state.
+
+The native discovery receiver 0x6090d0 allocated at 0x609122 and appended at
+0x6091d3 on every compatible answer. Repeated broadcast/direct replies could
+therefore create duplicate rows. After gameplay/settings validation, the browser
+adapter walks the current bounded 100-row native table and refreshes an existing
+source-IPv4/game-port row in place, issuing the same status-6 update. It keeps
+the native endpoint and version flag semantics, checks the complete chain before
+writing, and refuses malformed/cyclic/out-of-pool tables. Different source
+addresses or ports remain distinct; names alone never identify a host. There is
+no cache across searches or changes to gameplay/admission settings.
+
+`lc-fonts-list/1` adds the private style scale at LISTBOX clipping/drawing
+(0x5c2136/0x5c21f2) and row-height initialization (0x5c0b31). The stored row
+height covers rendering, scrolling and native mouse hit division (0x5c0e79).
+Private height derives from atlas metrics and viewport height with four view
+units of spacing; classic styles return their original height and scale.
+These writes join the existing guarded font transaction. The builder uses the
+private row style for the LAN list and centered `lc_o_lan_focus` art, because
+native positioning places focus at the row center (0x5c14b4..0x5c14c8).
+The second header describes the native composite column as CAMPAIGN / PLAYERS.
+The details textbox retains its native metrics. Both repositories must be
+integrated and content regenerated together; older companions lacking the
+list-font capability are refused by builder preflight.
