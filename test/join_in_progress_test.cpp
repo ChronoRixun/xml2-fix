@@ -866,6 +866,9 @@ int main(int argc, char** argv)
 				check(at(clock_step_site, 4) == "89442410" && at(clock_step_target, 3) == "0fb7c8" && at(0x55922e, 5) == "25ff7f0000" && at(0x55923b, 8) == "c7442414cdcccc3c", "AR7: the guarded bytes hold the original mov, the jump target's movzx, the mask and the 0.025 s constant");
 				check(std::string(clock_step_guards[2].hex).substr(0, 12) == "d90530006800" && clock_step_guards[2].va == clock_step_observe_site && clock_step_observe_resume == clock_step_observe_site + clock_step_observe_original.size(), "AR7: the observer site is the guarded fld dword [0x680030] (6 bytes), resume right after it");
 				check(step_observe_frames == 41 && step_observe_lines == 2048, "AR7: the observer covers frames 0..40 and at most 2048 lines per process");
+				bool belt = true;
+				for (unsigned n = 10; n <= 60; ++n) { float f = canonical_clock_step(n); std::uint32_t u; std::memcpy(&u, &f, 4); if (f != 1.0f / float(n) || !(f > 0.0f) || (n == 30 && u != 0x3d088889u) || (n == 60 && u != 0x3c888889u)) belt = false; }
+				check(belt && canonical_clock_step(0) == 0.0f, "AR7 belt: 1/N for N in 10..60 (30 -> 0x3d088889, 60 -> 0x3c888889); no rate -> 0 (the stock step stays)");
 			}
 			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
 			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the

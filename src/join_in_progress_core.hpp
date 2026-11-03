@@ -812,6 +812,10 @@ namespace join_in_progress_core
 	inline float symmetric_clock_step(std::uint16_t word, bool) { return step_seconds(word); }
 	// What the wire carries for a record (0x5597f1 and the delta kinds: bit 15 stripped); the receiver stores it verbatim.
 	inline std::uint16_t wire_step_word(std::uint16_t word) { return word & 0x7fffu; }
+	// Belt (FINDINGS 2.2, [Online] CanonicalClockStep, default OFF): while an online session is live, the frame's step is
+	// 1/N (N = the session's agreed tick, the host's linked rate or the stock 30) whatever the records carry, so game time
+	// is 2.0 + k/N on every peer by construction. A = 1/N is non-zero, so the stock set_one_shot_step(A) still runs.
+	inline float canonical_clock_step(unsigned rate) { return rate ? 1.0f / float(rate) : 0.0f; }
 	constexpr unsigned step_observe_frames = 41; // `jip step:` lines for frames 0..40 of every epoch (JoinDiagnostics=1)
 	constexpr unsigned step_observe_lines = 2048;
 	// The apply's mask argument must be a lockstep ring record's code-mask field (synchronizer 0x79fbb0: four blocks of 0x3184,
