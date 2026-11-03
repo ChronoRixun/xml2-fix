@@ -40,11 +40,15 @@ std::vector<std::uint8_t> captured;
 EResult capture(HSteamNetConnection, const void* data, std::uint32_t size) { const auto* b = static_cast<const std::uint8_t*>(data); captured.assign(b, b + size); return k_EResultOK; }
 int receive(HSteamNetConnection c, SteamNetworkingMessage_t** out, int max) { return closure_fixture::receive(c, out, max); }
 void pc(const std::string& id, bool hosting) {
+    frame_rate::clear_session_rate();
+    if (hosting) assert(frame_rate::adopt_session_rate(frame_rate::host_rate(),true));
     while (!queued.empty()) { queued.front()->Release(); queued.pop_front(); }
     room::tunnels.clear(); room::arrivals.clear(); room::arrivals_bytes = 0; room::members.clear(); room::client = {};
     room::hosting = hosting; room::own_id = id; room::room_ready = false; room::room_code.clear(); room::host_id.clear();
+    room::rate_refused = false;
     room::configured_code = "ABCDEFGH"; room::own_address = 0; room::room_clock = &fake::now; fake::clock = 10000;
     room::receive_messages = receive; room::send_roster_bytes = capture; room::wanted = true;
+    room::close_connection = closure_fixture::close;
     room::menu_client = true; room::cert_ready = room::ice_ready = true; room::broker_gone = false; room::key_loaded = true;
 }
 struct host_run { std::vector<map_t> maps; std::vector<std::vector<std::uint8_t>> rosters; }; // after event k
@@ -55,7 +59,7 @@ host_run run_host(const broker_model& bm) {
     for (const auto& e : bm.events) {
         room::handle(core::parse(line(e)));
         out.maps.push_back(current());
-        out.rosters.push_back(core::encode_roster(room::members.gen(), room::members.rows()));
+        out.rosters.push_back(core::encode_session_roster(room::members.gen(), room::members.rows(), frame_rate::session_rate()));
         assert(!out.rosters.back().empty() && room::own_virtual() == 0x0a4d0001);
     }
     // The production send path carries exactly these bytes to a connected member.
@@ -90,7 +94,7 @@ void run_joiner(const broker_model& bm, const host_run& h, std::size_t j, std::s
     for (std::size_t p = 0; p <= stream; ++p) {
         while (next < rosters.size() && std::min(rosters[next].first, stream) == p) {
             closure_fixture::send(rosters[next].second); room::poll(); ++next;
-            assert(room::members.confirmed() && queued.empty());
+            assert(room::members.confirmed() && frame_rate::session_rate()==frame_rate::host_rate() && queued.empty());
         }
         if (p < stream) room::handle(core::parse(line(bm.events[j + 1 + p])));
     }
@@ -154,7 +158,7 @@ void ordering() {
     }
     std::cout << "PASS roster ordering: a lobby joiner (2-4 players) opens every member's connection before the host's roster; labelled when it arrives\n";
 }
-// The host's roster refused or missing: the map stays provisional, then the old broker order (a host build before AS).
+// Missing/legacy settings never fall back to an unsafe rate or a provisional map.
 void refusals() {
     const broker_model bm = script({{'j', 1}, {'j', 2}, {'j', 3}, {'l', 2}, {'j', 2}});
     const auto h = run_host(bm);
@@ -176,17 +180,59 @@ void refusals() {
         if (v == 1) rows.pop_back(), rows.back().active = false;
         if (v == 2) rows.push_back({member(4), true});
         if (v == 3) rows[3].id = member(1);
-        closure_fixture::send(core::encode_roster(e.gen, rows)); room::poll(); assert(!room::members.confirmed() && room::own_virtual() == 0);
+        closure_fixture::send(core::encode_session_roster(e.gen, rows,60)); room::poll(); assert(!room::members.confirmed() && room::own_virtual() == 0);
     }
-    // No roster: provisional for 5 s on the connected host tunnel, then the broker's order (the old behaviour).
+    // No compatible roster: refuse after 5 seconds; no broker-order fallback.
     fake::clock += 4999; room::roster_wait_tick(); assert(!room::members.confirmed());
-    fake::clock += 1; room::roster_wait_tick(); assert(room::members.confirmed() && room::own_virtual() == 0x0a4d0004);
-    // A roster arriving after that still wins (the host's map is the one its game hands out).
+    fake::clock += 1; room::roster_wait_tick(); assert(!room::members.confirmed() && room::own_virtual() == 0 && room::view().error=="version_mismatch");
+    // A late valid roster cannot reopen a refused generation, even through the
+    // legacy datagram path. Leave/retry must start a fresh generation.
     closure_fixture::send(h.rosters.back()); room::poll();
+    assert(!room::members.confirmed() && !room::roster_ready() && !frame_rate::session_rate());
+    start();
+    auto& fresh_host=room::ensure_tunnel(H);fresh_host.connection=123;fresh_host.connected=true;
+    closure_fixture::send(h.rosters.back());room::poll();
     assert(current() == h.maps.back() && room::own_virtual() == h.maps.back().at(e.id) && room::own_virtual() == 0x0a4d0003);
     // An older roster than the one adopted is refused.
     closure_fixture::send(h.rosters[h.rosters.size() - 2]); room::poll(); assert(current() == h.maps.back());
-    std::cout << "PASS roster refusals: non-host tunnel, truncated, bad flag, foreign leader, missing self, five active, repeated id, stale; 5 s broker-order fallback; a late host roster still wins\n";
+    std::cout << "PASS roster refusals: non-host tunnel, truncated, bad flag, foreign leader, missing self, five active, repeated id, stale; missing rate refuses after 5 s\n";
+}
+void linked_rates() {
+    for (unsigned host_rate : {30u,60u}) {
+        frame_rate::local_setting=host_rate;
+        const auto bm=script({{'j',1}});
+        const auto h=run_host(bm);
+        const auto& e=bm.events.back();
+        const unsigned local=host_rate==30 ? 60 : 30;
+        frame_rate::local_setting=local;
+        pc(e.id,false);
+        assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
+        room::handle(core::parse(resolve_line(e)));
+        auto& host=room::ensure_tunnel(H);host.connection=123;host.connected=true;host.connected_at=fake::clock;
+        std::uint32_t target=7;
+        assert(!room::admission_target(room::view().generation,target) && !frame_rate::session_rate());
+        closure_fixture::send(h.rosters.back());room::poll();
+        assert(frame_rate::session_rate()==host_rate && frame_rate::local_rate()==local && room::members.confirmed());
+        assert(room::admission_target(room::view().generation,target)); // rate already adopted at this boundary
+        const auto wrong=core::encode_session_roster(room::members.gen(),room::members.rows(),local);
+        closure_fixture::send(wrong);room::poll();
+        assert(frame_rate::session_rate()==host_rate && room::view().error=="version_mismatch");
+        room::leave();
+        assert(!frame_rate::session_rate() && frame_rate::local_rate()==local);
+        std::cout<<"PASS linked rate production room: host "<<host_rate<<" / guest "<<local<<", before-admission override, conflicting update refused, restored on Leave\n";
+    }
+    frame_rate::local_setting=60;
+    // A beta.1 kind-12 roster cannot confirm the map or open native admission.
+    pc(member(1),false);
+    const auto bm=script({{'j',1}});const auto& e=bm.events.back();
+    assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
+    room::handle(core::parse(resolve_line(e)));
+    auto& host=room::ensure_tunnel(H);host.connection=123;host.connected=true;
+    closure_fixture::send(core::encode_roster(e.gen,{{H,true},{e.id,true}}));room::poll();
+    assert(!room::members.confirmed() && !frame_rate::session_rate() && room::view().error=="version_mismatch");
+    assert(fake::status_error.find("linked frame-rate settings")!=std::string::npos);
+    room::leave();
+    std::cout<<"PASS linked rate beta.1 roster refused before native admission\n";
 }
 void run_all() {
     std::cout << std::unitbuf;
@@ -225,6 +271,7 @@ void run_all() {
     std::cout << "PASS roster agreement random churn: 150 rooms x 12 changes, " << (runs - before) << " joiner runs agree with the host's map\n";
     ordering();
     refusals();
+    linked_rates();
     std::cout << "PASS roster offline: " << runs << " joiner runs over " << intervals << " membership intervals, every PC's map equals the host's\n";
 }
 }

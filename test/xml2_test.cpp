@@ -47,6 +47,8 @@
 #define DIRECTINPUT_VERSION 0x0800
 #include <WinSock2.h>
 #include <Windows.h>
+#include "linked_frame_rate_core.hpp"
+#include "gameplay_capabilities.hpp"
 #include <dinput.h>
 #include <timeapi.h>
 #include <Xinput.h>
@@ -930,6 +932,7 @@ namespace
 
 	// The frame limiter's decisions (frame_rate_rules.hpp): the ini keys, the target, the bytes of the
 	// game's own 60 fps spin, the pacing and the fps count.
+    #include "linked_frame_rate_checks.inl"
 	void check_frame_rate_rules()
 	{
 		using namespace frame_rate_rules;
@@ -5712,7 +5715,9 @@ namespace
 		CHECK(resolved("xmenlegpc.available.gamespy.com") == "127.0.0.1" && resolved("xmenlegpc.ms7.gamespy.com") == "127.0.0.1");
 		CHECK(resolved("natneg1.gamespy.com") == "127.0.0.1" && resolved("natneg2.gamespy.com") == "127.0.0.1" && resolved("peerchat.gamespy.com") == "127.0.0.1");
 		CHECK(resolved("xmenlegpc.ms7.openspy.net") == "127.0.0.1");
-		CHECK(resolved("xmenlegpc.gamespy.com.invalid") != "127.0.0.1"); // not GameSpy's: a real lookup (.invalid never resolves)
+        if (!std::getenv("XML2_FIX_TEST_OFFLINE"))
+		    CHECK(resolved("xmenlegpc.gamespy.com.invalid") != "127.0.0.1"); // not GameSpy's: a real lookup (.invalid never resolves)
+        else std::puts("  skip  external .invalid DNS assertion (XML2_FIX_TEST_OFFLINE)");
 		WSACleanup();
 		const auto online_log = read_file(module_dir() / "xml2-fix.log");
 		CHECK(online_log.find("online: every GameSpy and OpenSpy host resolves to 127.0.0.1 ([Online] Server)") != std::string::npos);
@@ -5860,6 +5865,10 @@ namespace
 		CloseHandle(pipe);
 
 		const auto log = read_file(module_dir() / "xml2-fix.log");
+		if (log.find("test: input pipe " + pipe_path + " ([Test] InputPipe=1, PipeName " + name + ")") == std::string::npos) {
+            const auto at=log.find("test: input pipe ");
+            std::printf("  info  pipe startup log: %s\n",at==std::string::npos ? "missing" : log.substr(at,log.find('\n',at)-at).c_str());
+        }
 		CHECK(log.find("test: input pipe " + pipe_path + " ([Test] InputPipe=1, PipeName " + name + ")") != std::string::npos);
 		CHECK(log.find("pipe keys reach the game without focus; NoActivate copies use only pipe keys") != std::string::npos);
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
@@ -5942,6 +5951,14 @@ namespace
 		std::printf("online (GameSpy -> OpenSpy)\n");
 		WSADATA wsa{};
 		WSAStartup(MAKEWORD(2, 2), &wsa);
+        // Preserve the normal CI checks by default. Restricted offline tasks
+        // explicitly opt out of the two external DNS assertions; localhost and
+        // the redirect rules still run. The omission is visible in the log.
+        if (std::getenv("XML2_FIX_TEST_OFFLINE")) {
+            std::puts("  skip  2 external OpenSpy DNS assertions (XML2_FIX_TEST_OFFLINE)");
+            CHECK(gethostbyname("localhost") != nullptr);
+            WSACleanup();return;
+        }
 		const hostent* gamespy = gethostbyname("xmenlegpc.master.gamespy.com");
 		CHECK(gamespy != nullptr);
 		in_addr redirected{};
@@ -12671,6 +12688,7 @@ int main(const int argc, char** argv)
 	check_display_rules();
 	check_menu_mouse_mapping();
 	check_frame_rate_rules();
+    check_linked_frame_rate();
 	check_menu_screens();
 	check_options_menu_rules();
 	check_resolution_rules();
@@ -12749,7 +12767,9 @@ int main(const int argc, char** argv)
 	CHECK(log.find("prompts: button prompts show") == std::string::npos);
 	// Discord Rich Presence is on by default, but only ever in XMen2.exe: never this test's own presence.
 	CHECK(log.find("discord: XMen2.exe isn't loaded at 0x400000 (not the game?) - no presence") != std::string::npos && log.find("discord: presence on") == std::string::npos);
-	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
+    if (!std::getenv("XML2_FIX_TEST_OFFLINE"))
+	    CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
+    else std::puts("  skip  external OpenSpy resolution log assertion (XML2_FIX_TEST_OFFLINE)");
 	if (pads > 0)
 	{
 		CHECK(log.find("hooked a DirectInput 8 instance") != std::string::npos);

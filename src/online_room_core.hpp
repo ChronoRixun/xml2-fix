@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "linked_frame_rate_core.hpp"
 
 namespace online_room_core
 {
@@ -444,6 +445,25 @@ namespace online_room_core
 		}
 		return true;
 	}
+    // Kind 12 version 2 adds the session settings trailer to the existing roster.
+    // Keep the v1 codec above for explicit legacy/refusal fixtures, never for runtime fallback.
+    inline std::vector<std::uint8_t> encode_session_roster(long long gen, const std::vector<roster_row_t>& rows, unsigned fps) {
+        if (!linked_frame_rate_core::valid(fps)) return {};
+        auto out = encode_roster(gen, rows);
+        if (out.empty()) return {};
+        out[1] = 2;
+        const auto settings = linked_frame_rate_core::encode(fps);
+        out.insert(out.end(), settings.begin(), settings.end());
+        return out;
+    }
+    inline bool decode_session_roster(const std::uint8_t* data, std::size_t size, long long& gen, std::vector<roster_row_t>& rows, unsigned& fps) {
+        fps = 0; rows.clear();
+        if (!data || size < roster_header + roster_row + linked_frame_rate_core::settings_size || data[1] != 2) return false;
+        const auto length = size - linked_frame_rate_core::settings_size;
+        if (!linked_frame_rate_core::decode(data + length, linked_frame_rate_core::settings_size, fps)) return false;
+        std::vector<std::uint8_t> legacy(data, data + length); legacy[1] = roster_wire;
+        return decode_roster(legacy.data(), legacy.size(), gen, rows);
+    }
 	class room_roster
 	{
 		struct entry { std::string id; std::uint32_t address; bool active = true; };

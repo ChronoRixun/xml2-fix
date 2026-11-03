@@ -22,6 +22,7 @@ bool host_role=true,image_present=true,image_success=true,admitted=true;
 int broadcasts=0,transfers=0,starts=0,kicks=0,leaves=0,announces=0,refreshes=0,activations=0,cleanups=0;
 bool last_ready=false;
 bool fixture_throw=false,fixture_bad_code=false;
+bool lobby_rate_facts=false;
 void* participant(unsigned id) {
     for(unsigned i=0;i<people_count;++i) if(participant_ids[i]==id) return lobby_people[i].data();
     return nullptr;
@@ -86,6 +87,9 @@ bool lobby_fields_stub(online_menus::lobby_fixture& out) {
     if(fixture_throw) throw std::bad_alloc();
     std::strcpy(out.code,fixture_bad_code ? "BAD" : "ABCD-EFGH");out.count=3;
     out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};
+    if(lobby_rate_facts) for(auto& member:out.members) {
+        member.local_fps=60;member.session_fps=30;member.rate_capacity=linked_frame_rate_core::capacity::unknown;
+    }
     if(mode.find("r7-")!=std::string::npos) {
         // Round 7 card facts (docs/online-party.md section 8): RTT provenance/route, build stage, phase, one pending member.
         out.members[0].ping_to_host=true;out.members[0].route=2;out.members[0].build=1;out.members[0].phase=6;
@@ -912,6 +916,11 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     assert(texts["lc_room_code"]=="ABCD-EFGH" && texts["lc_ready_count"]=="2" && texts["lc_member_count"]=="3");
     assert(texts["lc_waiting_name"]=="Alex" && !visibility["lc_ready_waiting"]);
     assert(!visibility["lc_p3_hero_fallback"] && texts[host ? "lc_p2_ping" : "lc_p1_ping"]==(host ? "38" : "0"));
+    lobby_rate_facts=true;tick(child.data(),nullptr);
+    assert(texts["lc_p2_fps"]=="60 local / 30 online" && texts["lc_p2_fps_warning"]=="Using host's 30 fps" && !visibility["lc_p2_fps"] && visibility["lc_p2_hero_fallback"]);
+    lobby_rate_facts=false;tick(child.data(),nullptr);
+    assert(visibility["lc_p2_fps"] && visibility["lc_p2_fps_warning"] && !visibility["lc_p2_hero_fallback"]);
+    std::cout<<"PASS linked rate lobby: local/session fields, plain mismatch notice, stale facts cleared\n";
     const auto pool=*reinterpret_cast<unsigned*>(0x8abe20);
     auto row_text=reinterpret_cast<const char*(__fastcall*)(void*,void*,int)>(0x5bfcd0);
     auto row_value=reinterpret_cast<unsigned(__fastcall*)(void*,void*,int)>(0x5bfc20);

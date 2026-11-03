@@ -34,6 +34,7 @@
 // above what FrameRate allows.
 
 #include "frame_rate_rules.hpp"
+#include "linked_frame_rate_core.hpp"
 
 #include <Windows.h>
 
@@ -58,6 +59,16 @@ namespace frame_rate
 	// The wait runs above normal priority; `whole_thread` ([Online] TickPriority=thread) keeps the game's thread above
 	// normal for as long as frames are online.
 	void pace_online(unsigned tick_fps, bool whole_thread);
+
+    // Transient session settings. Never retargets/persists the local display option.
+    unsigned local_rate(); // numeric local display setting; 0 = unlimited
+    unsigned host_rate();  // local display pacing, limited by the configured online tick
+    unsigned session_rate();
+    bool adopt_session_rate(unsigned fps, bool room_owned = false);
+    void clear_session_rate(bool room_only = false);
+    // Called only after the native shared-input gate passed, before simulation.
+    void shared_frame_started();
+    linked_frame_rate_core::capacity capacity_status();
 
 	// Whether frames need pacing, so Present must be hooked: FrameRate paces, or it is above 60 or
 	// unlimited and menus are held at 60.

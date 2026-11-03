@@ -11,8 +11,9 @@
 // per frame, with each step's duration the slowest participant's measured frame time (0x559190), so the simulation
 // keeps wall-clock speed at either rate. TickRate=60 replaces the online 1/30 with 1/60 (frame_rate_rules.hpp,
 // online_tick_patch), from DllMain, after checking the bytes; [Display] FrameRate's own patch of the offline 1/60
-// shares those bytes and accepts this one. Gameplay-agreement rule 29 (TickRate) carries the rate in effect: a 60 PC
-// and a 30 PC refuse each other by name, and a failed patch advertises 30 (it plays with 30 PCs).
+// shares those bytes and accepts this one. With TickRate, GNS or our co-op menus requested, rule 29 revision 2
+// agrees on host-owned session pacing; the verified timer patch is required. The host's numeric target is sent
+// in the versioned room roster/native admission messages. Local TickRate is a hosting ceiling, never a guest veto.
 
 #include <Windows.h>
 
@@ -23,8 +24,11 @@
 namespace online_tick
 {
 	void install(HMODULE game);
-	bool requested();       // the key is in xml2-fix.ini: rule 29 is registered
-	unsigned rate();        // the online frames per second in effect (30 or 60)
+	bool requested();       // TickRate/GNS/room menus requested: rule 29 is registered
+    bool linked();
+    bool verified();
+    std::uint16_t revision();
+	unsigned rate();        // session target when adopted, otherwise the local 30/60 ceiling
 	std::array<std::uint32_t, 4> agreement_values();
 	// `count_at_30` frames at 30 fps as the same length of time at the session's rate.
 	std::size_t frames_for(std::size_t count_at_30);

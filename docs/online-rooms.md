@@ -187,12 +187,13 @@ Host = broker                       ; this PC opens a room when its online sessi
    joins never collide with live assignments. The broker's `resolve_ok` lists only the members present now, so a
    joiner cannot rebuild that history (Fix AS, RR-1: numbering that list gave a late rejoiner another map than the
    room's); its map stays provisional (only the host's `.1`) until the host's **room roster** arrives on the host's room
-   connection (link kind 12: `[12][1][broker gen u32 LE][count][count x (8-byte key, active flag)]`, sent reliably on
+   connection (link kind 12: `[12][2][broker gen u32 LE][count][count x (8-byte key, active flag)][8-byte frame-rate settings]`, sent reliably on
    every member's connect and to every member after each membership change). The member adopts it and replays the
    broker `peer_joined` / `peer_left` events it saw after the roster's generation (later copies of events the roster
    already holds are skipped by `gen`). Until then the joiner's game reaches no member (admission, datagrams and the
-   LAN search wait). A host without the roster (an older build): after 5 s on the connected host tunnel the broker's
-   order is used, as before. Datagrams use link framing kind 4
+   LAN search wait). The [host's numeric rate](linked-frame-rate.md) is applied before map confirmation.
+   An older roster, or no compatible roster after 5 s, refuses admission instead of guessing a local rate/order.
+   Datagrams use link framing kind 4
    (`[4][from port][to port][datagram]`) and reach the receive pump as the sender's virtual address. The embedded
    game-info route at datagram offset +13 is confined to that same sender address and source port.
 6. **After admission** the GNS transport (gns_transport, rule 25) carries the game's messages on the same P2P

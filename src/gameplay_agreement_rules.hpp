@@ -1,6 +1,7 @@
 #pragma once
 #include "limits_rules.hpp"
 #include "gameplay_capabilities.hpp"
+#include "linked_frame_rate_core.hpp"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -13,9 +14,9 @@ namespace gameplay_agreement_rules
  // and the receiver's fragment handler 0x6101b0 dereferences null at 0x61020c for a stream it has not opened (the
  // 1.5 pre-release host crash). Protocol 3's record has one fixed size, so every body is bounded here, with headroom.
  constexpr std::size_t queued_limit=0x12c;
- constexpr std::size_t largest_queued_body=std::max({info_size,ack_size,reply_size})+gameplay_capabilities::record_size;
+ constexpr std::size_t largest_queued_body=std::max({info_size,ack_size,reply_size})+gameplay_capabilities::record_size+linked_frame_rate_core::settings_size;
  static_assert(largest_queued_body<=queued_limit-64,"every queued agreement body must stay a single native message, with headroom");
- static_assert(request_size+gameplay_capabilities::record_size<=0x514,"the direct 0x18 body fits the native direct buffer");
+ static_assert(request_size+gameplay_capabilities::record_size+linked_frame_rate_core::settings_size<=0x514,"the direct 0x18 body fits the native direct buffer");
  constexpr std::uint32_t request_send=0x607d9d;
  constexpr std::uint32_t reply_broadcast=0x608477;
  constexpr std::uint32_t reply_send=0x6085f5;

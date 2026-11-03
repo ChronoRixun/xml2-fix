@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include "patch_transaction.hpp"
 #include "online_browser_core.hpp"
+#include "linked_frame_rate_core.hpp"
 
 // Guarded UI intents and snapshot bindings. Room operations use online_room;
 // native admission and participant allocation retain their native owners.
@@ -17,11 +18,15 @@ struct lobby_fixture {
     // reported campaign-transfer percentage (-1 none). The lobby cards ignore these (they read the native rows).
     struct member { unsigned native_index=0; int ping_ms=-1; bool same_build=false;
         bool ping_to_host=false; int route=0; int build=-1; int phase=-1;
-        char name[32]{}; bool self=false, host=false; int percent=-1; };
+        char name[32]{}; bool self=false, host=false; int percent=-1;
+        unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0, measured_fps_x10=0;
+        linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
     member members[4]{};
     unsigned count=0;
     // Broker-roster members without a native row yet (Connecting / Checking build): never kick targets.
-    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; bool host=false; };
+    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; bool host=false;
+        unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0, measured_fps_x10=0;
+        linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
     pending_member pending[3]{};
     unsigned pending_count=0;
     // Round 8: this PC hosts the native session / a native session is set up (online_room::party).
