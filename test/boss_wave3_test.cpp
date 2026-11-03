@@ -116,6 +116,25 @@ void blob(){
     {state s;s.prop=71;fixture g;g.carrying=72;update(s,13,4,g);CHECK(!s.pc&&g.dropped==1);
         g.carrying=0;update(s,13,4,g);CHECK(s.pc==1);}
     {state s;s.prop=71;fixture g;g.valid_prop=false;update(s,13,4,g);CHECK(s.pc==1);}
+    // fix/blob-060: the prop steps end prop_step_limit (5 s) of game time after they began.
+    CHECK(prop_step_limit==5.f);
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.arrival=false;update(s,12,15,g);CHECK(!s.pc&&g.approached==1&&!g.stopped);
+        update(s,12,15.01f,g);CHECK(s.pc==1&&g.stopped==1&&g.approached==1&&!g.bits&&s.advanced_at==15.01f);}
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.aligned=false;update(s,12,15,g);CHECK(!s.pc&&!g.bits); // arrived, never faces it
+        update(s,12,15.01f,g);CHECK(s.pc==1&&!g.bits);}
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.slots=false;update(s,12,15.01f,g);CHECK(s.pc==1&&!g.bits);} // pickup slot never free
+    {state s;s.prop=71;s.advanced_at=10;fixture g;update(s,12,14,g);CHECK(s.pc==1&&g.bits==0x100);} // in time: picked up as before
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.aimed=false;update(s,13,15,g);CHECK(!s.pc&&!g.thrown);
+        update(s,13,15.01f,g);CHECK(s.pc==1&&g.thrown==1&&g.waited==.2f&&s.wait_until==15.01f+.2f);}
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.carrying=72;update(s,13,15,g);CHECK(!s.pc&&g.dropped==1);
+        update(s,13,15.01f,g);CHECK(s.pc==1&&g.dropped==2);}
+    {state s;s.prop=71;s.advanced_at=10;fixture g;g.slots=false;update(s,13,15.01f,g);CHECK(s.pc==1&&g.thrown==1);} // throw slot never free
+    // The live failure: a prop Blob never reaches. The NYC program still reaches its first attack (opcode 3, pc 3) a little
+    // over 5 s in, at the same game time (within a frame) at 30 and 60 frames a second.
+    for(float fps:{30.f,60.f}){state s;fixture g;g.arrival=false;g.carrying=0;float t=0;unsigned frames=0;
+        while(opcode(s,false)!=3&&frames++<100000){t+=1/fps;if(t<s.wait_until)continue;update(s,opcode(s,false),t,g);}
+        CHECK(opcode(s,false)==3&&s.pc==3&&t>5.f&&t<5.2f);
+        g.slots=true;update(s,3,t,g);CHECK(s.pc==4&&(g.bits&0x90)==0x90);}
     std::array<prop,3> props{{{1,0,6,2,true},{2,0,0,4,true},{3,0,0,4,true}}};
     CHECK(select(props)==2);props[1].flags=1u<<17;CHECK(select(props)==3);props[2].liftable=false;CHECK(select(props)==1);
     props[0].dz=6.01f;CHECK(!select(props));
