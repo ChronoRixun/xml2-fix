@@ -102,6 +102,7 @@ void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_lo
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
 #include "join_in_progress_checksum.inl"
+#include "join_in_progress_execution_fixture.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
 void e4_guard_composition() {
@@ -137,7 +138,10 @@ void e4_guard_composition() {
 }
 int main(int argc,char** argv) {
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
-        std::cerr<<"JIP fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]<<"\n";
+        std::cerr<<"JIP fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]
+            <<" eax="<<error->ContextRecord->Eax<<" ecx="<<error->ContextRecord->Ecx<<" edx="<<error->ContextRecord->Edx<<" esi="<<error->ContextRecord->Esi<<" esp="<<error->ContextRecord->Esp<<" ar5_stage="<<execution_fixture::fixture_stage<<"\n";
+        const auto* stack=reinterpret_cast<const unsigned*>(error->ContextRecord->Esp);
+        std::cerr<<"stack="<<stack[0]<<","<<stack[1]<<","<<stack[2]<<","<<stack[3]<<","<<stack[4]<<","<<stack[5]<<"\n";
         ExitProcess(error->ExceptionRecord->ExceptionCode);
     });
     assert(argc==2 || argc==3);
@@ -150,14 +154,18 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
-        if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();return 0; }
+        const std::string_view mode=argv[2];
+        if(mode=="e4-guards" || mode=="actorpools" || mode=="turrets")
+            join_in_progress::execution_observer=join_in_progress::execution_wrapper=true;
+        if(std::string_view(argv[2])=="execution") { execution_fixture::run();return 0; }
+        if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();std::cout<<"PASS AR5 optional contracts compose with E4 guards\n";return 0; }
         if(std::string_view(argv[2])=="refusal-transport") { refusal_transport_fixture::run();return 0; }
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
         if(std::string_view(argv[2])=="restart") { restart_fixture::run();return 0; }
-        if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();return 0; }
-        if(std::string_view(argv[2])=="actorpools") { restart_fixture::run_actor_pools();return 0; }
+        if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();std::cout<<"PASS AR5 optional contracts compose with turrets\n";return 0; }
+        if(std::string_view(argv[2])=="actorpools") { restart_fixture::run_actor_pools();std::cout<<"PASS AR5 optional contracts compose with ActorPools\n";return 0; }
         assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
         gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
     }

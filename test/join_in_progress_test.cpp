@@ -50,6 +50,7 @@ namespace
 		return o;
 	}
 #include "join_in_progress_lost_newcomer.inl"
+#include "join_in_progress_execution.inl"
 	// p060fix/AR: the pure pieces, one by one.
 	void lost_newcomer_units()
 	{
@@ -401,6 +402,16 @@ int main(int argc, char** argv)
 		check(loaded, "retail image mapped");
 		if (loaded)
 		{
+			check(join_in_progress_rules::execution_mismatch(mapped.data(),true,true)==nullptr,"AR5: all optional instruction/ABI contracts match retail");
+			for(const auto group : {std::span<const join_in_progress_rules::guard>(join_in_progress_rules::execution_wrapper_guards),std::span<const join_in_progress_rules::guard>(join_in_progress_rules::execution_observer_guards)}) {
+				bool refuse=true,off=true;
+				for(const auto& g:group) for(unsigned i=0;i<g.hex.size()/2;++i) {
+					auto changed=mapped;changed[g.va-limits_rules::image_base+i]^=1;
+					refuse &= join_in_progress_rules::execution_mismatch(changed.data(),true,true)!=nullptr;
+					off &= join_in_progress_rules::execution_mismatch(changed.data(),false,false)==nullptr;
+				}
+				check(refuse && off,"AR5: every optional guard byte refuses ON and adds no OFF acceptance constraint");
+			}
 			const auto* bad = join_in_progress_rules::first_mismatch(mapped.data());
 			check(bad == nullptr, bad ? bad->what : "every install guard matches the retail executable");
 			check(join_in_progress_rules::first_mismatch(mapped.data(), true) == nullptr, "AM: probe-only visibility/spawner guards match retail");
@@ -921,6 +932,7 @@ int main(int argc, char** argv)
 		check(event_kind_key(heap_no_vtable) == 0x033a4568, "follow-up 14 (S2): a heap kind whose vtable could not be read keeps its raw address");
 	}
 	lost_newcomer_units(); // p060fix/AR
+	restart_execution_units(); // AR5
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

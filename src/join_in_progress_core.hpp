@@ -16,6 +16,33 @@
 // A seat whose record leaves, or a stage that outlives its limit, is dropped (the host stops holding the barrier).
 namespace join_in_progress_core
 {
+	// AR5 is independent of the admission/checksum cohort, which can finish before frame 0.
+	enum class restart_execution_phase : std::uint8_t { off, restoring, world_ready };
+	enum class restart_wait_policy : std::uint8_t { native, input_only, unclassified };
+	struct restart_wait {
+		bool readable = false, session = false, loading = false, modal = false;
+		std::uint32_t flags = 0, phase = 0, mode = 0, run_permission = 0;
+	};
+	struct restart_execution {
+		std::uint32_t generation = 0;
+		restart_execution_phase phase = restart_execution_phase::off;
+		bool restored = false, canonical_seen = false;
+		void clear() { phase = restart_execution_phase::off; restored = canonical_seen = false; }
+		void begin(bool late) { clear(); if (late) { ++generation; phase = restart_execution_phase::restoring; } }
+		void image_returned() { if (phase == restart_execution_phase::restoring) restored = true; }
+		void observe_ready(bool valid, bool loading, bool start_menu) {
+			if (phase == restart_execution_phase::restoring && restored && valid && !loading && !start_menu)
+				phase = restart_execution_phase::world_ready;
+		}
+		void canonical() { if (phase != restart_execution_phase::off) canonical_seen = true; }
+		void area_load() { if (phase == restart_execution_phase::world_ready) clear(); }
+		restart_wait_policy classify(const restart_wait& w) const {
+			if (!w.session || phase != restart_execution_phase::world_ready || w.loading || w.modal) return restart_wait_policy::native;
+			if (!w.readable || w.flags != 1 || (w.phase != 1 && w.phase != 2) || w.run_permission)
+				return restart_wait_policy::unclassified;
+			return restart_wait_policy::input_only;
+		}
+	};
 	// Admission policy is a host setup choice, not deterministic simulation state.
 	inline constexpr std::array<std::uint32_t,4> agreement_parameters{{1,4,0,0}};
 	// A release can retain rule 26's spectators/lifecycle without admitting a
