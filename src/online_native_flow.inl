@@ -459,6 +459,7 @@ void native_session_watch() {
     catch(...) { logger::write("online menus: native session end: room leave failed"); }
 }
 bool native_request(const char* name) {
+    if(name && !std::strcmp(name,"game_options")) name=game_options_menu();
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }

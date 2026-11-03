@@ -4,6 +4,21 @@
 // ABI/site guards, independently checked by scripts/check_online_menus_guards.py.
 namespace online_menus_guards {
 inline constexpr script_functions_rules::guard guards[]{
+    {0x006a362c, "e0f25e00", "text-stream deferred render callback"},
+    {0x005ef1a0, "55578bf98b8704140200", "text-stream reset trampoline ABI"},
+    {0x005ef2e0, "558bec83e4f881ec84040000", "text-stream render pass ABI"},
+    {0x005ef871, "c20c00", "text-stream render pass retains three traversal arguments"},
+    {0x005ef231, "89af301602008b9728140200", "text-stream cleanup queue and shared string pool"},
+    {0x005d941d, "8bc8ff5238", "ready roster line-height ABI"},
+    {0x005d958b, "8bc8ff5234", "ready roster hero-width ABI"},
+    {0x005d9644, "8bc8ff5234", "ready roster row-width ABI"},
+    {0x005d9673, "8bcfff5538", "ready roster row-height ABI"},
+    {0x005d9742, "ff15acf96700", "ready roster local panel RGBA ABI"},
+    {0x005d97d7, "ff15acf96700", "ready roster alternate local panel RGBA ABI"},
+    {0x005d9c40, "ff15acf96700", "ready roster panel RGBA ABI"},
+    {0x005d9d14, "ff15acf96700", "ready roster alternate panel RGBA ABI"},
+    {0x005d9a78, "e833770100", "ready roster text draw ABI"},
+    {0x005d9b17, "e894760100", "ready roster alternate text draw ABI"},
     {0x00609ad9, "8b8698220000", "native refusal callback: preserve agreement-guarded prologue"},
 #include "online_menus_anchors_guards.inc"
     {0x005c9706, "837c2410ff7414e80ef200008b4c24108b10518bc8ff92340200008bcde8481cffff", "MAIN_MENU records the supplying controller before item commands; EBX=input mask"},

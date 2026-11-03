@@ -236,7 +236,9 @@ namespace hold_overlay
 	{
 		const LONG w = LONG(std::min(p.width, bb_w)), h = LONG(std::min(p.height, bb_h));
 		const LONG left = (LONG(bb_w) - w) / 2;
-		LONG top = LONG(bb_h) * 3 / 10 - h / 2;
+		// The native area title occupies the upper/central band immediately
+		// after a load, exactly when this panel opens. Keep the hold below it.
+		LONG top = LONG(bb_h) * 3 / 5 - h / 2;
 		top = std::clamp<LONG>(top, 0, LONG(bb_h) - h);
 		return RECT{left, top, left + w, top + h};
 	}

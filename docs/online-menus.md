@@ -2004,3 +2004,31 @@ broker (native posting, full, no installed refusal) keeps the retry copy.
 This remains an inference from this client's advertisement, not a broker-supplied refusal reason. Protocol 2 has no
 policy bit or host-advert timestamp: a host stalled beyond its normal presence interval can still leave stale metadata.
 The confirmation stays within the original deadline; if there is insufficient time, the retry copy wins.
+
+## LC Game Options and ready-roster presentation
+
+The companion builder can author `lc_game_options` with the native
+`GAME_OPTIONS_MENU` class and unchanged option/data identifiers, native commands,
+platform/mode gates and focus notifications. The original `game_options` assets
+remain available. With Menus installed, requests select the LC variant only if
+`Data/lc_online_options.cap` exactly contains `lc-online-options/1` plus LF and
+both menu halves, scene, package, two backdrop models and the shared row-focus
+model exist. Unsupported or incomplete authoring retains the native page.
+The native tick, session setters, save selection, Post and Back remain the
+existing setup flow; there is no second Game Options state machine.
+
+The separate ready roster at `0x5d93f0` uses roster-local LC body-font measurement
+and navy panel adapters. Its localized names, statuses, hero/slow suffixes and
+readiness decisions remain native. Missing private body metrics/atlas retain
+native arguments. This uses the existing Menus switch and font family.
+
+Native text commands defer drawing and do not store their font index. Roster
+commands are therefore marked by stream identity and full generation-bearing
+token, then grouped by font at the real `0x6a362c` render callback. Every group
+uses native `0x5ef2e0` with the actual traversal arguments and native cleanup,
+consuming each token once. The `0x5ef1a0` reset adapter carries color scopes
+between groups before cleanup resets their depth, and retires bookkeeping on
+normal reset/destruction. Unmarked streams retain one native render call. The
+large stream snapshot is allocated only in the marked slow path. Host fixtures
+cover the installed adapters and deferred batches; actual graphics traversal,
+clipping and final appearance still need live acceptance on host and guest.

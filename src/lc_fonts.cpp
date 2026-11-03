@@ -110,6 +110,7 @@ void __fastcall render_item(void* item,void* edx) {
 }
 bool prompt_scope() {return installed&&scoped;}
 bool active() {return installed;}
+bool online_body_ready() {return installed&&ready(6);}
 void install(HMODULE game) {
  if(!enabled(ini::text(L"Game",L"LegendsClassicFonts").value_or("")))return;
  if(reinterpret_cast<std::uintptr_t>(game)!=0x400000)return;

@@ -62,7 +62,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
     auto screen=[&](const char* name) { std::strcpy(reinterpret_cast<char*>(child.data()+0xc),name);child[4]=1;set_current(child.data()); };
-    assert(menu_lists==0 && menu_hosts==0 && menu_resolves==0 && texts["service"]=="Not connected");
+    assert(menu_lists==0 && menu_hosts==0 && menu_resolves==0 && texts["service"]=="Connecting...");
     screen("lc_browse");tick(child.data(),nullptr);assert(menu_lists==1 && !visibility["lc_broker_auth"]);
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
@@ -399,7 +399,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
 
     // Hub: a service never asked shows neutral text, the connected scene hidden.
     menu_broker.cancel();menu_broker.stopped();set_current(hub.data());tick(hub.data(),nullptr);
-    assert(gone("lc_service_ok") && texts["service"]=="Not connected");
+    assert(gone("lc_service_ok") && texts["service"]=="Connecting...");
     // No broker at all: a consistent private host card from the first frame, no error scene, no Retry.
     menu_up=false;screen("lc_host");tick(child.data(),nullptr);
     assert(shown("lc_host_private") && gone("lc_host_public") && gone("retry") && gone("lc_service_ok") && texts["service"]=="Unavailable");
