@@ -81,6 +81,11 @@ namespace join_in_progress
 		DWORD restart_entry_wait = 0; bool restart_entry_waiting = false;
 		// p060fix/AR2: the host's cohort sync waits for its own first shared frame when no newcomer is left in the restart
 		bool restart_frame0_seen = false, host_sync_wait_logged = false; DWORD host_sync_wait_since = 0;
+		// AR6 observer (fable/ar5-lost-newcomer): the native input rings and controller code masks at the restarted epoch's
+		// first gate passes (frames 0..3), and a bounded early flush of the AR5 execution log (frame-0 epoch, cohort sync,
+		// 5 s after frame 0) - the AR5 flush only ran at teardown, which a PDA Quit never reaches (live-b2a: no "jip
+		// execution" line in any run). Logging only; [Online] JoinDiagnostics=1 (execution_observer) turns it on.
+		unsigned ring_trace_budget = 0; DWORD ring_trace_frame0_at = 0; bool ring_trace_flushed = false;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -406,6 +411,7 @@ namespace join_in_progress
 			}
 			restart_restored = restart_zone_back = false;
 			restart_frame0_seen = false; host_sync_wait_since = 0; host_sync_wait_logged = false; // p060fix/AR2: per restart
+			ring_trace_budget = 12; ring_trace_frame0_at = 0; ring_trace_flushed = false; // AR6 observer: per restart
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
 				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
 			admission.clear();
@@ -529,11 +535,72 @@ namespace join_in_progress
 				logger::write_once("jip:camera-restore-fault", "join in progress: the camera restore faulted - the cohort restart keeps the running camera");
 			}
 		}
+		// AR6 observer: one line per participant with its native input ring head (synchronizer 0x79fbb0 + index * 0x3184:
+		// read +0x3170, write +0x3174, next expected frame +0x317c, slots +0x268 + slot * 0x28 = {valid, delta kind, -, -,
+		// frame u16, +2, UI-code mask (controller cur, bit 0x13 = the pause code), axes, flags, action bits +0x14 ...}, the
+		// last resolved record at +0x3148 that a delta is decoded against), then one line with every controller's code
+		// masks (manager 0x79ebc0, objects at +0x3c + slot * 0x390: cur +0x2f8, prev +0x374; the pause query 0x5d4970 ->
+		// vt+0x18 (0x550b70) answers (cur ^ prev) & cur, i.e. a rising edge, and the menu manager (0x5dae69) opens the
+		// pause menu on bit 0x13 of that edge while no menu is up). At a gate pass the controllers still hold the previous
+		// frame's applied state and the read slot holds this frame's record. Reads only, SEH-guarded.
+		void ring_trace(const char* why, unsigned frame, bool force)
+		{
+			if (!force) { if (!ring_trace_budget) return; --ring_trace_budget; }
+			__try
+			{
+				void* s = session();
+				void* n = s ? first(s) : nullptr;
+				for (unsigned i = 0; n && i < 4; ++i, n = at<void*>(n, node_next))
+				{
+					const auto* r = at<const void*>(n, node_record);
+					const auto index = at<std::uint32_t>(r, record_index_at);
+					if (index >= 4) continue;
+					const auto* b = reinterpret_cast<const std::uint8_t*>(0x79fbb0u + index * gns_transport_rules::input_block_size);
+					const auto read = at<std::uint32_t>(b, gns_transport_rules::input_read), write = at<std::uint32_t>(b, gns_transport_rules::input_write);
+					const auto next = at<std::uint16_t>(b, gns_transport_rules::input_next);
+					char slots[4 * 56 + 1]; slots[0] = 0;
+					for (unsigned k = 0; k < 4; ++k)
+					{
+						const unsigned slot = (read < 300u ? read : 0u) + k;
+						const auto* rec = b + gns_transport_rules::input_records + (slot % 300u) * gns_transport_rules::input_record;
+						char one[56];
+						std::snprintf(one, sizeof one, " [%u:v%u k%02x f%u m%08x a%08x]", slot % 300u, unsigned(rec[0]), unsigned(rec[1]),
+							unsigned(at<std::uint16_t>(rec, 4)), at<std::uint32_t>(rec, 8), at<std::uint32_t>(rec, 0x14));
+						strncat_s(slots, sizeof slots, one, _TRUNCATE);
+					}
+					const auto* last = b + 0x3148;
+					logger::write("jip ring: %s frame=%u index=%u ctl=%d flags=%08x read=%u write=%u next=%u last[v%u k%02x f%u m%08x]%s",
+						why, frame, index, at<int>(r, record_controller_at), at<std::uint32_t>(r, record_flags), read, write, unsigned(next),
+						unsigned(last[0]), unsigned(last[1]), unsigned(at<std::uint16_t>(last, 4)), at<std::uint32_t>(last, 8), slots);
+				}
+				const auto* m = reinterpret_cast<const std::uint8_t*>(0x79ebc0);
+				if (at<std::uint32_t>(m, 0) == 0x69a134)
+				{
+					char ctl[4 * 48 + 1]; ctl[0] = 0;
+					for (unsigned k = 0; k < 4; ++k)
+					{
+						const auto* c = m + 0x3c + k * 0x390;
+						char one[48];
+						std::snprintf(one, sizeof one, " [%u: map%d dis%u cur%08x prev%08x]", k, at<int>(m, 4 + k * 4), unsigned(m[0x14 + k]),
+							at<std::uint32_t>(c, 0x2f8), at<std::uint32_t>(c, 0x374));
+						strncat_s(ctl, sizeof ctl, one, _TRUNCATE);
+					}
+					logger::write("jip ring: %s frame=%u controllers (edge = cur & ~prev; bit 0x13 = the pause code) menu_ctl=%d pause+6c=%u%s",
+						why, frame, at<int>(m, 0x34), unsigned(*reinterpret_cast<const std::uint8_t*>(0xa3e168 + 0x6c)), ctl);
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write("jip ring: %s frame=%u - a read faulted; nothing changed", why, frame); }
+		}
 		void __cdecl frame_gate_reseed()
 		{
             frame_rate::shared_frame_started();
 			hold_playing = true; // AQ3: a running cohort, after initial/restart loading; its next area boundary exchanges decisions
 			probe_frame_camera(); // probe only; every gated frame
+			if (execution_observer && ring_trace_budget && (restart.armed || restart_frame0_seen))
+			{
+				const auto f = *reinterpret_cast<const std::uint16_t*>(native_frame);
+				if (f < 4) ring_trace("gate pass", f, false); // AR6 observer: frames 0..3 of a restart epoch
+			}
 			if (!restart.armed) return;
 			__try
 			{
@@ -566,6 +633,8 @@ namespace join_in_progress
 				execution.canonical();
 				execution_snapshot(execution_boundary::canonical_after);
 				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, AI move intent, periodic events by AI bit, queue rebuild %u); the late restart ends here", event_rebuilds);
+				ring_trace_frame0_at = GetTickCount() ? GetTickCount() : 1; // AR6 observer: the bounded early flush counts from here
+				if (execution_observer || execution_wrapper) execution_flush("frame-0 epoch"); // AR6: the AR5 log reaches the file before any PDA Quit
 				camera_lines(true);
 				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
 				snapshot("frame 0 epoch");
@@ -643,6 +712,14 @@ namespace join_in_progress
 			if (execution_observer || execution_wrapper) {
 				execution_wait_state(); // independent of epoch.active
 				if (execution.phase == join_in_progress_core::restart_execution_phase::off) execution_flush("generation teardown");
+				// AR6 observer: 5 s after this PC's frame-0 epoch, once per restart - the AR5 samples and the ring/controller
+				// state of a peer that is stuck on the native pause by then (the PDA Quit that ends such a run never flushes).
+				if (ring_trace_frame0_at && !ring_trace_flushed && GetTickCount() - ring_trace_frame0_at >= 5000)
+				{
+					ring_trace_flushed = true;
+					execution_flush("5 s after frame 0");
+					if (execution_observer) ring_trace("5 s after frame 0", *reinterpret_cast<const std::uint16_t*>(native_frame), true);
+				}
 			}
 			if (!epoch.active) return;
 			void* pause = fn<getter_t>(pause_getter)();
@@ -688,6 +765,7 @@ namespace join_in_progress
 				if (join_in_progress_core::cohort_sync_clears_late_restart(restart.armed)) late_restart = false;
 				else logger::write("join in progress: cohort synchronized before the first shared frame; the canonical restart stays in effect until its frame-0 epoch");
 				logger::write("join in progress: cohort synchronized; checksum protection resumed");
+				if (execution_observer || execution_wrapper) execution_flush("cohort synchronized"); // AR6: early flush (teardown is never reached after a PDA Quit)
 				// The native slow-player guard (0x559190: per participant index, count/phase pairs at 0x79fb80, a drop at
 				// 900 slow input frames in phase 2) never resets them before it drops someone. A host that played alone,
 				// or a cohort that waited out the restore, carried counts into the restarted session and the host dropped
