@@ -819,6 +819,29 @@ int main(int argc, char** argv)
 			check(event_kind_key(mem) == 0x320 && canonical_event_less(mem, jk, 0x3ff) && !canonical_event_less(jk, mem, 0x3ff), "follow-up 9: a member event (its offset) sorts before a static kind on the same owner");
 			check(!canonical_event_less(hk, jk, 0x3ff) && !canonical_event_less(jk, hk, 0x3ff), "follow-up 9: the same kind on the same slot is equal across processes");
 			check(cohort_sync_clears_late_restart(false) && !cohort_sync_clears_late_restart(true), "follow-up 9: cohort synchronized ends the late restart only when no frame-0 epoch is still armed");
+			// AR6 (fable-ar6): the pause-code guard at the controller apply - a function of the record alone.
+			{
+				using join_in_progress_core::applied_code_mask; using join_in_progress_core::pause_code_bit; using join_in_progress_core::ring_record_mask;
+				check(pause_code_bit == 0x00080000u && join_in_progress_core::pause_guard_frames == 2, "AR6: UI code 0x13 is bit 19; the guard covers frames 0 and 1");
+				check(applied_code_mask(0x00080000u, 0) == 0 && applied_code_mask(0x00080000u, 1) == 0, "AR6: frames 0 and 1 drop the pause code");
+				check(applied_code_mask(0x00080000u, 2) == 0x00080000u && applied_code_mask(0x00080000u, 1000) == 0x00080000u, "AR6: frame 2 and later keep it");
+				check(applied_code_mask(0x0008a5a5u, 0) == 0x0000a5a5u && applied_code_mask(0x0000a5a5u, 0) == 0x0000a5a5u, "AR6: only bit 0x13 changes; a record without it is untouched");
+				check(applied_code_mask(0xffffffffu, 1) == 0xfff7ffffu && applied_code_mask(0, 0) == 0, "AR6: every other code survives; zero stays zero");
+				const std::uintptr_t sync = 0x79fbb0u, slot0 = sync + 0x268u;
+				check(ring_record_mask(slot0 + 8u) && ring_record_mask(slot0 + 0x28u + 8u) && ring_record_mask(slot0 + 299u * 0x28u + 8u), "AR6: block 0 slots 0, 1, 299 - the code mask at slot + 8");
+				check(ring_record_mask(sync + 3u * 0x3184u + 0x268u + 8u) && ring_record_mask(sync + 3u * 0x3184u + 0x268u + 299u * 0x28u + 8u), "AR6: block 3 (the last participant) too");
+				check(!ring_record_mask(sync + 4u * 0x3184u + 0x268u + 8u) && !ring_record_mask(slot0 + 300u * 0x28u + 8u), "AR6: a fifth block or a 301st slot is not a ring record");
+				check(!ring_record_mask(slot0 + 4u) && !ring_record_mask(slot0 + 12u) && !ring_record_mask(slot0) && !ring_record_mask(sync + 0x3170u), "AR6: the frame word, the axes, the valid byte and the ring head are not the mask field");
+				check(!ring_record_mask(0x12345678u) && !ring_record_mask(0) && !ring_record_mask(sync - 0x28u + 8u), "AR6: a stack record, null and memory below the synchronizer are left alone");
+				check(ring_record_mask(0x1000u + 0x268u + 8u, 0x1000u) && !ring_record_mask(0x1000u + 0x268u + 9u, 0x1000u), "AR6: the test works on any synchronizer address and needs the exact field");
+			}
+			// AR6 Layer 1 (fable-ar6): the sender keeps the first whole_input_frames records full after a ring reset.
+			{
+				using join_in_progress_core::restart_whole_input; using join_in_progress_core::send_form; using join_in_progress_core::whole_input_frames;
+				check(whole_input_frames == 32, "AR6 L1: the whole-input window is 32 frames (~1 s at 30 fps)");
+				check(restart_whole_input(0) == send_form::force_full && restart_whole_input(31) == send_form::force_full, "AR6 L1: frames 0 and 31 go out full");
+				check(restart_whole_input(32) == send_form::stock && restart_whole_input(2000) == send_form::stock, "AR6 L1: frame 32 and later use the stock delta decision");
+			}
 			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
 			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
 			// epoch saw the loading flags, and never before.
