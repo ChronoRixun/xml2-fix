@@ -112,7 +112,7 @@ def main():
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":
-            assert "online menus: [Game] LegendsClassicFonts is not active (off or refused); native online entry retained" in log
+            assert "online menus: [Game] LegendsClassicFonts is not active (off or refused); rebuilt LC failure entry retained" in log
             assert "lc fonts: committed" not in log
         elif mode != "off":
             assert "lc fonts: committed" in log, (mode, log)
@@ -125,10 +125,10 @@ def main():
             assert "script functions: 1024 names" not in log
             assert not re.search(r"rule 14 .*\{1024,0,0,0\}", log)
         if mode == "lookup-refused":
-            assert "registration/capacity refused; native online entry retained" in log
+            assert "registration/capacity refused; rebuilt LC failure entry retained" in log
             assert "installation unverified; online remains blocked" in log
         if mode == "capacity":
-            assert "registration/capacity refused; native online entry retained" in log
+            assert "registration/capacity refused; rebuilt LC failure entry retained" in log
             assert "script functions: 1024 names" not in log
         if mode in ("preset-code", "preset-host-name-invalid", "name-only-invalid"):
             assert "menu broker client prepared; room creation waits for an explicit intent" in log, (mode, log)
