@@ -762,4 +762,49 @@ namespace join_in_progress_core
 		if (target_record && target_peer_elsewhere) return mesh_reply::refused; // not this record's participant
 		return mesh_reply::stock;                                          // no record, or one still without a peer
 	}
+
+	// AR6 (fable-ar6): the pause-code guard at the lockstep's controller apply. The record of the first lockstep frames of an
+	// epoch (frame u16 < pause_guard_frames; every epoch starts at frame 0 - session start, every area load, every cohort
+	// restart) is applied WITHOUT UI code 0x13 (the pause code the mapper 0x61a810 raises for action 0x11, ESC/Start). The
+	// controller apply 0x550fb0 copies the record's code mask into cur (+0x2f8) after moving cur to prev (+0x374); the menu
+	// manager (0x5dae30 -> 0x5d4970 -> vt+0x18 0x550b70 = (cur ^ prev) & cur) opens the pause menu on a rising edge of bit
+	// 0x13, and in an online session that is the native online pause 0x60c230(1) (every record Not Ready, released only by
+	// a 0x4b Ready from every participant). live-b2a/060zl/060zn single-lost-newcomer shapes: the lobby guest's frame-0
+	// record carried the bit, the peer FIRST at frame 0 stalled at the gate with the edge latched and paused natively while
+	// the other peer applied frames 0..k back to back and never saw it - a one-sided pause nobody can release. The guard is a
+	// function of the record alone (frame, mask), so every peer applies the same filtered record: consumed inputs, checksums
+	// and the RNG stay equal; the ring slot itself is untouched (delta encoding and resends see the stock bytes). A real
+	// ESC inside the first two frames (67 ms at 30 fps) of an epoch is dropped alike on every peer; its hold reaches frame 2.
+	constexpr unsigned pause_code = 0x13;
+	constexpr std::uint32_t pause_code_bit = 1u << pause_code;
+	constexpr unsigned pause_guard_frames = 2;
+
+	// AR6 Layer 1 (fable-ar6): the sender 0x559700 sends a FULL record (stock kind 0) instead of a delta while the local
+	// block's next frame (+0x317c, reset to 0 at every ring reset: session start, zone load, cohort restart) is below
+	// whole_input_frames. The single-lost-newcomer shape loses the first records to a ~1 s reset skew between the two
+	// survivors (live-b2a/060zl/060zn: ~30 frames): the early resetter's first FULL records are dropped by the late one
+	// (frame < next), and what it sends after are DELTAS the late peer decodes against no resolved previous record (ring
+	// reset cleared +0x3148), building a garbage UI-code mask with bit 0x13 on an uninitialised stack record (live-b2a
+	// O-2a: the host applied the guest index as 0x001af378 while the guest's own index was 0 - candidate A). Keeping the
+	// first ~1 s of records FULL means the late peer always has the real mask, so it cannot decode garbage and both apply
+	// the same inputs. A full record is the stock wire format, so a stock or unpatched peer decodes it unchanged.
+	constexpr unsigned whole_input_frames = 32; // ~1 s at 30 fps, above every observed reset skew
+	enum class send_form { stock, force_full };
+	inline send_form restart_whole_input(unsigned next_frame) { return next_frame < whole_input_frames ? send_form::force_full : send_form::stock; }
+
+	inline std::uint32_t applied_code_mask(std::uint32_t mask, unsigned frame)
+	{
+		return frame < pause_guard_frames ? (mask & ~pause_code_bit) : mask;
+	}
+	// The apply's mask argument must be a lockstep ring record's code-mask field (synchronizer 0x79fbb0: four blocks of 0x3184,
+	// 300 slots of 0x28 at +0x268, record bytes at slot +4, frame u16 at record +0, code mask at record +4): the guard reads the
+	// frame at mask - 4 only for such a pointer; any other caller of vt+0x24 (offline play, menus) is left alone.
+	inline bool ring_record_mask(std::uintptr_t mask_at, std::uintptr_t synchronizer = 0x79fbb0u)
+	{
+		if (mask_at < synchronizer + 0x268u + 8u) return false;
+		const auto in_block = (mask_at - synchronizer) % 0x3184u, block = (mask_at - synchronizer) / 0x3184u;
+		if (block >= 4u || in_block < 0x268u + 8u) return false;
+		const auto in_slots = in_block - 0x268u;
+		return in_slots / 0x28u < 300u && in_slots % 0x28u == 8u;
+	}
 }

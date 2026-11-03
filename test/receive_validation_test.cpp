@@ -5,6 +5,7 @@
 #include "receive_validation_rules.hpp"
 #include "gameplay_agreement_rules.hpp"
 #include "network_validation.hpp"
+#include "linked_frame_rate_core.hpp"
 #include "entity_capacity.hpp"
 #include "patch_transaction.hpp"
 #include <Windows.h>
@@ -415,6 +416,13 @@ namespace
 		expect(valid(0x18, b.data(), 224), "game info with the agreement record and a terminated name passes");
 		std::memset(b.data(), 'a', 224); expect(check(0x18, b.data(), 224) == drop_reason::unterminated_string, "game info without a terminator is dropped");
 		expect(check(0x18, b.data(), receive_validation_rules::game_info_max + 1) == drop_reason::body_too_long, "game info past both agreement trailers is dropped");
+		// live-b2a blocker 1: the beta.2 sender appends the linked-frame-rate settings trailer (8 bytes) after the agreement
+		// record; the body the host receives is 232 bytes (the first 16 bytes of the live drop: 00 x8, 0a 4d 00 01 2d 14 00 01).
+		static_assert(receive_validation_rules::game_info_max == 0x74 + 108 + linked_frame_rate_core::settings_size, "0x18 cap = request + agreement record + linked-rate trailer");
+		std::memset(b.data(), 'a', 224); b[0x3e] = 0; const auto trailer = linked_frame_rate_core::encode(30); std::memcpy(b.data() + 224, trailer.data(), trailer.size());
+		expect(valid(0x18, b.data(), 232), "game info with the agreement record and the linked-rate trailer (232 bytes, beta.2) passes");
+		expect(check(0x18, b.data(), 233) == drop_reason::body_too_long, "game info past the trailer is dropped");
+		expect(check(0x18, b.data(), 240) == drop_reason::body_too_long, "game info with a second trailer is dropped");
 		std::memset(b.data(), 0, 238); b[0xaa] = 0; expect(valid(0x44, b.data(), 238), "roster with no entries passes");
 		b[0xaa] = 0xff; expect(check(0x44, b.data(), 238) == drop_reason::roster_underflow, "roster with 255 entries in 238 bytes is dropped");
 		b[0xaa] = 3; expect(valid(0x44, b.data(), 238), "roster with 3 entries in 238 bytes passes");

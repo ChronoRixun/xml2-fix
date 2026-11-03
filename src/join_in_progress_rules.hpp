@@ -660,6 +660,44 @@ namespace join_in_progress_rules
 	inline constexpr std::array<unsigned char,5> execution_ordinary_branch_original{0xe8,0x9f,0x5e,0x1d,0x00};
 	inline constexpr std::array<unsigned char,9> execution_pda_original{0x56,0x8b,0xf1,0x8a,0x86,0x44,0x19,0,0};
 	inline constexpr std::array<unsigned char,7> execution_pause_original{0x53,0x56,0x8b,0xf1,0x8a,0x46,0x6c};
+	// AR6 Layer 1 (fable-ar6): the sender 0x559700's full-vs-delta decision (0x5597d2: cmp eax,3; jge 0x5598a0 - 9 bytes;
+	// eax = the pending count clamped >= 0, ebx = the local block base set at 0x55972c). The bridge forces the full path
+	// (0x5597db) while [ebx+0x317c] (the next frame) < whole_input_frames, else keeps the stock decision (pending < 3 full,
+	// else delta at 0x5598a0). Layer 2: the store 0x559560's resolve-against-+0x3148 (0x559660: lea eax,[ebx+0x3148]; je
+	// 0x559675 - 8 bytes); when +0x3148 has no resolved record (cl == 0), the bridge points the "previous" at a zero record
+	// so 0x558c00 fills the absent fields with zero instead of the store skipping and leaving the decoder's stack garbage.
+	constexpr std::uint32_t whole_input_site = 0x5597d2, whole_input_full = 0x5597db, whole_input_delta = 0x5598a0;
+	inline constexpr std::array<unsigned char, 9> whole_input_original{0x83,0xf8,0x03,0x0f,0x8d,0xc5,0x00,0x00,0x00};
+	constexpr std::uint32_t delta_zero_site = 0x559660, delta_zero_resume = 0x559668;
+	inline constexpr std::array<unsigned char, 8> delta_zero_original{0x8d,0x83,0x48,0x31,0x00,0x00,0x74,0x0d};
+	inline constexpr guard whole_input_guards[]{
+		{0x5597d2,"83f8030f8dc5000000","AR6 L1: sender full-vs-delta decision"},
+		{0x5597db,"8b45048d","AR6 L1: sender full-record path target"},
+		{0x5598a0,"8b442418","AR6 L1: sender delta path target"},
+		{0x559660,"8d8348310000740d","AR6 L2: store resolve-against-+0x3148 skip"},
+		{0x559668,"57508bcae8","AR6 L2: store resolve call (push record, push prev, call 0x558c00)"},
+	};
+	inline const guard* whole_input_mismatch(const std::uint8_t* image) {
+		for (const auto& g : whole_input_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	// AR6 (fable-ar6): the pause-code guard's site = the controller apply vt+0x24 (0x550fb0: push ebx; mov ebx,ecx; mov eax,
+	// [ebx+2f8h] - 9 bytes re-executed by the bridge); the guard covers the whole prologue up to the one read of the mask
+	// argument (0x550fc8 mov edx,[ecx]) and its write to cur (0x550fcb), the apply loop's call (0x558da9, the record's mask at
+	// esi+4 pushed as the argument) and the ring layout the pointer test relies on (0x558d0b..0x558d0e, slot = +0x26c + read*0x28).
+	constexpr std::uint32_t pause_guard_site = 0x550fb0, pause_guard_resume_at = 0x550fb9;
+	inline constexpr std::array<unsigned char, 9> pause_guard_original{0x53,0x8b,0xd9,0x8b,0x83,0xf8,0x02,0x00,0x00};
+	inline constexpr guard pause_guard_guards[]{
+		{0x550fb0,"538bd98b83f80200008b4c240c568b7424148983740300008b11578993f8020000","AR6: controller apply prologue, mask read and cur write"},
+		{0x558d0b,"8d0cb68db4c86c020000","AR6: apply loop's slot address (+0x26c + read*0x28)"},
+		{0x558da1,"538d4e045155","AR6: apply loop pushes floats, record+4 (the code mask), index"},
+	};
+	inline const guard* pause_guard_mismatch(const std::uint8_t* image) {
+		for (const auto& g : pause_guard_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
 		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;

@@ -12,7 +12,7 @@
 // legitimate body exceeds 0x505; the parser accepts up to 0x514, and anything past 0x505 is refused here.
 
 #include "entity_capacity_rules.hpp" // fast_chunk: the FastTransfer 'H' record shape
-#include "linked_frame_rate_core.hpp"
+#include "linked_frame_rate_core.hpp" // settings_size: the beta.2 linked-rate trailer on 0x18
 
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +26,9 @@ namespace receive_validation_rules
 	// Admission and in-game index fields are bounded by the session's four player slots and the transport's six
 	// peer entries (net030-d3 section 3.3).
 	constexpr std::uint32_t admission_slots = 4, peer_slots = 6;
-	// 0x18 carries native game info, the protocol-4 agreement and linked-rate settings.
+	// 0x18 carries the native 0x74-byte game-info body plus the gameplay-agreement record (protocol 4, 108 bytes) and,
+	// since beta.2, the linked-frame-rate settings trailer (linked_frame_rate_core::settings_size, 8 bytes): 232 bytes.
+	// live-b2a blocker 1: the cap stayed at 224 while gameplay_agreement_rules sent 232, so every b2a-to-b2a join dropped.
 	constexpr std::uint16_t game_info_max = 0x74 + 108 + linked_frame_rate_core::settings_size;
 
 	struct rule
