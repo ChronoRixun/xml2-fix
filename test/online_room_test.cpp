@@ -295,6 +295,16 @@ int main()
 		      "AS roster: the late rejoiner adopts the host's map - itself .3, r1 .4 (RR-1 agrees)");
 		r = joiner.adopt(rows, gen, h, s1);
 		check(r.ok && !r.changed, "AS roster: the same roster again changes nothing");
+		{
+			room_roster flags_only=joiner;
+			auto changed_flags=rows;changed_flags[1].active=false;
+			const auto flags=flags_only.adopt(changed_flags,gen+1,h,s1);
+			check(flags.ok && flags.changed && !flags.mapping_changed && !flags_only.contains(g1) &&
+			      flags_only.address(g1)==joiner.address(g1),
+			      "roster diagnostics: flag-only changes do not claim that this PC's address map changed");
+			check(joiner.adopt(rows,gen,h,s1).ok && !joiner.adopt(rows,gen,h,s1).mapping_changed,
+			      "roster diagnostics: a duplicate host roster has no address-map change");
+		}
 		// A new identity after a leave: the host appends it at .5; the newcomer learns it from the roster.
 		room_roster host2;
 		check(host2.reset({h}, 1) && host2.join(g1, 2) && host2.join(s1, 3) && host2.join(r1, 4) && host2.leave(s1, 5) && host2.join(x, 6) &&

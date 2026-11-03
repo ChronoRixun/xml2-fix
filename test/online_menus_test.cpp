@@ -30,6 +30,8 @@
 #include <new>
 #include <intrin.h>
 
+namespace lc_fonts { extern bool body_ready; }
+
 namespace {
 using namespace online_menus_rules;
 // The hub shows a screen name that does not fit its field ended with "..." (fit_name; 060q live).
@@ -490,6 +492,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_broker.inl"
 #include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
+#include "online_ready_fixture.inl"
 #include "online_anchor_fixture.inl"
 #include "options_close_fixture.inl"
 #include "online_party_menu_fixture.inl"
@@ -504,7 +507,11 @@ namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
 } }
 namespace script_functions { int capacity() { return ::capacity; } }
-namespace lc_fonts { bool active() { return mode!="fonts-off"; } }
+namespace lc_fonts {
+bool body_ready=true;
+bool active() { return mode!="fonts-off"; }
+bool online_body_ready() { return active() && body_ready; }
+}
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace display {
 display_rules::options test_options;
@@ -627,6 +634,7 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r26-ready") { ready_fixture::run();ready_fixture::deferred();return 0; }
     if(mode=="r21-data-churn") { data_text_fixture::run(entry);return 0; }
     if(mode=="r20-code-open-close") { frontend_strings_fixture::open_close();return 0; }
     if(mode=="r20-retry-code" || mode=="r20-retry-browse") { frontend_strings_fixture::retry();return 0; }

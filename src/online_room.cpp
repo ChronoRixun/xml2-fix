@@ -965,7 +965,8 @@ namespace online_room
 			online_status::players(status_players());
 			if (!roster_logged || r.changed)
 				logger::write("online: room roster from the host (gen %lld)%s: %s; this PC is %s", gen,
-				              !was_confirmed ? "" : r.changed ? " CHANGED this PC's map" : "", roster_text().c_str(), core::dotted(own_address).c_str());
+				              !was_confirmed ? "" : r.mapping_changed ? " CHANGED this PC's map" : r.changed ? " updated membership flags" : "",
+				              roster_text().c_str(), core::dotted(own_address).c_str());
 			roster_logged = true;
 		}
 		// No roster on a connected host tunnel for roster_wait_ms: a host build before Fix AS - the broker's order.

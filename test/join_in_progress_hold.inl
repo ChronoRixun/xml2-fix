@@ -521,6 +521,7 @@ void run_join_hold() {
         auto* d16=fake_d3d8::make_device(320,240,d3d8::format_r5g6b5);
         d16->back->fill(0x2104);display::fixture_overlay(d16);
         const auto p=hold_overlay::render("A player is joining...",320,240);const auto r=hold_overlay::place(p,320,240);
+        assert(r.top>=120 && r.bottom<=240); // clear of the native zone-title band
         assert(d16->back->pixel(r.left,r.top)==hold_overlay::to16(0xff5a8cd8u,d3d8::format_r5g6b5) && d16->back->pixel(0,0)==0x2104 && d16->copies==2);
         hold_overlay::release();
         auto* ms=fake_d3d8::make_device(640,360,d3d8::format_x8r8g8b8,2);
@@ -528,6 +529,7 @@ void run_join_hold() {
         display::fixture_overlay(ms);
         HOLD_EXPECT(at,"join hold: message shown (\"A player is joining...\", clear path");
         const auto p2=hold_overlay::render("A player is joining...",640,360);const auto r2=hold_overlay::place(p2,640,360);
+        assert(r2.top>=180 && r2.bottom<=360); // same safe band on widescreen
         assert(ms->copies==0 && ms->clears>=3 && ms->back->pixel(r2.left,r2.top)==0xff5a8cd8u && ms->back->pixel(r2.left+int(p2.border)+1,r2.top+int(p2.border)+1)==0xff101830u);
         assert(ms->back->pixel(0,0)==hold_scene && std::memcmp(&ms->view,&before,sizeof before)==0); // the engine's viewport is back
         ms->render_target_is_back=false;at=observed_jip_logs.size();join_in_progress::hold_message_failed=false;

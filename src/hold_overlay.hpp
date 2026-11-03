@@ -6,7 +6,7 @@
 // depend on any game tick.
 //
 // Text only: a translucent dark panel with a thin border and white antialiased text (GDI, Arial bold, sized from the
-// back buffer height), centred horizontally in the upper third. No game art, no logo, no engine font.
+// back buffer height), centred horizontally below the zone-title band. No game art, no logo, no engine font.
 //
 // Two ways onto the back buffer, both without touching any render state the engine set:
 //  * blend (the normal path): CopyRects the panel's rectangle from the back buffer into a system-memory surface of

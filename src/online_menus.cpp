@@ -363,6 +363,29 @@ bool assets_ready() noexcept {
     }
 }
 
+// This variant keeps GAME_OPTIONS_MENU and all native setup services. Retail
+// resources stay untouched: disabled UI, old builder, or missing variant files
+// select the original page without affecting the hosting state machine.
+const char* game_options_menu() noexcept {
+    if(!ready || !mod_loader::generation()) return "game_options";
+    try {
+        const auto root=std::filesystem::path(mod_loader::game_root());
+        const auto exists=[&](const wchar_t* name) {
+            std::error_code error;
+            return std::filesystem::is_regular_file(mod_loader::resolve_file((root/name).wstring()),error);
+        };
+        constexpr char expected[]="lc-online-options/1\n";
+        std::ifstream marker(mod_loader::resolve_file((root/L"Data/lc_online_options.cap").wstring()),std::ios::binary);
+        std::array<char,sizeof(expected)> bytes{};marker.read(bytes.data(),bytes.size());
+        if(marker.gcount()!=sizeof(expected)-1 || std::memcmp(bytes.data(),expected,sizeof(expected)-1)) return "game_options";
+        for(const auto* file:{L"UI/menus/lc_game_options.XMLB",L"UI/menus/lc_game_options.engb",L"UI/menus/lc_game_options.IGB",
+            L"Packages/generated/maps/package/menus/lc_game_options.PKGB",L"UI/models/lc_o_backdrop_lc_game_options.IGB",L"UI/models/lc_o_field.IGB",
+            L"UI/models/lc_o_focus_0_-192_4144_0.IGB"})
+            if(!exists(file)) return "game_options";
+        return "lc_game_options";
+    } catch(...) { return "game_options"; }
+}
+
 struct native_engine {
     void *seats=nullptr,*network_object=nullptr,*session_object=nullptr,*campaign_object=nullptr,*profile=nullptr,*console=nullptr;
     bool preflight(int p) {
@@ -677,7 +700,7 @@ void request_impl(void* m,const char* name,const char* args) {
     } else if(name && which(source)==screen::main && std::strcmp(name,"lc_online")) {
         entry.clear();accept_hint(source,true);
     }
-    at<request_fn>(0x5d5db0)(m,name,args);
+    at<request_fn>(0x5d5db0)(m,ready && name && !std::strcmp(name,"game_options") ? game_options_menu() : name,args);
 }
 void __fastcall request(void* m,void*,const char* name,const char* args) {
     try {
@@ -971,6 +994,7 @@ void broker_cancel(bool leave_room=false) {
     resolve_edit=0;resolve_ticket={};
 }
 #include "online_native_flow.inl"
+#include "online_ready_roster.inl"
 void broker_scope(screen s) {
     if(!broker_live()) return;
     if(broker_screen!=s) {
@@ -1089,7 +1113,7 @@ void bind_broker(void* menu,screen s) {
     const auto& v=broker_view();
     const bool waiting=v.state==broker::phase::authenticating || v.state==broker::phase::listing || v.state==broker::phase::hosting || v.state==broker::phase::resolving;
     const bool failed=v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused;
-    const char* service=v.authenticated ? "Connected" : waiting ? "Connecting" : failed ? "Unavailable" : "Not connected";
+    const char* service=v.authenticated ? "Connected" : failed ? "Unavailable" : "Connecting...";
     // A plainly connected service is drawn by the lc_service_ok scene (green diamond + localized word); its text fields
     // stay empty then so the word is never drawn twice. Every other state keeps the neutral text.
     const bool connected_plain=v.authenticated && !waiting && !failed && v.state!=broker::phase::room;
@@ -3317,6 +3341,7 @@ bool pad_prompt_scope() {
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";
+    ready_roster::contribute(c);
     c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_refusal_bridge)),1,"started-session refusal from the proven host"));
     for(const auto& g:online_menus_guards::guards)
