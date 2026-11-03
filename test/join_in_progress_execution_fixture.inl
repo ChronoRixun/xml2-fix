@@ -327,7 +327,9 @@ void run() {
     assert(menu_ticks==1 && hud_ticks==1 && draws==1 && presents==1 && mutation==1 && worlds==0 && cleanups==1 && sleeps==0);
     std::cout<<"PASS AR5 unfixed/observer-only control: actual stalled helper runs menu/HUD and mutates digest; normal world bypassed\n";
     reset();queue(true);
+    const auto waiting_samples=frame_rate::fixture_shared_starts;
     for(unsigned i=0;i<20;++i) outer_tick(client);
+    assert(frame_rate::fixture_shared_starts==waiting_samples); // protected waits are never local-work samples
     assert(menu_ticks==0 && hud_ticks==0 && draws==0 && presents==0 && mutation==0 && worlds==0 && cleanups==20 && polls==20 && sleeps==20);
     assert(feedback==4 && seat_ticks==40 && manager_ticks==20);
     assert(controller_commands==1 && save_commands==1 && service_order==12 && join_in_progress::at<int>(command_image,0x634)==-1);
@@ -395,13 +397,18 @@ void run() {
 
     reset();
     // Missing remote frame takes the native failure branch; matching input takes its real permit writer.
+    const auto gate_samples=frame_rate::fixture_shared_starts;
     put(reinterpret_cast<void*>(0xa3bbd8),8,0u);gate_fragment();
+    assert(frame_rate::fixture_shared_starts==gate_samples);
     assert(*reinterpret_cast<unsigned char*>(0x79fbb0+0xc688)==0 && (*reinterpret_cast<unsigned*>(0xa3bbe0)&1));
     packet(0,0,0);packet(1,0,0x80000);put(reinterpret_cast<void*>(0xa3bbd8),8,0u);
     join_in_progress::restart_reset_enabled=false;join_in_progress::restart.arm();
     gate_fragment();
     assert(*reinterpret_cast<unsigned char*>(0x79fbb0+0xc688)==1 && join_in_progress::execution.canonical_seen);
+    assert(frame_rate::fixture_shared_starts==gate_samples+1);
     outer_tick(client);
+    assert(frame_rate::fixture_shared_starts==gate_samples+1); // helper/render callbacks never restart the meter
+    std::cout<<"PASS beta.2 AR5 + linked rate: protected waits and failed gate do not sample; successful canonical gate starts exactly one sample before world execution\n";
     assert(worlds==1 && mutation==1 && actual_pauses==1 && !menu_ticks && !hud_ticks && cleanups==1);
     int logical=-1;
     assert(query(menus_image,nullptr,0x13,&logical) && logical==1);
