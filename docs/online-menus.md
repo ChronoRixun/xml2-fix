@@ -2057,11 +2057,37 @@ live LC editor and enter the original character lane (`0xa0a061`). Native
 Enter/Back/Escape; `0x5e6f30` owns acceptance. The native input-context name
 comparisons stay unchanged: the stock editor uses text-only context 2, while the
 LC editor uses normal menu context 1 so pad bindings are available. Closing/deactivating retires pending
-input. The LC editor consumes DirectInput character/control edges itself,
-including the input pipe's keyboard path; physical WM_CHAR is suppressed only
-while this editor owns input, preventing duplicate characters. The explicit
-`chars` test lane still enters the native character buffer. ASCII letters,
-digits, punctuation, Space and Backspace feed native validation. Keyboard arrows
+input. Printable keyboard text comes from Windows' translated `WM_CHAR` stream,
+so the active layout owns letters, Shift/Caps Lock, AltGr and dead-key
+composition. Committed `WM_IME_CHAR` text uses the same queue. The display
+wrapper covers managed windows and native/fullscreen modes. When online
+menus are installed it uses a Unicode subclass, forwarding
+to the original ANSI procedure through `CallWindowProcW`. A thread-local
+Unicode `WH_GETMESSAGE` hook captures LC characters before an ANSI
+`PeekMessageA`/`GetMessageA` pump can narrow them. Only removed messages for
+the editor's window are queued; repeated `PM_NOREMOVE` peeks do not type.
+Consumed messages become `WM_NULL`, so later dispatch cannot type them twice.
+Sent character messages use the subclass directly. Window destruction retires
+the hook; failure to install it logs the failure and visibly refuses physical
+text (the on-screen grid remains usable). With Menus disabled the original
+ANSI subclass and forwarding stay in place.
+DirectInput supplies only arrows, Enter, Escape and Backspace. Their `WM_CHAR`
+copies are ignored, and printable/numpad DI state is consumed without producing
+text or a second menu action. The explicit `chars` test lane shares this queue
+while LC owns the editor; synthetic printable typing uses `chars`, navigation
+uses `keys`.
+
+Only printable ASCII can enter the native character byte. Unsupported Unicode
+(including composed accents, IME text and surrogate pairs) displays
+"Unsupported" instead of truncating to a low byte. Native
+`0x5e72f0` remains the authority for the narrower per-request charset and byte
+limit: a refused printable byte displays "Unsupported" or
+"Text limit" in the spare fourth footer label for three seconds.
+The queue is bounded at 64 entries and reports overflow visibly.
+For tag 3 IP entry, a comma translated from the numpad decimal scan (`0x53`)
+is a period; a main-keyboard comma is still refused. Name punctuation is
+unchanged. ASCII digits and periods from either keyboard section enter the
+same native IP filter. Keyboard arrows
 and menu D-pad bits move focus across enabled keys in the generated 9-column
 layout; Enter/A presses that key, including Done. Escape/B cancel. The native
 menu mask is suppressed only during the wrapped editor tick, so its old

@@ -3549,6 +3549,16 @@ std::uint32_t __fastcall join_text_close(void* menu,void*) {
 }
 
 bool text_entry_active() { return ready && text_entry_ui::live(current_peek()); }
+bool text_entry_character(unsigned character,unsigned scan) {
+    if(!text_entry_active()) return false;
+    if(game_thread.load()!=GetCurrentThreadId()) return true; // never mutate input off its owner thread
+    auto* menu=current_peek();
+    if(text_entry_ui::edit.owner==menu && text_entry_ui::request_tag()==text_entry_ui::edit.tag) {
+        if(keyboard_note) keyboard_note();
+        text_entry_ui::character(character,scan);
+    }
+    return true;
+}
 
 void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;

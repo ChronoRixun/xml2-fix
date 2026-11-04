@@ -696,6 +696,33 @@ namespace display
 
 		// The engine's window procedure, behind ours (see filtered_window_procedure).
 		WNDPROC engine_window_procedure = nullptr;
+		bool unicode_window_procedure = false;
+		HHOOK text_message_hook = nullptr;
+		bool editor_character(unsigned value,LPARAM parameters)
+		{
+			// A failed Unicode queue hook cannot safely accept physical text from
+			// an ANSI pump: refuse visibly instead of accepting a best-fit byte.
+			if (unicode_window_procedure && !text_message_hook && value >= 32) value = 0xfffd;
+			return online_menus::text_entry_character(value,(static_cast<unsigned>(parameters) >> 16) & 0xff);
+		}
+		LRESULT CALLBACK text_get_message(int code,WPARAM removed,LPARAM data)
+		{
+			// Unicode WH_GETMESSAGE runs before PeekMessageA/GetMessageA narrow
+			// WM_CHAR. Do not enqueue PM_NOREMOVE peeks or another window's text.
+			if (code >= 0 && removed == PM_REMOVE && data)
+			{
+				auto& message = *reinterpret_cast<MSG*>(data);
+				if (message.hwnd == window && (message.message == WM_CHAR || message.message == WM_IME_CHAR) &&
+				    editor_character(static_cast<unsigned>(message.wParam),message.lParam)) message.message = WM_NULL;
+			}
+			return CallNextHookEx(text_message_hook,code,removed,data);
+		}
+		LRESULT call_engine_window(HWND handle,UINT message,WPARAM w,LPARAM l)
+		{
+			if (unicode_window_procedure)
+				return engine_window_procedure ? CallWindowProcW(engine_window_procedure,handle,message,w,l) : DefWindowProcW(handle,message,w,l);
+			return engine_window_procedure ? CallWindowProcA(engine_window_procedure,handle,message,w,l) : DefWindowProcA(handle,message,w,l);
+		}
 
 		// Mouse messages reach a window under the cursor whether or not it has the focus, and the
 		// game hovers and clicks its menus on their coordinates (the window callback 0x5faa20 ->
@@ -892,18 +919,25 @@ namespace display
 		{
 			const in_flight_pointer saved = in_flight;
 			in_flight = {GetCurrentThreadId(), {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))}, engine_screen(), saved.depth + 1};
-			const LRESULT result = engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, converted) : DefWindowProcA(handle, what, w, converted);
+			const LRESULT result = call_engine_window(handle,what,w,converted);
 			in_flight = saved;
 			return result;
 		}
 
 		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
 		{
+			if (message == WM_NCDESTROY && text_message_hook)
+			{
+				UnhookWindowsHookEx(text_message_hook);text_message_hook = nullptr;
+			}
 			const auto engine = [&](const UINT what, const WPARAM w, const LPARAM l)
 			{
-				return engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, l) : DefWindowProcA(handle, what, w, l);
+				return call_engine_window(handle,what,w,l);
 			};
-			if (message == WM_CHAR && online_menus::text_entry_active()) return 0;
+			// Consume committed IME text here as well: forwarding it to the ANSI
+			// engine/default could narrow it before generating WM_CHAR copies.
+			if ((message == WM_CHAR || message == WM_IME_CHAR) &&
+			    editor_character(static_cast<unsigned>(wparam),lparam)) return 0;
 			if (test_pointer_enabled && test_pointer_message && message == test_pointer_message)
 			{
 				const UINT what = static_cast<UINT>(wparam);
@@ -918,11 +952,14 @@ namespace display
 			}
 			if (test_pointer_enabled && test_char_message && message == test_char_message)
 			{
-				// The engine's own handler (0x5faa20) keeps a WM_CHAR's low byte for the text entry; a real keyboard's
-				// characters come through the same message.
-				engine(WM_CHAR, wparam & 0xff, 1);
+				// Explicit test text uses exactly the physical WM_CHAR lane in LC.
+				if (!online_menus::text_entry_character(static_cast<unsigned>(wparam)))
+					engine(WM_CHAR, wparam & 0xff, 1);
 				return 1;
 			}
+			// Native/fullscreen windows need the LC text lane too. Their geometry
+			// and mouse dispatch remain owned by the engine.
+			if (!manages_geometry()) return engine(message,wparam,lparam);
 			// A window being dragged across monitors asks first what size it should have at the new DPI.
 			if (message == 0x02e4 /* WM_GETDPISCALEDSIZE */ && lparam && manages_geometry() && opts.window_mode == mode::windowed)
 			{
@@ -975,30 +1012,49 @@ namespace display
 			return engine(message, wparam, lparam);
 		}
 
-		// Puts filtered_window_procedure in front of the engine's (an ANSI window: igWin32Window
-		// registers its class with the A functions and never replaces the procedure itself).
+		// With online menus installed, use a Unicode subclass. Keep the W
+		// previous-procedure thunk and use CallWindowProcW throughout: Windows
+		// still converts messages for the original ANSI procedure outside LC,
+		// while LC receives complete UTF-16 characters before any lossy conversion.
 		void filter_mouse_messages(const HWND handle)
 		{
-			engine_window_procedure = reinterpret_cast<WNDPROC>(GetWindowLongPtrA(handle, GWLP_WNDPROC));
+			unicode_window_procedure = online_menus::installed();
+			engine_window_procedure = reinterpret_cast<WNDPROC>(unicode_window_procedure ?
+				GetWindowLongPtrW(handle, GWLP_WNDPROC) : GetWindowLongPtrA(handle, GWLP_WNDPROC));
 			if (!engine_window_procedure)
 			{
 				logger::write("display: couldn't read the game's window procedure (error %lu) - no mouse filter; its menus may react to the mouse while unfocused", GetLastError());
 				return;
 			}
-			if (!SetWindowLongPtrA(handle, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&filtered_window_procedure)))
+			const auto procedure = reinterpret_cast<LONG_PTR>(&filtered_window_procedure);
+			if (!(unicode_window_procedure ? SetWindowLongPtrW(handle, GWLP_WNDPROC, procedure) : SetWindowLongPtrA(handle, GWLP_WNDPROC, procedure)))
 			{
 				logger::write("display: couldn't put the mouse filter on the game's window (error %lu) - its menus may react to the mouse while unfocused", GetLastError());
 				return;
 			}
-			logger::write("display: the game's window ignores the mouse while another window has the focus");
+			if (unicode_window_procedure && !text_message_hook)
+			{
+				text_message_hook = SetWindowsHookExW(WH_GETMESSAGE,&text_get_message,nullptr,GetCurrentThreadId());
+				if (!text_message_hook)
+					logger::write("display: Unicode text queue hook failed (error %lu); LC physical text refused, use the on-screen grid",GetLastError());
+			}
+			logger::write(manages_geometry() ? "display: the game's window ignores the mouse while another window has the focus" :
+				"display: LC Unicode text input wrapped; native window geometry and mouse dispatch retained");
 		}
 
 		HWND WINAPI hooked_create_window_ex_a(const DWORD ex_style, const LPCSTR class_name, const LPCSTR title, const DWORD style, const int x, const int y,
 		                                      const int width, const int height, const HWND parent, const HMENU menu, const HINSTANCE instance, const LPVOID param)
 		{
-			if (!class_name || IS_INTRESOURCE(class_name) || std::strcmp(class_name, window_class) != 0 || !manages_geometry())
+			if (!class_name || IS_INTRESOURCE(class_name) || std::strcmp(class_name, window_class) != 0)
 			{
 				return real_create_window_ex_a(ex_style, class_name, title, style, x, y, width, height, parent, menu, instance, param);
+			}
+
+			if (!manages_geometry())
+			{
+				const auto result = real_create_window_ex_a(ex_style,class_name,title,style,x,y,width,height,parent,menu,instance,param);
+				if (result && online_menus::installed()) { window = result;filter_mouse_messages(result); }
+				return result;
 			}
 
 			make_dpi_aware();
@@ -1464,6 +1520,11 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
+		// Text input must work with the native display mode as well as managed
+		// windows. This import hook does not change geometry outside our modes.
+		if (online_menus::installed() && !real_create_window_ex_a &&
+		    !hook_import(GetModuleHandleA("libIGDisplay.dll"),"USER32.dll","CreateWindowExA",&hooked_create_window_ex_a,real_create_window_ex_a))
+			logger::write("display: LC text input could not hook the engine's window creation");
 		if (no_activate::enabled())
 		{
 			opts.window_mode = mode::windowed;
@@ -1499,6 +1560,10 @@ namespace display
 			}
 			if (why.empty())
 			{
+				if (online_menus::installed()) {
+					logger::write("display: native graphics retained; only LC text input window creation wrapped");
+					return;
+				}
 				logger::write("display: as the game has it (no [Display] Mode, FrameRate, VSync or ResolutionList in xml2-fix.ini, no in-game rows) - nothing hooked, "
 				              "and the boot FSAA switch is left as the game has it (8x needs the device hook's clamp)");
 				return;
@@ -1566,7 +1631,7 @@ namespace display
 		{
 			// The engine's window: created, styled and placed by igWin32Window through these.
 			const HMODULE engine_display = GetModuleHandleA("libIGDisplay.dll");
-			geometry_hooked = hook_import(engine_display, "USER32.dll", "CreateWindowExA", &hooked_create_window_ex_a, real_create_window_ex_a) &&
+			geometry_hooked = (real_create_window_ex_a || hook_import(engine_display, "USER32.dll", "CreateWindowExA", &hooked_create_window_ex_a, real_create_window_ex_a)) &&
 			                  hook_import(engine_display, "USER32.dll", "SetWindowLongA", &hooked_set_window_long_a, real_set_window_long_a) &&
 			                  hook_import(engine_display, "USER32.dll", "SetWindowPos", &hooked_set_window_pos, real_set_window_pos) &&
 			                  hook_import(engine_display, "USER32.dll", "MoveWindow", &hooked_move_window, real_move_window) &&

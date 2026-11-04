@@ -77,8 +77,10 @@ struct broker_api {
     bool (*drop_in_editable)()=nullptr;
 };
 void keyboard(unsigned char* state);
-// LC editor uses DirectInput edges; suppress duplicate physical WM_CHAR.
+// Unicode WM_CHAR text is queued only for the owning LC editor activation.
+// Returns true when consumed, including DI controls whose WM_CHAR copy is ignored.
 bool text_entry_active();
+bool text_entry_character(unsigned character,unsigned scan=0);
 bool requested();
 bool installed();
 // Diagnostics: how often the native session-end wrapper ran (one kick may clear twice; review E finding 6).

@@ -80,9 +80,13 @@ void run(const script_functions_rules::func_entry* entry) {
     for(int i=0;i<70;++i) inbox.push_back(i);assert(inbox.size()==64);
     inbox.push_front(99);assert(inbox.front()==99 && inbox.size()==64);inbox.pop_front();
     assert(inbox.front()==0);inbox.clear();assert(inbox.empty());
-    for(unsigned scan=2;scan<=11;++scan) assert(online_text_entry_rules::key(scan,false,false)=="1234567890"[scan-2]);
-    assert(online_text_entry_rules::key(0x1e,false,false)=='a' && online_text_entry_rules::key(0x1e,true,false)=='A' && online_text_entry_rules::key(0x1e,true,true)=='a');
-    assert(online_text_entry_rules::key(0x34,false,false)=='.' && online_text_entry_rules::key(0x0e,false,false)==8 && online_text_entry_rules::key(0x1c,false,false)==online_text_entry_rules::accept);
+    for(unsigned scan=0;scan<256;++scan) {
+        const bool control=scan==1 || scan==0x0e || scan==0x1c || scan==0x9c || scan==0xcb || scan==0xcd || scan==0xc8 || scan==0xd0;
+        assert(bool(online_text_entry_rules::key(scan))==control);
+    }
+    for(unsigned c:{0u,8u,13u,27u,31u,127u}) assert(!online_text_entry_rules::character(c));
+    for(unsigned c:{0xe9u,0x20acu,0x4e2du,0xd83du,0xde00u,0x1f600u})
+        assert(online_text_entry_rules::character(c)==online_text_entry_rules::unsupported);
     for(int count:{5,11,36}) {
         std::array<bool,41> reached{};reached[0]=true;
         for(int pass=0;pass<41;++pass) for(int i=0;i<41;++i) if(reached[i])
@@ -93,19 +97,60 @@ void run(const script_functions_rules::func_entry* entry) {
     }
     // Give every key its own actual item pointer, just as the native menu does.
     redirect(0x5adf40,focus_stub);
-    // Mapping is exercised through production DirectInput delivery, not WM_CHAR.
+    // Controls use production DI delivery; printable text uses the public WM_CHAR sink.
     const auto press=[&](unsigned scan) {
         std::array<unsigned char,256> state{};online_menus::keyboard(state.data());
         state[scan]=128;online_menus::keyboard(state.data());assert(state[scan]==0);
         tick(editor.data(),nullptr);
     };
-    begin(3,15);press(2);press(0x34);press(3);assert(text()=="1.2");press(0x0e);assert(text()=="1.");
+    const auto chars=[&](std::u16string_view value) {
+        for(unsigned c:value) assert(online_menus::text_entry_character(c));
+        for(unsigned i=0;i<value.size();++i) tick(editor.data(),nullptr);
+    };
+    const auto physical=[&](unsigned scan,unsigned character) { press(scan);chars(std::u16string(1,char16_t(character))); };
+    // Simulated TranslateMessage WM_CHAR streams: same physical keys, active
+    // US (0409), French AZERTY (040c), German QWERTZ (0407) output.
+    for(const auto& layout:{std::pair{0x0409,u"aqwzym"},std::pair{0x040c,u"qazwym"},std::pair{0x0407,u"aqwyzm"}}) {
+        begin(0,31);
+        std::string expected;
+        for(unsigned i=0;i<6;++i) {
+            physical(std::array<unsigned,6>{0x1e,0x10,0x11,0x2c,0x15,(layout.first==0x040c ? 0x27u : 0x32u)}[i],layout.second[i]);
+            expected.push_back(static_cast<char>(layout.second[i]));
+        }
+        assert(text()==expected);
+        assert(text().size()==6); // DI never duplicates WM_CHAR, including AZERTY M (scan 27).
+        (void)layout.first;
+    }
+    // Correct QWERTZ Y/Z and shifted/caps-translated text arrive verbatim.
+    begin(0,31);physical(0x15,'z');physical(0x2c,'y');chars(u"AZ");assert(text()=="zyAZ");
+    // AltGr is not filtered by the DI modifier guard. Allowed '<' survives;
+    // unsupported '@' / euro are visibly refused by native charset / Unicode guard.
+    begin(0,31);std::array<unsigned char,256> modifiers{};online_menus::keyboard(modifiers.data());
+    modifiers[0x1d]=modifiers[0xb8]=modifiers[0x10]=128;online_menus::keyboard(modifiers.data());
+    chars(u"<");assert(text()=="<");chars(u"@\u20ac");assert(text()=="<" && texts["desctext4"]=="Unsupported");
+    // A dead-key press produces no WM_CHAR until composition. Composed e-acute
+    // and IME/surrogate output must never be narrowed to printable low bytes.
+    begin(0,31);press(0x1a);assert(text().empty());chars(u"\u00e9\u4e61\xd83d\xde00");
+    assert(text().empty() && texts["desctext4"]=="Unsupported");
+    begin(0,31);press(0x1a);chars(u"a");assert(text()=="a"); // dead key yielding supported output
+    // Both message/poll orders, repeats, and WM_CHAR copies of DI controls.
+    begin(0,31);chars(u"a");press(0x1e);assert(text()=="a");chars(u"aa");assert(text()=="aaa");
+    press(0x0e);chars(u"\b");assert(text()=="aa");press(0xcd);press(0x1c);chars(u"\r");assert(text()=="aab");
+    // Main row (Shift supplies AZERTY digits) and NumLock numpad streams share
+    // tag 3. A translated comma is refused, never silently changed to a dot.
+    for(unsigned scan:{2u,0x52u}) {
+        begin(3,15);physical(scan,'1');physical(0x34,'.');physical(scan,'2');assert(text()=="1.2");
+        chars(u",");assert(text()=="1.2" && texts["desctext4"]=="Unsupported");
+    }
+    begin(3,15);assert(online_menus::text_entry_character(',',0x53));tick(editor.data(),nullptr);assert(text()==".");
+    begin(0,31);assert(online_menus::text_entry_character(',',0x53));tick(editor.data(),nullptr);assert(text()==",");
+    begin(3,15);physical(2,'1');physical(0x34,'.');physical(3,'2');assert(text()=="1.2");press(0x0e);assert(text()=="1.");
     press(0xcd);press(0x1c);assert(text()=="1.2"); // focus 1 -> 2, Enter types 2
     mask=0x1000;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr); // D-pad Down
     const auto pad_before=text();mask=0x10;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);
     assert(text().size()==pad_before.size()+1); // A presses the focused key, never Done
     press(1);assert(text().empty());
-    begin(0,31);press(0x1e);press(0x30);assert(text().size()==2 && std::tolower(text()[0])=='a' && std::tolower(text()[1])=='b');
+    begin(0,31);physical(0x1e,'a');physical(0x30,'b');assert(text()=="ab");
     mask=0x200000;tick(editor.data(),nullptr);mask=0;assert(text().empty());
     const auto pad=[&](unsigned value) {mask=value;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);};
     const auto action_mask=[](int action) {
@@ -129,10 +174,22 @@ void run(const script_functions_rules::func_entry* entry) {
     press(0x1c);assert(closed==enter_done+1);
     begin(0,31);key(0);focus_stub(editor.data(),nullptr,"text_inputkeys40",true);
     const auto pad_done=closed;pad(0x10);assert(closed==pad_done+1);
-    // Queued DI input belongs to this activation, even at a reused menu address.
+    // Queued text belongs to this activation, even at a reused menu address.
     begin(0,31);std::array<unsigned char,256> queued_keys{};online_menus::keyboard(queued_keys.data());
-    queued_keys[0x1e]=128;online_menus::keyboard(queued_keys.data());deactivate(editor.data(),nullptr);
+    queued_keys[0x1e]=128;online_menus::keyboard(queued_keys.data());assert(online_menus::text_entry_character('a'));deactivate(editor.data(),nullptr);
     begin(0,31);tick(editor.data(),nullptr);assert(text().empty());
+    begin(0,31);chars(u"0123456789012345678901234567890");assert(text().size()==31);
+    chars(u"a");assert(text().size()==31 && texts["desctext4"]=="Text limit");
+    begin(0,31);assert(online_menus::text_entry_character('a'));online_menus::keyboard(nullptr);tick(editor.data(),nullptr);assert(text().empty());
+    begin(0,31);for(int i=0;i<70;++i) assert(online_menus::text_entry_character('a'));
+    tick(editor.data(),nullptr);assert(text()=="a" && texts["desctext4"]=="Input full");
+    begin(0,31);chars(u"\u00e9a");assert(text()=="a" && texts["desctext4"]=="Unsupported");
+    ticks+=3000;tick(editor.data(),nullptr);assert(texts["desctext4"].empty());
+    // A foreign request cannot enqueue characters into the current activation.
+    begin(0,31);put(reinterpret_cast<void*>(0xa3e168),0x304,3);
+    assert(online_menus::text_entry_character('a'));put(reinterpret_cast<void*>(0xa3e168),0x304,0);
+    tick(editor.data(),nullptr);assert(text().empty());
+    std::cout<<"PASS WM_CHAR US 0409 / AZERTY 040c / QWERTZ 0407, AltGr, dead key, IME refusal, controls, repeat, no DI duplicates, numpad/main-row IP, visible refusal, queue bounds and 31-byte limit\n";
     begin(0,31);assert(texts["text_inputkeys01"]=="a");key(0);assert(text()=="a");
     key(38);assert(texts["text_inputkeys01"]=="A");key(0);assert(text()=="aA");
     key(38);assert(texts["text_inputkeys01"]=="<" && !enabled_items["text_inputkeys06"]);key(0);key(37);assert(text()=="aA< ");
