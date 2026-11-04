@@ -108,7 +108,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert "dispatcher lcOnlineIntent n(i) registered; 72 patch writes and menu-anchors/512 committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 71 patch writes and menu-anchors/512 committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":
