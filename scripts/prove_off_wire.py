@@ -48,6 +48,11 @@ def capture(tag, dlldir, edit, rules):
     # revision 2, so the transport's OFF claim is compared with the key removed (rule count unchanged).
     if cfg.has_option("Game", "RevivalCost"):
         cfg.remove_option("Game", "RevivalCost")
+    # The boss stuck-step audit (25a6c0c) makes a REQUESTED Master Mold ([Game] Xml1MasterMold=1) rule 3 revision 2 on purpose
+    # (bounded core / facing / travel waits); without the key rule 3 stays the released revision 1 / off record (rule count
+    # unchanged), so the transport's OFF claim is compared with the key removed.
+    if cfg.has_option("Game", "Xml1MasterMold"):
+        cfg.remove_option("Game", "Xml1MasterMold")
     # XML2 Fix 1.9.0-beta.1 (limits wave 1) registers every non-stock resource limit as its own rule (32-37,
     # docs/gameplay-agreement.md "Resource-loading limits") on purpose: two PCs with different name/slot capacities
     # refuse each other by name. The reference predates those rules, so the transport's OFF claim is compared with
