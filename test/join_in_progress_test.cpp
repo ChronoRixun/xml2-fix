@@ -1,12 +1,14 @@
 #include "join_in_progress_core.hpp"
 #include "gns_transport_core.hpp" // p060fix/AR: the lost-newcomer decision and its ledger (the cohort model below)
 #include "join_in_progress_rules.hpp"
+#include "gns_transport_rules.hpp" // AR8: the input block layout the epoch-marker hooks read
 #include "join_in_progress_diagnostics.hpp"
 #include "gameplay_capabilities.hpp"
 #include "actor_ai_layout.hpp" // p060fix/AI: the brain ring layout per stage, checked against E4's ledger rows
 #include "e4_core_sites.hpp"
 #include <cstdlib>
 #include <algorithm>
+#include <iterator>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -842,6 +844,34 @@ int main(int argc, char** argv)
 				check(restart_whole_input(0) == send_form::force_full && restart_whole_input(31) == send_form::force_full, "AR6 L1: frames 0 and 31 go out full");
 				check(restart_whole_input(32) == send_form::stock && restart_whole_input(2000) == send_form::stock, "AR6 L1: frame 32 and later use the stock delta decision");
 			}
+			// AR7 (fable-ar7): the symmetric clock step - a record's contribution to the frame's clock step is the same on its
+			// owner as on every other peer; the stock rule was owner-relative for placeholder (bit-15) records.
+			{
+				using namespace join_in_progress_core;
+				const std::uint16_t capped = std::uint16_t(step_word_cap | step_placeholder_bit), frame33 = std::uint16_t(333u | step_placeholder_bit);
+				check(step_seconds(step_word_cap) == 1.0f && step_seconds(capped) == 1.0f && step_seconds(0) == 0.0f, "AR7: the step word is 0.1 ms units, bit 15 is not part of the value");
+				check(stock_clock_step(capped, true) == step_placeholder_seconds && stock_clock_step(capped, false) == 1.0f, "AR7: stock - a flagged 1.0 s record counts 0.025 s on its owner and 1.0 s elsewhere (the asymmetry)");
+				check(stock_clock_step(step_word_cap, true) == 1.0f && stock_clock_step(step_word_cap, false) == 1.0f, "AR7: stock - an unflagged record counts its value everywhere");
+				check(stock_clock_step(wire_step_word(capped), false) == step_seconds(capped), "AR7: the wire strips bit 15, so a remote peer always sees the value");
+				bool symmetric = true;
+				for (unsigned w = 0; w < 0x10000u; ++w)
+					if (symmetric_clock_step(std::uint16_t(w), true) != symmetric_clock_step(std::uint16_t(w), false) || symmetric_clock_step(std::uint16_t(w), true) != stock_clock_step(wire_step_word(std::uint16_t(w)), false)) symmetric = false;
+				check(symmetric, "AR7: for every step word the symmetric step on the owner equals what every other peer applies (the stock remote rule)");
+				check(symmetric_clock_step(frame33, true) == step_seconds(333) && stock_clock_step(frame33, true) == step_placeholder_seconds, "AR7: a flagged 33.3 ms record now counts 33.3 ms on its owner (stock: 25 ms)");
+				check(std::uint32_t(0x3ccccccd) == [] { float f = step_placeholder_seconds; std::uint32_t u; std::memcpy(&u, &f, 4); return u; }(), "AR7: the stock constant at 0x55923f is 0.025f");
+				// The patch: 2 bytes at 0x559233 (the first instruction after `and eax, 0x7fff`) jump to the unflagged path.
+				using namespace join_in_progress_rules;
+				check(clock_step_site + 2 + clock_step_patch[1] == clock_step_target && clock_step_patch[0] == 0xeb && clock_step_patch[2] == 0x90 && clock_step_patch[3] == 0x90, "AR7: eb 1a at 0x559233 lands on 0x55924f (movzx ecx, ax), then two nops");
+				const std::string region(clock_step_guards[0].hex);
+				const auto at = [&](std::uint32_t va, std::size_t n) { return region.substr((va - clock_step_guards[0].va) * 2, n * 2); };
+				check(clock_step_guards[0].va == 0x559222 && region.size() == 2 * (0x55926b - 0x559222), "AR7: the guard covers 0x559222..0x55926a (the read, both paths and the join)");
+				check(at(clock_step_site, 4) == "89442410" && at(clock_step_target, 3) == "0fb7c8" && at(0x55922e, 5) == "25ff7f0000" && at(0x55923b, 8) == "c7442414cdcccc3c", "AR7: the guarded bytes hold the original mov, the jump target's movzx, the mask and the 0.025 s constant");
+				check(std::string(clock_step_guards[2].hex).substr(0, 12) == "d90530006800" && clock_step_guards[2].va == clock_step_observe_site && clock_step_observe_resume == clock_step_observe_site + clock_step_observe_original.size(), "AR7: the observer site is the guarded fld dword [0x680030] (6 bytes), resume right after it");
+				check(step_observe_frames == 41 && step_observe_lines == 2048, "AR7: the observer covers frames 0..40 and at most 2048 lines per process");
+				bool belt = true;
+				for (unsigned n = 10; n <= 60; ++n) { float f = canonical_clock_step(n); std::uint32_t u; std::memcpy(&u, &f, 4); if (f != 1.0f / float(n) || !(f > 0.0f) || (n == 30 && u != 0x3d088889u) || (n == 60 && u != 0x3c888889u)) belt = false; }
+				check(belt && canonical_clock_step(0) == 0.0f, "AR7 belt: 1/N for N in 10..60 (30 -> 0x3d088889, 60 -> 0x3c888889); no rate -> 0 (the stock step stays)");
+			}
 			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
 			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
 			// epoch saw the loading flags, and never before.
@@ -953,6 +983,39 @@ int main(int argc, char** argv)
 		      "follow-up 14 (S2): an in-image kind keeps its address, a member its offset; the image range is [0x401000, 0xa40000)");
 		event_entry heap_no_vtable = heap_host; heap_no_vtable.kind_vtable = 0;
 		check(event_kind_key(heap_no_vtable) == 0x033a4568, "follow-up 14 (S2): a heap kind whose vtable could not be read keeps its raw address");
+	}
+	// AR8 (fable-ar8): the input-stream epoch marker - pure rules and the three sites.
+	{
+		using namespace join_in_progress_core;
+		using namespace join_in_progress_rules;
+		check(input_epoch_mark_prefix == 0xfffa0000u && input_epoch_copies == 2, "AR8: markers carry the 0xfffa prefix; two copies per epoch");
+		check(input_epoch_mark(0xfffa0001u) && input_epoch_mark(0xfffaffffu) && !input_epoch_mark(0xfffa0000u) && !input_epoch_mark(0xfffb0001u) && !input_epoch_mark(0) && !input_epoch_mark(0x00080000u) && !input_epoch_mark(0xffffffffu),
+		      "AR8: a marker is prefix | non-zero nonce; nonce 0, another prefix, zero, the pause code and all-ones are not markers");
+		bool natives_clear = true;
+		for (const auto code : native_event_codes) natives_clear &= !input_epoch_mark(code);
+		check(natives_clear, "AR8: none of the four native lockstep event codes is a marker");
+		check(input_epoch_mark_for(0x1234) == 0xfffa1234u && input_epoch_mark_for(0) == 0xfffa0001u && input_epoch_nonce(0xfffa1234u) == 0x1234 && input_epoch_mark(input_epoch_mark_for(0)),
+		      "AR8: mark_for/nonce round-trip; a zero nonce becomes 1");
+		bool nonces_ok = true;
+		std::uint16_t prev = 0;
+		for (std::uint32_t seed = 0; seed < 70000u && nonces_ok; seed += 7u) { const auto n = next_input_epoch_nonce(seed, prev); nonces_ok = n != 0 && n != prev; prev = n; }
+		check(nonces_ok && next_input_epoch_nonce(0x5bd1u, 0) != 0 && next_input_epoch_nonce(0, 0) != 0, "AR8: the next nonce is never 0 and never the previous one (70000 seeds)");
+		check(input_epoch_receive(0x00080000u, 7) == input_epoch_action::store && input_epoch_receive(0xfff31fffu, 7) == input_epoch_action::store, "AR8: a real record and a native event are stored as before");
+		check(input_epoch_receive(0xfffa0007u, 0) == input_epoch_action::reset && input_epoch_receive(0xfffa0007u, 6) == input_epoch_action::reset, "AR8: a new nonce resets the participant's block");
+		check(input_epoch_receive(0xfffa0007u, 7) == input_epoch_action::ignore, "AR8: the same nonce again (the extra copy) is ignored");
+		check(input_epoch_counter_after_ignore(5) == 4 && input_epoch_counter_after_ignore(1) == 0 && input_epoch_counter_after_ignore(0) == 0, "AR8: an ignored copy gives the decoder's counter increment back, never below 0");
+		check(input_ring_pending(0, 5) == 5 && input_ring_pending(3, 3) == 0 && input_ring_pending(298, 1) == 3 && input_ring_pending(300, 1) == 0, "AR8: pending records from read/write with the 300-slot wrap; an out-of-range index counts 0");
+		// Sites: the two CALL replacements reach the retail reset and send-enable; the store's displaced prologue is 11 bytes.
+		check(input_epoch_release_original[0] == 0xe8 && input_epoch_start_original[0] == 0xe8 && input_epoch_release_call + 5 + std::int32_t(0xfff451e3u) == input_ring_reset_all && input_epoch_start_call + 5 + std::int32_t(0xfff44798u) == input_send_enable,
+		      "AR8: 0x613f68 calls 0x559150 and 0x6140b3 calls 0x558850 (the displaced rel32s)");
+		check(input_epoch_store_original.size() == 11 && input_epoch_store_resume == input_epoch_store_site + 11 && input_epoch_store_original[0] == 0x51 && input_epoch_store_original[5] == 0x69 && input_epoch_store_original[7] == 0x84 && input_epoch_store_original[8] == 0x31,
+		      "AR8: the store's prologue push ecx / mov eax,[esp+0xc] / imul eax,eax,0x3184 is re-executed by the bridge; resume at 0x55956b");
+		for (const auto va : {input_epoch_release_call, input_epoch_start_call, input_epoch_store_site, input_post_event, input_block_reset, local_participant_index, 0x559ee7u})
+			check(std::any_of(std::begin(input_epoch_guards), std::end(input_epoch_guards), [va](const auto& g) { return g.va <= va && va + 5 <= g.va + g.hex.size() / 2; }), "AR8: every site and helper the marker relies on is guarded");
+		check(std::string(input_epoch_guards[0].hex).substr((input_epoch_release_call - input_epoch_guards[0].va) * 2, 10) == "e8e351f4ff" && std::string(input_epoch_guards[1].hex).substr((input_epoch_start_call - input_epoch_guards[1].va) * 2, 10) == "e89847f4ff" && std::string(input_epoch_guards[2].hex).substr(0, 22) == "518b44240c69c084310000",
+		      "AR8: the guarded bytes at the three sites are the originals the transaction replaces");
+		check(input_block_counter == 0x317e && gns_transport_rules::input_block_size == 0x3184 && gns_transport_rules::input_read == 0x3170 && gns_transport_rules::input_write == 0x3174 && gns_transport_rules::input_next == 0x317c,
+		      "AR8: the block layout the hooks read (counter +0x317e next to the next frame +0x317c)");
 	}
 	lost_newcomer_units(); // p060fix/AR
 	restart_execution_units(); // AR5

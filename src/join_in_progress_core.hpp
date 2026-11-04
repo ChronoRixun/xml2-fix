@@ -796,6 +796,28 @@ namespace join_in_progress_core
 	{
 		return frame < pause_guard_frames ? (mask & ~pause_code_bit) : mask;
 	}
+
+	// AR7 (fable-ar7): the clock step a participant's head record contributes to a lockstep frame (0x559222..0x559268; the
+	// frame's step is the max over the participants, 0x559282, set into the clock at 0x559546). The record's step word is
+	// the producer's frame time in 0.1 ms units capped at 1.0 s (0x2710); bit 15 marks a placeholder record (produced while
+	// the input manager is in placeholder mode, +0xc68b != 0). The stock rule is OWNER-RELATIVE: the owner counts a flagged
+	// record as 0.025 s (0x3ccccccd), every other peer - which receives the word with bit 15 stripped - counts its full value.
+	// The symmetric rule counts the value everywhere, so the frame's step, and with it the game clock, is the same function
+	// of the same frame-keyed records on every peer. Offline nothing changes: a record is only flagged in placeholder mode.
+	constexpr std::uint16_t step_placeholder_bit = 0x8000u, step_word_cap = 0x2710u;
+	constexpr float step_placeholder_seconds = 0.025f; // 0x3ccccccd, the stock owner-side value of a flagged record
+	constexpr float step_unit_seconds = 1e-4f;         // 0x680518
+	inline float step_seconds(std::uint16_t word) { return float(word & 0x7fffu) * step_unit_seconds; }
+	inline float stock_clock_step(std::uint16_t word, bool own) { return own && (word & step_placeholder_bit) ? step_placeholder_seconds : step_seconds(word); }
+	inline float symmetric_clock_step(std::uint16_t word, bool) { return step_seconds(word); }
+	// What the wire carries for a record (0x5597f1 and the delta kinds: bit 15 stripped); the receiver stores it verbatim.
+	inline std::uint16_t wire_step_word(std::uint16_t word) { return word & 0x7fffu; }
+	// Belt (FINDINGS 2.2, [Online] CanonicalClockStep, default OFF): while an online session is live, the frame's step is
+	// 1/N (N = the session's agreed tick, the host's linked rate or the stock 30) whatever the records carry, so game time
+	// is 2.0 + k/N on every peer by construction. A = 1/N is non-zero, so the stock set_one_shot_step(A) still runs.
+	inline float canonical_clock_step(unsigned rate) { return rate ? 1.0f / float(rate) : 0.0f; }
+	constexpr unsigned step_observe_frames = 41; // `jip step:` lines for frames 0..40 of every epoch (JoinDiagnostics=1)
+	constexpr unsigned step_observe_lines = 2048;
 	// The apply's mask argument must be a lockstep ring record's code-mask field (synchronizer 0x79fbb0: four blocks of 0x3184,
 	// 300 slots of 0x28 at +0x268, record bytes at slot +4, frame u16 at record +0, code mask at record +4): the guard reads the
 	// frame at mask - 4 only for such a pointer; any other caller of vt+0x24 (offline play, menus) is left alone.
@@ -807,4 +829,47 @@ namespace join_in_progress_core
 		const auto in_slots = in_block - 0x268u;
 		return in_slots / 0x28u < 300u && in_slots % 0x28u == 8u;
 	}
+
+	// AR8 (fable-ar8): the input-stream epoch marker. A single lockstep record (kinds 1..5, 0x66..0x68, 0x6f) carries NO
+	// frame label on the wire (0x5597db sends mask, axes, step and body only); the receiver 0x559eb0 labels it with the
+	// block's received-record counter (+0x317e, 0x559ee7..0x559f01: label = counter++), which 0x558740 zeroes together with
+	// the ring at every reset. A cohort restart resets each peer's rings at ITS OWN release (0x613f68 -> 0x559150, all four
+	// blocks) and again at its start (0x6140a5 -> 0x559e00). Any record a peer sent between its start and its final reset is
+	// wiped from the sender's own ring but, when the receiver parses it after the receiver's own reset (its parser was busy
+	// loading), it is COUNTED: fable-ar7 X7-2a/X7B-2a/2a2 - the host's block for the guest held one such record at label 0,
+	// so every later record of the guest sat one label late on the host (host label f = guest label f-1), the two PCs applied
+	// the guest's inputs one frame apart and the cohort split at the guest's first stick input (frame 540/570). The marker:
+	// right after each of its two reset sites the sender posts input_epoch_copies records whose code mask is
+	// input_epoch_mark_prefix | nonce through the native lockstep-event path (0x55a370 -> 0x559700: produced into the own
+	// ring, sent at once) and then wipes its own block again (0x558740), so the markers travel in the input stream, ahead of
+	// its first real record, and occupy no label anywhere. The receiver's store hook (0x559560) recognises a marker, resets
+	// that participant's block (stale records dropped, counter back to 0) and stores nothing; a repeated nonce (the extra
+	// copies) only undoes the decoder's counter increment. Every real record after the marker is counted from 0 on every
+	// receiver, exactly as the sender labelled it. The native event codes (0xfff31fff, 0xfff77fe0, 0xfff33fe0, 0xfff11fe0)
+	// and real UI-code masks never carry the 0xfffa prefix. [Online] RestartInputEpoch (sender side); receivers always honour
+	// a marker, so a peer with the key off still accepts one (it then stores no stray record either way).
+	constexpr std::uint32_t input_epoch_mark_prefix = 0xfffa0000u;
+	constexpr unsigned input_epoch_copies = 2;
+	constexpr std::uint32_t native_event_codes[]{0xfff31fffu, 0xfff77fe0u, 0xfff33fe0u, 0xfff11fe0u};
+	inline bool input_epoch_mark(std::uint32_t mask) { return (mask & 0xffff0000u) == input_epoch_mark_prefix && (mask & 0xffffu) != 0u; }
+	inline std::uint32_t input_epoch_mark_for(std::uint16_t nonce) { return input_epoch_mark_prefix | (nonce ? nonce : 1u); }
+	inline std::uint16_t input_epoch_nonce(std::uint32_t mask) { return std::uint16_t(mask & 0xffffu); }
+	// A fresh 16-bit nonce for this PC's next epoch: never 0 and never the previous one (a receiver ignores a repeat).
+	inline std::uint16_t next_input_epoch_nonce(std::uint32_t seed, std::uint16_t previous)
+	{
+		std::uint16_t n = std::uint16_t((seed ^ (seed >> 16) ^ 0x5bd1u) & 0xffffu);
+		if (!n || n == previous) n = std::uint16_t(previous + 0x9e37u);
+		if (!n) n = 1;
+		return n;
+	}
+	enum class input_epoch_action { store, reset, ignore };
+	inline input_epoch_action input_epoch_receive(std::uint32_t mask, std::uint16_t last_nonce)
+	{
+		if (!input_epoch_mark(mask)) return input_epoch_action::store;
+		return input_epoch_nonce(mask) == last_nonce ? input_epoch_action::ignore : input_epoch_action::reset;
+	}
+	// The decoder incremented the block's counter for a single record before the store sees it; an ignored repeat gives it back.
+	inline std::uint16_t input_epoch_counter_after_ignore(std::uint16_t counter) { return counter ? std::uint16_t(counter - 1u) : counter; }
+	// Pending (stored, unconsumed) records of a block from its read/write indices (300-slot ring).
+	inline unsigned input_ring_pending(std::uint32_t read, std::uint32_t write) { return read < 300u && write < 300u ? (write >= read ? write - read : write + 300u - read) : 0u; }
 }

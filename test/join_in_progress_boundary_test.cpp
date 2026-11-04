@@ -16,6 +16,7 @@ std::vector<std::string> observed_jip_logs;
 namespace frame_rate {
 unsigned fixture_shared_starts=0;
 void shared_frame_started() { ++fixture_shared_starts; }
+unsigned session_rate() { return 0; } // AR7 belt: no adopted session rate in the fixture (the stock 30 applies)
 }
 
 namespace logger {
