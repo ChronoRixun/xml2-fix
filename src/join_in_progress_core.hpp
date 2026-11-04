@@ -944,4 +944,47 @@ namespace join_in_progress_core
 	inline std::uint16_t input_epoch_counter_after_ignore(std::uint16_t counter) { return counter ? std::uint16_t(counter - 1u) : counter; }
 	// Pending (stored, unconsumed) records of a block from its read/write indices (300-slot ring).
 	inline unsigned input_ring_pending(std::uint32_t read, std::uint32_t write) { return read < 300u && write < 300u ? (write >= read ? write - read : write + 300u - read) : 0u; }
+
+	// b2d-fix-jip (live-b2d N-LATE4 / N-2c-LATE): the restart-release barrier. The marker is one unreliable single record
+	// and the receiver labels single records by arrival, so what a peer stores from P between ITS OWN ring reset and P's
+	// marker fixes P's labels for the whole epoch. A record P sent before its restart, still in flight across the ~1 s
+	// reset skew (X-4p-a: m11 -> host; X-2cR, X-2cR2, X-2cL: host -> guest), was counted as P's label 0, the gate passed
+	// on it and P's marker was then late (ignored) on THAT peer, while the peers whose parsers saw the marker first reset:
+	// the same real record carried label 0 there and label 1 here and the cohort split at frame 30/60 (3 of 3
+	// lost-newcomer restarts of live-b2d). The barrier makes every peer take the same decision: from this PC's own
+	// all-blocks reset, P's records are HELD (copied aside with the decoder's label, not stored) until P's marker, which
+	// drops them (pre-restart records: the block resets and P's real records are counted from 0 on every peer alike) -
+	// or until a cap, after which the held records are stored in the order they came (the stock labelling, as before the
+	// barrier; a marker after that is late, as before). A REAL record can precede P's marker only through the native
+	// reliable resend (0x5c -> 0x5d batches, labelled on the wire: live-b2d P-LJ3, the newcomer's marker 16.6 s behind its
+	// resent frame 0): dropped at a marker inside the cap it is requested again and resent by label; past the cap it is
+	// stored as it came and the late marker is ignored, on every peer alike. Observed start-reset-to-marker skew: 1.0 to
+	// 2.4 s in every live-b2d restart (passed or failed); the cap stays well below the native 10 s-class watchdogs.
+	// Armed only while this PC itself sends markers ([Online] RestartInputEpoch, the shipped default), so the key stays a
+	// complete A/B control; this PC's own index (the own-record store 0x55a2a6) is never held.
+	constexpr unsigned input_epoch_hold_cap_ms = 5000;
+	constexpr unsigned input_epoch_hold_records = 96; // per participant; the pre-restart window is a few records (96 = 3.2 s at 30 fps)
+	constexpr unsigned input_epoch_record_bytes = 0x24; // the decoder's record as the store copies it (0x5595cd: 9 dwords)
+	enum class input_epoch_hold { store, hold, flush };
+	struct input_epoch_barrier
+	{
+		bool expecting[4]{};
+		unsigned held[4]{};
+		std::uint32_t armed_at = 0;
+		void arm(int own, std::uint32_t now) { for (unsigned i = 0; i < 4; ++i) { expecting[i] = int(i) != own; held[i] = 0; } armed_at = now; }
+		void disarm() { for (unsigned i = 0; i < 4; ++i) { expecting[i] = false; held[i] = 0; } }
+		bool any() const { for (const auto e : expecting) if (e) return true; return false; }
+		// A record that is not a marker, for `index`, at `now`: store (not expected), hold (copy it aside, skip the native
+		// store) or flush (the cap passed or the hold is full: store the held records in order, then this one).
+		input_epoch_hold record(std::uint32_t index, std::uint32_t now, unsigned cap_ms = input_epoch_hold_cap_ms, unsigned max_held = input_epoch_hold_records)
+		{
+			if (index > 3 || !expecting[index]) return input_epoch_hold::store;
+			if (now - armed_at >= cap_ms || held[index] >= max_held) { expecting[index] = false; return input_epoch_hold::flush; }
+			++held[index];
+			return input_epoch_hold::hold;
+		}
+		// A new-nonce marker for `index` ends the expectation; the held records are dropped (returns how many).
+		unsigned marker(std::uint32_t index) { if (index > 3 || !expecting[index]) return 0; expecting[index] = false; return take(index); }
+		unsigned take(std::uint32_t index) { if (index > 3) return 0; const auto n = held[index]; held[index] = 0; return n; }
+	};
 }

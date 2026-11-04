@@ -127,6 +127,184 @@ namespace
 		lost_newcomer_model::run_all();
 		lost_newcomer_model::control_060zj();
 		lost_newcomer_model::sensitivity();
+		// b2d-fix-jip (live-b2d N-STALL4): the decision at a transport tick before the native add was parsed.
+		{
+			check(newcomer_decision_waits_for_record(true, false) && !newcomer_decision_waits_for_record(true, true) && !newcomer_decision_waits_for_record(false, false) && !newcomer_decision_waits_for_record(false, true),
+				"AR carry (b2d): an absent record keeps the decision open at a tick and settles it only at the restart entry; a removed record settles it anywhere");
+			// X-4p-b on the slow guest: decision (pump) -> tick: no record -> 0x1f parsed: record created -> tick: removed.
+			newcomer_ledger slow;
+			slow.decide(3);
+			bool record_exists = false;
+			auto tick = [&](bool last_chance) { // carry_decisions' shape: absent at a tick stays open; a record is removed; absent at the entry settles
+				if (!slow.must_remove(3)) return false;
+				if (!record_exists) { if (newcomer_decision_waits_for_record(true, last_chance)) return false; slow.removed(3); return true; }
+				record_exists = false; slow.removed(3); return true;
+			};
+			check(!tick(false) && slow.must_remove(3), "AR carry (b2d, X-4p-b): at the tick before the native add is parsed the decision stays open (the b2d build closed it as 'already gone')");
+			record_exists = true; // the parser runs the host's 0x1f (mesh completion, 0x25 reply): the record for the removed seat exists
+			check(tick(false) && !record_exists && !slow.must_remove(3) && (slow.applied & 0x08), "AR carry (b2d, X-4p-b): the next tick removes the record the native add created - the restart sees 3 participants on every peer");
+			check(!tick(false) && slow.restart_entry() == 0, "AR carry (b2d): nothing is left open at the restart entry");
+			// X-4p-c's order (the add parsed first) is unchanged: one tick removes it.
+			newcomer_ledger fast; fast.decide(3); record_exists = true;
+			slow = fast; check(tick(false) && !slow.must_remove(3), "AR carry (b2d, X-4p-c): with the record already there the tick removes it as before");
+			// The native 0x2b removed it before any tick: open until the restart entry, settled there without a removal.
+			newcomer_ledger gone; gone.decide(2);
+			check(newcomer_decision_waits_for_record(true, false) && gone.must_remove(2), "AR carry (b2d): a record the native 0x2b already removed keeps the decision open through the ticks");
+			gone.removed(2); // the restart entry (last chance): absent settles
+			check(!gone.must_remove(2) && gone.restart_entry() == 0, "AR carry (b2d): the restart entry settles it as 'already gone' (no decision left open, no wait)");
+		}
+	}
+	// b2d-fix-jip (live-b2d N-LATE4 / N-2c-LATE): the restart-release barrier (join_in_progress_core::input_epoch_barrier) -
+	// unit rules, then a label model of the receiver: every peer of a cohort runs the same filter over its own arrival order
+	// and the model compares what label each peer gives the sender's records (what the one-label-late split is made of).
+	namespace barrier_model
+	{
+		using namespace join_in_progress_core;
+		enum class ev { stale, real, resent, marker };
+		struct entry { bool stale; int label; };
+		struct receiver
+		{
+			input_epoch_barrier barrier; input_epoch_memory memory;
+			unsigned counter[4]{}; std::uint32_t read[4]{}; bool armed = true;
+			std::vector<entry> stored[4], held[4]; // per participant block: what the native store holds, what the barrier holds aside
+			unsigned dropped_at_marker = 0, flushed = 0, resets = 0, lates = 0;
+			void reset_all(int own, std::uint32_t now) { memory.forget(); barrier.disarm(); if (armed) barrier.arm(own, now); for (unsigned i = 0; i < 4; ++i) { counter[i] = 0; read[i] = 0; stored[i].clear(); held[i].clear(); } }
+			// The store hook's decision for one record of `index` arriving at `now`.
+			void receive(unsigned index, ev e, std::uint32_t now, std::uint16_t nonce = 0, int wire_label = 0)
+			{
+				if (e == ev::marker)
+				{
+					const auto a = input_epoch_store_action(0, input_epoch_mark_for(nonce), memory.last[index], read[index]);
+					if (a == input_epoch_action::ignore) return;
+					memory.last[index] = nonce;
+					dropped_at_marker += barrier.marker(index); held[index].clear();
+					if (a == input_epoch_action::late) { ++lates; return; }
+					++resets; counter[index] = 0; read[index] = 0; stored[index].clear(); // the block reset
+					return;
+				}
+				const int label = e == ev::resent ? wire_label : int(counter[index]++); // the decoder: single records take the counter, batch records the wire label
+				const auto h = barrier.record(index, now);
+				if (h == input_epoch_hold::hold) { held[index].push_back({e == ev::stale, label}); return; }
+				if (h == input_epoch_hold::flush) { for (const auto& r : held[index]) { stored[index].push_back(r); ++flushed; } held[index].clear(); barrier.take(index); }
+				stored[index].push_back({e == ev::stale, label});
+			}
+			void consume(unsigned index, unsigned n) { read[index] += n; }
+			int first_real_label(unsigned index = 2) const { for (const auto& r : stored[index]) if (!r.stale) return r.label; return -1; }
+			unsigned stale_stored(unsigned index = 2) const { unsigned n = 0; for (const auto& r : stored[index]) n += r.stale; return n; }
+		};
+		bool same_labels(const std::vector<receiver>& peers, unsigned index = 2)
+		{
+			for (std::size_t i = 1; i < peers.size(); ++i)
+				if (peers[i].first_real_label(index) != peers[0].first_real_label(index) || peers[i].stale_stored(index) != peers[0].stale_stored(index)) return false;
+			return true;
+		}
+	}
+	void restart_release_barrier_units()
+	{
+		using namespace join_in_progress_core;
+		using namespace barrier_model;
+		{
+			input_epoch_barrier b;
+			check(!b.any() && b.record(1, 100) == input_epoch_hold::store && b.marker(1) == 0, "barrier: never armed - every record is stored, a marker drops nothing");
+			b.arm(0, 1000);
+			check(b.any() && !b.expecting[0] && b.expecting[1] && b.expecting[2] && b.expecting[3] && b.armed_at == 1000, "barrier: armed at this PC's ring reset for every index but its own");
+			check(b.record(0, 1001) == input_epoch_hold::store && b.held[0] == 0, "barrier: this PC's own records (the own-record store) are never held");
+			check(b.record(2, 1001) == input_epoch_hold::hold && b.record(2, 1500) == input_epoch_hold::hold && b.held[2] == 2 && b.expecting[2], "barrier: a peer's records before its marker are held and counted");
+			check(b.marker(2) == 2 && !b.expecting[2] && b.held[2] == 0 && b.marker(2) == 0, "barrier: its marker ends the expectation and drops the held records (a second marker drops nothing)");
+			check(b.record(2, 1600) == input_epoch_hold::store, "barrier: after the marker its records are stored as usual");
+			check(b.record(3, 1000 + input_epoch_hold_cap_ms - 1) == input_epoch_hold::hold && b.record(3, 1000 + input_epoch_hold_cap_ms) == input_epoch_hold::flush && !b.expecting[3] && b.held[3] == 1,
+			      "barrier: at the cap (5000 ms after the reset) the next record flushes - the held one(s) are stored first, then it");
+			check(b.take(3) == 1 && b.held[3] == 0 && b.record(3, 9000) == input_epoch_hold::store, "barrier: take() hands the held count to the replay; after the flush nothing is held");
+			input_epoch_barrier full; full.arm(0, 0);
+			for (unsigned i = 0; i < input_epoch_hold_records; ++i) full.record(1, 10);
+			check(full.held[1] == input_epoch_hold_records && full.record(1, 11) == input_epoch_hold::flush && !full.expecting[1], "barrier: a full hold (96 records) flushes before the cap");
+			full.arm(2, 50); check(!full.expecting[2] && full.expecting[1] && full.held[1] == 0 && full.armed_at == 50, "barrier: re-arming (the start's reset after the release's) clears the counts and the clock");
+			full.disarm(); check(!full.any() && full.record(1, 60) == input_epoch_hold::store, "barrier: disarmed (session end, RestartInputEpoch=0) - stored as stock");
+			check(input_epoch_hold_cap_ms == 5000 && input_epoch_hold_records == 96 && input_epoch_record_bytes == 0x24, "barrier: cap 5 s (observed marker skew 1.0-2.4 s), 96 records, the store's 0x24-byte record");
+			input_epoch_barrier wrap; wrap.arm(0, 0xfffffff0u);
+			check(wrap.record(1, 0x00000010u) == input_epoch_hold::hold && wrap.record(1, 0xfffffff0u + input_epoch_hold_cap_ms) == input_epoch_hold::flush, "barrier: the cap survives a GetTickCount wrap");
+		}
+		// The label model. P = index 2 restarts; the receivers (host 0, guest 1[, guest 3]) each reset at t0 and see P's
+		// records in their own order. `stale` = a record P sent before its restart (in flight); `real` = P's frame 0 after
+		// its marker (a single record); `resent` = P's frame 0 through the reliable 0x5c/0x5d resend (wire label).
+		auto cohort = [](std::size_t n, bool barrier) { std::vector<receiver> peers(n); for (std::size_t i = 0; i < n; ++i) { peers[i].armed = barrier; peers[i].reset_all(int(i == 0 ? 0 : i == 1 ? 1 : 3), 1000); } return peers; };
+		for (const std::size_t players : {2u, 3u, 4u}) // 2, 3 and 4 players: 1, 2 and 3 receivers of P's stream
+		{
+			const std::size_t n = players - 1;
+			{ // on-time marker on every peer (the common case): nothing changes - label 0 = P's first real record
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::marker, 2500, 0x2d25); r.receive(2, ev::real, 2800); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.first_real_label() == 0 && r.stale_stored() == 0 && r.resets == 1 && r.dropped_at_marker == 0;
+				check(ok, "barrier model: on-time marker - every peer labels P's first real record 0 (nothing held)");
+			}
+			{ // X-4p-a: ONE peer (the host) gets a stale record first and P's marker 0.3 s after it would have passed its gate
+				auto fixed = cohort(n, true), before = cohort(n, false);
+				for (auto* set : {&fixed, &before})
+				{
+					auto& host = (*set)[0];
+					host.receive(2, ev::stale, 1300); // m11's pre-restart record, parsed after the host's reset
+					const bool gate_can_pass = !host.stored[2].empty();
+					if (gate_can_pass) host.consume(2, 1); // the b2d host passed its frame-0 gate on it (05:36:01.880)
+					host.receive(2, ev::marker, 2538, 0x2d25); // m11's marker, 05:36:02.169
+					host.receive(2, ev::real, 2800);
+					for (std::size_t i = 1; i < set->size(); ++i) { (*set)[i].receive(2, ev::marker, 2500, 0x2d25); (*set)[i].receive(2, ev::real, 2800); }
+				}
+				check(!fixed[0].stored[2].empty() && fixed[0].first_real_label() == 0 && fixed[0].stale_stored() == 0 && fixed[0].dropped_at_marker == 1 && fixed[0].lates == 0 && same_labels(fixed),
+				      players == 4 ? "barrier model (X-4p-a, 4 players): the host holds m11's stale record, cannot pass its gate on it, drops it at m11's marker - label 0 = m11's frame 0 on the host and both guests"
+				                   : "barrier model (X-4p-a shape): the one late peer holds the stale record and drops it at the marker - labels equal on every peer");
+				check(before[0].lates == 1 && before[0].stale_stored() == 1 && before[0].first_real_label() == 1 && (before.size() == 1 || (before[1].first_real_label() == 0 && !same_labels(before))),
+				      "barrier model (control, b2d build): without the barrier the host stores the stale record as label 0, passes its gate, ignores the late marker, and labels m11's frame 0 as 1 while the guests label it 0 - the N-LATE4 split");
+			}
+			{ // X-2cR / X-2cL / X-2cR2 (2 players): the guest gets the host's stale record, the marker 1.2-2.4 s after its reset
+				auto fixed = cohort(1, true), before = cohort(1, false);
+				for (auto* set : {&fixed, &before}) { auto& g = (*set)[0]; g.reset_all(1, 1000); g.receive(0, ev::stale, 1100); g.receive(0, ev::stale, 1120); if (!g.stored[0].empty()) g.consume(0, 1); g.receive(0, ev::marker, 3400, 0x1d59); g.receive(0, ev::real, 3600); }
+				check(fixed[0].stale_stored(0) == 0 && fixed[0].first_real_label(0) == 0 && fixed[0].dropped_at_marker == 2 && fixed[0].lates == 0 && before[0].lates == 1 && before[0].first_real_label(0) == 2,
+				      "barrier model (X-2cR shape): the guest holds the host's two stale records and drops them at the marker (label 0 = the host's frame 0, as on the host); the b2d build labelled it 2 after a late marker");
+			}
+			{ // late on every peer (every parser behind): the same hold and drop everywhere
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::stale, 1200); r.receive(2, ev::marker, 4500, 0x2d25); r.receive(2, ev::real, 4700); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.first_real_label() == 0 && r.dropped_at_marker == 1;
+				check(ok, "barrier model: marker late (inside the cap) on every peer - every peer drops its held stale record; labels equal");
+			}
+			{ // marker lost on every peer: the cap stores the held records as they came - the stock labelling, the same everywhere
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::stale, 1200); r.receive(2, ev::real, 6100); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.flushed == 1 && r.stale_stored() == 1 && r.first_real_label() == 1;
+				check(ok, "barrier model: marker lost everywhere - at the cap each peer stores the stale record (label 0) and the real one (label 1): the stock labelling, equal on every peer");
+			}
+			{ // marker lost on one peer only, with a stale record there: the residual (the cap gives that peer the stock labelling)
+				auto p = cohort(n, true), before = cohort(n, false);
+				for (auto* set : {&p, &before})
+				{
+					(*set)[0].receive(2, ev::stale, 1200); (*set)[0].receive(2, ev::real, 6100);
+					for (std::size_t i = 1; i < set->size(); ++i) { (*set)[i].receive(2, ev::marker, 2500, 0x2d25); (*set)[i].receive(2, ev::real, 2800); }
+				}
+				check(p[0].first_real_label() == 1 && (n == 1 || (!same_labels(p) && !same_labels(before))) && p[0].stale_stored() == before[0].stale_stored(),
+				      "barrier model (residual): a marker lost on one peer that holds a stale record gives that peer the stock labelling at the cap - the b2d build's outcome, never worse");
+				auto clean = cohort(n, true);
+				clean[0].receive(2, ev::real, 6100); for (std::size_t i = 1; i < n; ++i) { clean[i].receive(2, ev::marker, 2500, 0x2d25); clean[i].receive(2, ev::real, 2800); }
+				check(same_labels(clean) && clean[0].first_real_label() == 0, "barrier model: a marker lost on one peer with nothing stale there - its cap stores the real record as label 0, equal to the others");
+			}
+			{ // P-LJ3: the newcomer's frame 0 reaches every peer through the reliable resend 11 s after their resets, its marker 16.6 s after
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::resent, 12000, 0, 0); r.consume(2, 1); r.receive(2, ev::marker, 12013, 0x70d8); r.receive(2, ev::real, 12100); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.lates == 1 && r.first_real_label() == 0 && r.flushed == 0 && r.dropped_at_marker == 0;
+				check(ok, "barrier model (P-LJ3): past the cap the resent frame 0 is stored (wire label 0) and consumed, the marker is late and IGNORED on every peer alike (the live PASS, unchanged)");
+			}
+			{ // a resent real record inside the cap, then the marker: dropped, requested again (the resend serves it by label)
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::resent, 3000, 0, 0); r.receive(2, ev::marker, 3500, 0x70d8); r.receive(2, ev::resent, 4000, 0, 0); r.receive(2, ev::real, 4100); }
+				// (How the block counter follows a stored batch record is the decoder's business and not modelled: only the first label is checked.)
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.dropped_at_marker == 1 && r.resets == 1 && r.first_real_label() == 0 && r.stored[2].size() == 2 && !r.stored[2][0].stale;
+				check(ok, "barrier model: a resent frame 0 held inside the cap is dropped at the marker and comes again by label - label 0 = frame 0 on every peer");
+			}
+		}
+		{ // the hold is per participant: P's hold never touches Q's records; a marker for Q releases only Q
+			receiver r; r.reset_all(0, 1000);
+			r.receive(2, ev::stale, 1100); r.receive(1, ev::marker, 1200, 0x1111); r.receive(1, ev::real, 1300);
+			check(r.held[2].size() == 1 && r.barrier.expecting[2] && !r.barrier.expecting[1] && r.stored[1].size() == 1 && !r.stored[1][0].stale && r.stored[2].empty(), "barrier model: holds are per participant - Q's marker releases Q alone, P's stale record stays held");
+		}
 	}
 }
 
@@ -1107,7 +1285,8 @@ int main(int argc, char** argv)
 		check(mesh_pair_manager_pending == 0x2220 && mesh_pair_manager_retries == 0x2238 && mesh_pair_manager_settle == 0x2228 && record_mesh_pending == 0x60 && clock_time_slot == 0x28,
 		      "AS: the manager fields and the record's pending-mesh mask the guard writes are the stock function's (0x6073f3..0x60741c; 0x6073e4/0x6073f0 = record+0x40+0x20)");
 	}
-	lost_newcomer_units(); // p060fix/AR
+	lost_newcomer_units(); // p060fix/AR (+ b2d-fix-jip: the decision before the native add)
+	restart_release_barrier_units(); // b2d-fix-jip: the restart-release barrier
 	restart_execution_units(); // AR5
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;

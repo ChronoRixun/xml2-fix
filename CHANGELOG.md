@@ -124,6 +124,11 @@ with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The 
 - If the only friend who is joining drops out partway through, one of the players already in the game can be left
   on the pause screen with every player shown as "Not Ready". That player has to leave and join again by code; the
   others play on. This is being fixed for the next beta.
+- (beta.2 candidate) When a friend who is joining drops out just as everyone reloads the area, the reload no longer
+  loses the other players: every PC now waits for each player's first input of the restarted game the same way
+  (the "restart-release barrier"), so one PC can no longer count a leftover input from before the reload and fall
+  out of step at the first checksum; and a four-player reload no longer freezes for a minute on the slowest PC when
+  the host's "that player dropped" notice reaches it before the game's own "that player joined" message.
 - The new screens still need more checks with mouse, keyboard and controllers at 720p, 1080p and 4:3, over long
   sessions (memory and graphics memory), and on the first opening of Party and the slower original screens. The
   Play Online Back selection, Party status labels and the original Kick button's lettering are still being reviewed.

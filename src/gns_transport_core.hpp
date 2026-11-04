@@ -201,6 +201,15 @@ namespace gns_transport_core
 		// This PC's restart begins (or its session ends): the decisions still to carry out, then a fresh ledger.
 		std::uint8_t restart_entry() { const auto left = decided; admitted = decided = applied = 0; return left; }
 	};
+	// b2d-fix-jip (live-b2d N-STALL4, X-4p-b/-late/-late2): the decision is a transport control message, carried out at
+	// the next transport tick, while the host's native add of the newcomer (0x1f, sent BEFORE the decision on the same
+	// reliable link) waits in the parser queue: on the slowest lobby guest (zone load just ended, parser behind) the tick
+	// found no record ("already gone"), the ledger closed, the parser then created the record (mesh completion, 0x25
+	// reply) and nothing removed it before the restart - the guest's lockstep waited for the removed seat's inputs at
+	// frame 1 (~60 s stall until its own watchdog, then it was dropped). An absent record settles a decision only at the
+	// restart entry (the native add, queued before the decision, has been parsed by then); at a tick it stays pending and
+	// the record is removed as soon as it exists.
+	inline bool newcomer_decision_waits_for_record(bool record_absent, bool last_chance) { return record_absent && !last_chance; }
 	// The host's decisions sent in the admission in progress (review P1: never a stale bit from an earlier admission).
 	// A bit counts only while the admission still lists that index as one of its newcomers; otherwise it is dropped
 	// and the removal is classified afresh. reset(): every end of an admission (restart entry, no-restart, session end).
