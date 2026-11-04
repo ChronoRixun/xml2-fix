@@ -83,6 +83,10 @@ bool text_entry_active();
 bool text_entry_character(unsigned character,unsigned scan=0);
 bool requested();
 bool installed();
+// The record+0x40 accessor the online menus put at 0x6141e0 (a JMP; `refresh-scoped display name getter`): every caller but
+// the two guarded roster formatting reads (0x5ba66e / 0x5c829b, during a names refresh) gets the native record+0x40 pointer.
+// join_in_progress's AS guard composes with exactly this JMP (int31: shipped Menus=1 refused JoinInProgress otherwise).
+const void* display_name_getter();
 // Diagnostics: how often the native session-end wrapper ran (one kick may clear twice; review E finding 6).
 unsigned session_clear_count();
 // Pad buttons on the co-op screens (online_menus_rules.hpp pad_menu_mask): `probe(player)` says whether that player's

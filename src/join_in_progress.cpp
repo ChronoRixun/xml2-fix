@@ -25,6 +25,7 @@
 #include "pad_prompts.hpp"
 #include "xml1_hook_transaction.hpp"
 #include "display.hpp"
+#include "online_menus.hpp"
 #include "hold_overlay.hpp"
 #include <algorithm>
 #include <atomic>
@@ -186,6 +187,28 @@ namespace join_in_progress
 			}
 			return limits_rules::matches(actual, actor_ai::guard(g.va, expected, d));
 		}
+		// AS + online menus (int31): the menus relocate the record+0x40 accessor 0x6141e0 (5-byte JMP to
+		// online_menus::display_name_getter, which returns record+0x40 for every caller but two roster formatting reads).
+		// 0x607390's own call (0x6073e4's record+0x40) therefore still gets the native pointer, and mesh_pair_guard writes
+		// record+0x60 directly - so that exact JMP composes with the AS guard; any other bytes there refuse as before.
+		constexpr std::uint32_t mesh_pair_name_accessor = 0x6141e0;
+		bool display_name_composed(const std::uint8_t* site)
+		{
+			if (site[0] != 0xe9) return false;
+			std::int32_t rel = 0; std::memcpy(&rel, site + 1, 4);
+			return mesh_pair_name_accessor + 5u + std::uint32_t(rel) == std::uint32_t(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+		}
+		bool composed_display_name = false;
+		const join_in_progress_rules::guard* mesh_pair_composed_mismatch(const std::uint8_t* image)
+		{
+			composed_display_name = display_name_composed(image + mesh_pair_name_accessor - 0x400000);
+			for (const auto& g : mesh_pair_guards)
+			{
+				if (g.va == mesh_pair_name_accessor && composed_display_name) continue;
+				if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
+			}
+			return nullptr;
+		}
 		const join_in_progress_rules::guard* mismatch()
 		{
 			__try
@@ -205,7 +228,7 @@ namespace join_in_progress
 				if (whole_inputs) if (const auto* g = whole_input_mismatch(image)) return g; // AR6 L1/L2
 				if (clock_step || execution_observer || canonical_step) if (const auto* g = clock_step_mismatch(image)) return g; // AR7
 				if (const auto* g = input_epoch_mismatch(image)) return g; // AR8 (the receiver hook is always installed)
-				if (const auto* g = mesh_pair_mismatch(image)) return g; // AS (always installed)
+				if (const auto* g = mesh_pair_composed_mismatch(image)) return g; // AS (always installed); composes with the online menus' 0x6141e0 JMP
 				return nullptr;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
@@ -2316,6 +2339,9 @@ namespace join_in_progress
 				unsigned(event_manager_pump_slot), probe_at<std::uint32_t>(event_manager_pump_slot), unsigned(event_manager_pump), xml1_turrets::installed_process_hook());
 			return;
 		}
+		if (composed_display_name)
+			logger::write("online: JoinInProgress composes with the online menus' record+0x40 accessor relocation at 0x%06X (JMP -> %08x: native pointer for every caller but the two roster name reads); the AS mesh-pair guard writes record+0x60 directly",
+				unsigned(mesh_pair_name_accessor), unsigned(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter())));
 		if (const auto hook = xml1_turrets::installed_process_hook())
 			logger::write("online: JoinInProgress composes with the xml1 turrets scheduler dispatch hook at the timed-event manager's pump slot (%08x); the canonical queue rebuild never calls the pump (retail alloc/store/push only)", hook);
 		if (const auto& detour = actor_pools::installed_controller_reset(); detour.size() >= 5 && detour[0] == 0xe9 && actor_ai::installed().stage == 1 && !e4_core::installed())

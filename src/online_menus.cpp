@@ -3683,6 +3683,7 @@ void keyboard(unsigned char* state) {
 
 bool requested() { return enabled(ini::text(L"Online",L"Menus")); }
 bool installed() { return ready; }
+const void* display_name_getter() { return reinterpret_cast<const void*>(&participant_display_name); }
 unsigned session_clear_count() { return session_clears; }
 void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
 void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height)) { pointer_probe=probe; }
