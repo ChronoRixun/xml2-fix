@@ -18,10 +18,11 @@ constexpr std::uint32_t flag_hash(std::string_view name){
     for(unsigned char c:name){h^=c;h*=16777619u;}
     return h;
 }
-// Master Mold revision 1: values {installed, saved-stage first bit, width, flag hash}.
+// Master Mold revision 2: bounded core, facing and travel waits; same values.
 // Increment it whenever peers with equal values could still simulate the
 // encounter differently (decision rules, timing, hero choice, effects).
-constexpr std::uint16_t master_mold_revision=1;
+constexpr std::uint16_t master_mold_revision=2;
+constexpr std::uint16_t master_mold_revision_for(bool requested){return requested?master_mold_revision:1;}
 inline registration master_mold(bool requested,bool installed,std::string_view flag,int first_bit,int width){
     if(!requested)return {{0,0,0,0},true};          // verified off
     if(!installed||flag.empty()||flag.size()>32||first_bit<1||width<1||width>32)return {{0,0,0,0},false}; // requested, failed
@@ -71,7 +72,7 @@ inline registration pack_amount(bool requested,bool installed){ return installed
 // A boss whose decision rules change bumps its own revision below, which changes word 1.
 constexpr std::uint16_t bosses_revision=1;
 struct boss_entry { const char* name; std::uint32_t bit; std::uint32_t revision; };
-constexpr std::array<boss_entry,8> boss_table{{{"dopples",1,1},{"avalanche",2,2},{"pyro",4,1},{"mystique",8,1},{"shadowking",16,1},{"marrow",32,1},{"magneto",64,1},{"blob",128,1}}};
+constexpr std::array<boss_entry,8> boss_table{{{"dopples",1,2},{"avalanche",2,3},{"pyro",4,1},{"mystique",8,1},{"shadowking",16,2},{"marrow",32,1},{"magneto",64,2},{"blob",128,2}}};
 constexpr std::uint32_t boss_bit(std::string_view name){
     for(const auto& b:boss_table)if(name==b.name)return b.bit;
     return 0;

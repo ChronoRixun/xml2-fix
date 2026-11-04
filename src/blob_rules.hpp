@@ -44,11 +44,12 @@ inline bool jump_candidate(bool living,bool ai,float distance){return living&&ai
 // opcode 12 stops moving and goes on; opcode 13 throws what it holds without the aim (or drops anything else) and goes on.
 // Game time, not frames: the same at 30 and 60 fps, offline and online.
 constexpr float prop_step_limit=5.f;
+constexpr float attack_step_limit=5.f;
 inline bool prop_step_expired(const state& s,float now){return now-s.advanced_at>prop_step_limit;}
 template<class Game> void update(state& s,unsigned op,float now,Game& g){
     auto next=[&]{advance(s,now);};
     auto attack=[&](int slot,std::uint32_t bits,float jump_delay,bool taunt){
-        if(!g.available(slot,false))return;
+        if(!g.available(slot,false)){if(now-s.advanced_at>attack_step_limit)next();return;}
         g.buttons(bits);if(taunt)g.taunt(.4f);if(jump_delay)g.jump(now+jump_delay);
         s.wait_until=now+.5f;g.wait(.5f);next();
     };
@@ -88,7 +89,7 @@ template<class Game> void update(state& s,unsigned op,float now,Game& g){
         if(!g.aim())break;
         if(g.available(1,true)){g.throw_object();s.wait_until=now+.2f;g.wait(.2f);next();}break;
     case 14:if(now>s.until)next();break;
-    case 15:s.pc=0;break;
+    case 15:s.pc=0;s.advanced_at=now;s.scratch=0;break;
     default:next();break;
     }
 }

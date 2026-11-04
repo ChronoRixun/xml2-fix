@@ -64,7 +64,7 @@ void tiles(void* hero){
         if(!mold_query::is_a(entity,0x753f64)){tile={};continue;}
         const bool running=fn<unsigned char(__fastcall*)(void*,void*)>(0x475330)(entity,nullptr)!=0;
         const float current=distance(entity,hero);
-        if(magneto_rules::release_tile(running,current,tile.distance)){
+        if(magneto_rules::release_tile(running,current,tile.distance,tile.started,now())){
             if(trace)logger::write("magneto tile release owner %08X tile %08X running %d distance %.3f initial %.3f",owner,tile.handle,int(running),current,tile.distance);
             fn<void(__fastcall*)(void*,void*)>(0x4752d0)(entity,nullptr);activate(entity,hero);tile={};}
     }
@@ -88,7 +88,7 @@ bool environment(game& g){
     if(plan.kind!=magneto_rules::environmental::floor)return false;
     g.buttons(0xc0);put(entity,4,at<u32>(entity,4)|2u);
     fn<void(__fastcall*)(void*,void*)>(0x45fe40)(entity,nullptr);fn<void(__fastcall*)(void*,void*)>(0x45ff10)(entity,nullptr);
-    wobble(entity);s.tiles[plan.slot]={h,distance(entity,g.hero)};
+    wobble(entity);s.tiles[plan.slot]={h,distance(entity,g.hero),now()};
     const float radius=virt<float(__fastcall*)(void*,void*)>(entity,0xe0)(entity,nullptr);
     danger(entity,radius*2);s.environment_at=plan.deadline;s.wait_until=now()+plan.wait;g.wait(plan.wait);return true;
 }

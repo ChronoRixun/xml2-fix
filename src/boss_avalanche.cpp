@@ -115,7 +115,8 @@ bool brain(void* brain,u32* output){
     }
     if(a.buttons)buttons(output,a.buttons);
     if(a.taunt_always)taunt(brain,1.f);
-    if(a.roll_smash)buttons(output,random()<.5f?avalanche_rules::smash_buttons:avalanche_rules::attack_buttons);
+    if(a.roll_smash){const auto basic=random()<.5f?avalanche_rules::smash_buttons:avalanche_rules::attack_buttons;buttons(output,basic);
+        if(trace)logger::write("avalanche trace: basic buttons %X at %.3f, nearest %.1f",basic,v.now,nearest);}
     if(a.taunt_half)taunt(brain,.5f);
     if(a.face)face(brain,actor,resolve(nearest_handle));
     if(a.face_last)face(brain,actor,last);

@@ -433,7 +433,7 @@ namespace
 		    script_functions::requested_by_key() || online_menus::requested())
 		{
 			const auto mold = mold_controller::capability();
-			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
+			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision_for(mold_controller::requested()), mold.values, mold.verified);
 			const auto turrets = xml1_turrets::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 			const auto functions = script_functions::capability();

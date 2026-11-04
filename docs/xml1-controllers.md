@@ -26,6 +26,15 @@ wait-bit contract is preserved upstream. A target is checked again
 after aiming, immediately before a core attack; a missing target starts the
 original nine-second retry delay without firing.
 
+Core facing and node readiness each have a five-game-second limit from that
+step's start. Failure clears the core target, starts the nine-second retry,
+and falls through to ordinary combat. Marker/waypoint facing also permits the
+existing attack choice after five seconds without convergence. Waypoint travel
+gets ten seconds, then a bounded facing/attack attempt; movement rearms after
+that attempt even if cooldown or availability prevents a shot. Successful
+arrival, facing and core fire retain their existing paths. Clock rewind with
+a reused owner resets transient deadlines and reconstructs the saved phase.
+
 The authored spawn script's `setDefaultTarget` call resets transient controller
 state before that script reissues the saved phase request. `Game.Xml1MoldStage`
 must bind the builder's packed stage as `flag:first_bit:width` (one-based bits).
@@ -80,8 +89,8 @@ transaction keeps native encounters except a requested Magneto controller, whose
 
 Rule 40 (revision 1) registers only when the list names a boss: `{installed boss bits, FNV-1a-32 of
 "name:revision;" over the installed bosses, option bits, 0}`. Boss bits: 1 = dopples, 2 = avalanche, 4 = pyro,
-8 = mystique, 16 = shadowking, 32 = marrow (retained native brain, no replacement), 64 = magneto, 128 = blob. Avalanche is revision 2;
-the other entries are revision 1. An unknown name, or a listed
+8 = mystique, 16 = shadowking, 32 = marrow (retained native brain, no replacement), 64 = magneto, 128 = blob. Avalanche is revision 3;
+dopples, Shadow King, Magneto and Blob are revision 2; the other entries are revision 1. An unknown name, or a listed
 boss that did not install, registers unverified (host/join closed). Magneto also refuses offline startup because its controller contract removes the SPEC 36 protection substitute; other clients keep their native fallback.
 
 ## Doppelgangers
@@ -105,7 +114,12 @@ by zone and instance name instead.
 | setstate `0xf4355` | the brain's bossfull flags: bit 0 set, bit 2 clear (PC brain +0x2b8), once per dopple brain |
 
 Not in the original: a fastball not thrown 10 s after it started is abandoned (both flags 0, native AI), so a
-throw the PC move set never performs cannot hold both dopples. `[Game] Xml1BossFull=0` skips the bossfull write
+throw the PC move set never performs cannot hold both dopples. A failed attempt
+rearms five seconds after abandonment, giving native combat time before another
+attempt. Jean's states 2/3 and Cyclops' states 1/2 release to native combat after
+five seconds if their prerequisites never succeed. No entry is invented for
+the dormant states. Clock rewind resets shared deadlines before ticking.
+`[Game] Xml1BossFull=0` skips the bossfull write
 (rule 40 option bit 1 clear). Native script commands keep precedence. Every native call is guarded
 (`src/boss_dopple_sites.hpp`, 30 sites; `xml2_xml1_controllers_test <XMen2.exe>` checks them against the retail exe).
 Online: every peer runs the overlay from the same lockstep update with the game clock, the gameplay random stream and
@@ -129,11 +143,11 @@ update as handled (native script commands and death keep precedence) and stops a
 |---|---|
 | health band | k = trunc(6 - trunc(health %) x 0.06f) (bands change at 83, 66, 50, 33, 16, 0 %); on a change the brain's flag bit 3 (XML1 +0x28b, PC +0x2b7: the same two decision sites test it, XML1 0x10afa7 / 0x10bf51 = PC 0x513146 / 0x514613) is set for odd k and cleared for even k |
 | target | nearest living hero, including AI companions; separately retain the last controlled hero in native list order for mid-range facing |
-| closer than 100 | past the close deadline and normal slot 6 (power_smash) available: buttons 0xa0, deadline + 4 s, taunt (chance 1); before the deadline: random < 0.5 -> 0x20 (smash), else 0x10 (attack); then face the nearest hero. Expired deadline with unavailable slot 6 has no random fallback |
+| closer than 100 | past the close deadline and normal slot 6 (power_smash) available: buttons 0xa0, deadline + 4 s, taunt (chance 1); before the deadline: random < 0.5 -> 0x20 (smash), else 0x10 (attack); then face the nearest hero. If an overdue power stays unavailable for five game seconds, reenter this existing four-second basic-melee interval |
 | closer than 400 | past the mid deadline: face the last hero; slot 6 available: buttons 0x90 (the original tests slot 6 and presses power_attack), deadline + 4 s, taunt with chance 0.5 (0x10f690 = PC 0x5279c0) |
 | farther | nothing |
 
-Rule 40 boss bit 2, revision 2. No wait accompanies the mid-range attack. The band flag suppresses native combat
+Rule 40 boss bit 2, revision 3. No wait accompanies the mid-range attack. The band flag suppresses native combat
 selection; damage immunity has not been established. Live checks (not yet done): **A1** the band flag (+0x2b7 bit 3) changes his fight on
 PC as in the original at the 83/66/50/33/16 % bands; **A2** with several players online, the hero order (party
 order here) and the AI-control bit of a remote player's hero read the same on every peer (as for the turrets).
@@ -145,6 +159,10 @@ deadlines, unavailable slot 6, and endbattle/outro in both encounters.
 The opt-in entries below share the dispatcher above. Native death, wait, queued commands and conversation gates
 retain priority. Owner generation, zone departure and a clock rewind reset transient state. No replacement ticks
 Marrow, and no new agreement ID is introduced. `[Test] BossTrace=1` logs actions and requests.
+Shadow King's pending xtreme expires after five game seconds if slot 8 never
+becomes available, so it cannot suppress first-form spear indefinitely. A
+successful xtreme retains its original same-update priority and overlapping
+smash/boost behavior; other attack deadlines are unchanged.
 
 | Entry | Binding and implementation |
 |---|---|
@@ -212,12 +230,12 @@ uses the first player slot holding a living hero instead; outside a session it k
 `_ACTIVE_HERO_` as before.
 
 Effective state is registered in the shared gameplay-capability record
-([agreement](gameplay-agreement.md)) after installation: rule 3, revision 1,
+([agreement](gameplay-agreement.md)) after installation: rule 3, revision 2 when requested,
 `{installed, first_bit, width, FNV-1a-32(flag)}` from the applied saved-stage binding;
 the fourth word is the 32-bit FNV-1a hash of the exact flag name, so peers bound
 to the same bit range of different saved variables are refused rather than
 reconstructing different phases after a post-shield load. Not
-requested registers verified off `{0,0,0,0}`; requested but not installed (missing
+requested retains revision 1 verified off `{0,0,0,0}`; requested but not installed (missing
 binding, guard, query/effect support or transaction refusal) registers unverified,
 which closes host/join for that process. Peers whose Master Mold state differs,
 including one side off, are refused by the native agreement before admission.
@@ -351,7 +369,8 @@ local camera.
 ## Magneto and Blob (wave three, runtime acceptance pending)
 
 Magneto binds `magneto` in `astroid_m/visit1/asteroid2_1`; Mystique in that zone retains its own generation-checked
-identity. Rule 40 adds `magneto:1;` at bit 64 and `blob:1;` at bit 128. Dopple option bits and rule 3 are unchanged.
+identity. Rule 40 uses `magneto:2;` at bit 64 and `blob:2;` at bit 128 for the
+bounded recovery below. Dopple option bits are unchanged.
 Only the existing dispatcher is detoured. Two additional observations join its startup transaction: Magneto hurt
 powerups at `0x54f900` and Blob object metadata at `0x4989a8` (separate from LiftRule's `0x498991` clamp hook).
 The metadata store is bounded by the installed World capacity and checks the complete generation-bearing handle.
@@ -364,6 +383,11 @@ slots keep their initial target distances, with native motion stop and activatio
 General attacks renew their deadline by five seconds; tile preparation/retries use .3/.2/.1 seconds. Native camera,
 query order, activation and movement services remain authoritative. The environmental query sees the existing brain
 target before the handler assigns a new one.
+Failed visible-target power facing gets five game seconds before attempting
+the existing available power without the alignment prerequisite. Tracking a
+tile for more than ten game seconds uses its existing release/activation path
+even if motion never ends and the hero never retreats; successful releases
+and facing remain immediate.
 
 Shield protection comes from the authored `balls_return` animation event and `balls_off` removal. No helper-death
 count is synthesized. The hurt adapter queries actual `def_damage` scale (kind 39, `0x550410`) before emitting the
@@ -373,7 +397,11 @@ position, radius, .5-second life and null source, translates team none 26 to 28,
 response-policy bytes. The effect of those two policy bytes on companions still needs live comparison.
 
 Blob binds `blob` in `nyc/alison/nyc1_1_3`, `mansion/dr_mag2/mag_nyc4` and `astral/ast3/astral3_5`. Its NYC and astral
-programs run one opcode per update, including pickup/throw only in NYC. Unavailable actions hold their opcode.
+programs run one opcode per update, including pickup/throw only in NYC. Unavailable
+attack slots hold their opcode for at most five game seconds, then advance to
+the next opcode. Prop approach/pickup and aim/throw likewise recover after five
+seconds: stop and advance, or throw/drop the carried object and advance. The
+step clock is stamped on owner binding, opcode advancement and program wrap.
 Opcode 7 flops below 170 and slams at or above 170. Melee approach uses 100/140 hysteresis and a .97 facing threshold;
 10/5-second timers use strict expiry. Both dormant attack opcodes and the default/no-op cases are implemented.
 The prop query excludes the owner and XML1 flag sets 1/4/28/29/27 (PC 1/4/30/31/29), rejects flag 17, keeps the native
@@ -401,6 +429,16 @@ Verification (no game or xemu): build `xml2_fix`, `xml2_boss_wave3_test`, `xml2_
 `/nr:false`. Run the wave-three test with owned PC and XBE paths to check every guarded service and all 60 allocated
 program DWORDs. The bridge test executes our production observation bridges with invented actors/readers, checking
 stack cleanup, registers, FPU preservation and metadata generations. Neither fixture executes a game.
+
+`xml2_boss_stuck_steps_test` tests passive failure/success paths at 30 and 60 fps,
+paused clocks, retry windows and ninety-second reactive patterns. The synthetic
+`xml2_boss_mold_stuck_test` executes the production Mold adapter with invented
+entities/service stubs, including missed facing, missing core nodes, recovery
+followed by pursuit with unavailable/cooldown actions, and same-owner clock
+rewind. `python -B scripts/test_boss_stuck_negative.py` compiles independent
+disabled-recovery variants under `build/boss-negative`; each must fail on an
+assertion, not a crash. These controls use Idle, serial MSBuild and wait for
+other compiler/linker processes before building. They launch no game.
 
 Live acceptance remains due:
 

@@ -45,7 +45,7 @@ void on_sequence(const char* name,const char* sequence){
         if(std::strcmp(sequence,"sk")==0){s=shadowking_rules::initial(now(),0);bosses[i].initialized=false;bind(bosses[i],h,0,brain);}
         else if(std::strcmp(sequence,"sk2")==0){s=shadowking_rules::initial(now(),1);bosses[i].initialized=false;bind(bosses[i],h,1,brain);}
         else if(std::strcmp(sequence,"sk3")==0)s.boost=true;
-        else if(std::strcmp(sequence,"sk4")==0){s.xtreme=true;if(auto* b=brain_of(a))put(b,0x280,350.f);}
+        else if(std::strcmp(sequence,"sk4")==0){s.xtreme=true;s.xtreme_wait.started=now();if(auto* b=brain_of(a))put(b,0x280,350.f);}
         else return;
         if(trace)logger::write("shadowking trace: request %s owner %08X mode %d",sequence,h,s.mode);
     }

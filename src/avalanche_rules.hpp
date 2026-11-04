@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include "boss_wait_rules.hpp"
 
 // X-Men Legends 1's Avalanche brain (mount2 and astral3_4), as decision rules without game memory. Original
 // (default.xbe): setstate avalanche / avalanche_astral (id 9) -> AI state 0x24 (init 0x10f6f0 zeroes 0x4feda0..ac) ->
@@ -22,7 +23,7 @@ inline int band(float health,float health_max){
     return static_cast<int>(6.0-static_cast<double>(0.06f)*percent);
 }
 
-struct state { int mode=0,band=0; float close_at=0,mid_at=0; std::uint32_t target=0; };
+struct state { int mode=0,band=0; float close_at=0,mid_at=0; std::uint32_t target=0; boss_wait_rules::window close_wait; };
 
 struct actions {
     bool band_changed=false; bool mode_bit=false;      // write brain bit 3 (PC +0x2b7, XML1 +0x28b) = mode_bit
@@ -49,10 +50,12 @@ inline actions update(state& s,const view& v){
     if(v.nearest<close_range){
         a.face=true;
         if(v.now>s.close_at){
-            if(v.slot_available){s.close_at=v.now+cooldown;a.buttons=power_smash_buttons;a.taunt_always=true;}
-        }else a.roll_smash=true;
+            if(v.slot_available){s.close_wait.reset();s.close_at=v.now+cooldown;a.buttons=power_smash_buttons;a.taunt_always=true;}
+            else if(s.close_wait.ready(v.now,false,5.f)){s.close_wait.reset();s.close_at=v.now+cooldown;a.roll_smash=true;}
+        }else {s.close_wait.reset();a.roll_smash=true;}
         return a;
     }
+    s.close_wait.reset();
     if(v.nearest<mid_range&&v.now>s.mid_at){
         a.face_last=true;
         if(v.slot_available){s.mid_at=v.now+cooldown;a.buttons=power_attack_buttons;a.taunt_half=true;}

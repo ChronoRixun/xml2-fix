@@ -81,7 +81,7 @@ void magneto(){
 void blob(){
     using namespace blob_rules;
     for(unsigned op:{3u,4u,5u,6u,7u}){
-        state s;fixture g;g.slots=false;update(s,op,10,g);CHECK(s.pc==0&&!g.bits&&!g.waited&&!g.jumped);
+        state s;s.advanced_at=10;fixture g;g.slots=false;update(s,op,10,g);CHECK(s.pc==0&&!g.bits&&!g.waited&&!g.jumped);
         g.slots=true;update(s,op,10,g);CHECK(s.pc==1&&g.waited==.5f&&s.advanced_at==10&&s.scratch==0);
         CHECK(g.slot==int(op==3?5:op==4?7:op==6?8:6));CHECK(g.taunted==(op==7?-1:.4f));
     }
