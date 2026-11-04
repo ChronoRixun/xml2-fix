@@ -875,11 +875,43 @@ namespace join_in_progress_core
 		if (!n || n == previous) n = std::uint16_t(previous == 1u ? 2u : 1u);
 		return n;
 	}
-	enum class input_epoch_action { store, reset, ignore };
-	inline input_epoch_action input_epoch_receive(std::uint32_t mask, std::uint16_t last_nonce)
+	// late (b2c-fix-crash, live-b2c X-2c N-2c): a new nonce that reaches the block after this PC's simulation has already
+	// consumed records from it (the ring's read index moved since the block's last reset). The marker says "count my
+	// records from 0 from here", but the consumed record(s) were applied to frames this PC has already run: resetting the
+	// block (read/write/next := 0) would re-label the sender's NEXT record as 0 and misalign every later frame (X-2c: the
+	// guest's frame 0 ran a second before the host's starved pump flushed the start marker; `read 1 write 1 next 1`, reset,
+	// native arbitration dropped the guest 0.13 s later). The marker is ignored instead: the block keeps its records and
+	// labels, the nonce is remembered (its second copy is a repeat), the decoder's counter increment is given back - the
+	// stock labelling for that epoch, never worse. The 300-slot ring's read index is 0 again after exactly 300 consumed
+	// records (10 s at 30 frames); a marker that late has long been overtaken by the native timeouts.
+	enum class input_epoch_action { store, reset, ignore, late };
+	inline input_epoch_action input_epoch_receive(std::uint32_t mask, std::uint16_t last_nonce, std::uint32_t consumed = 0)
 	{
 		if (!input_epoch_mark(mask)) return input_epoch_action::store;
-		return input_epoch_nonce(mask) == last_nonce ? input_epoch_action::ignore : input_epoch_action::reset;
+		if (input_epoch_nonce(mask) == last_nonce) return input_epoch_action::ignore;
+		return consumed ? input_epoch_action::late : input_epoch_action::reset;
+	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report 0x607390(adding, sender) clears the pair's bits
+	// in both records' pending-mesh masks and, when the pair is the one the manager waits for (+0x2220), ends that wait
+	// (+0x2220/+0x2238 := 0, settle timer +0x2228 := now + 1.0). Stock looks neither record up for null. With a record
+	// missing (the seat was removed - p060fix/AR removes a newcomer lost before the restart at once; stock would have waited
+	// for its 10 s watchdog) the stock function runs only when both exist; otherwise the fix applies the same two effects
+	// to the record(s) that exist: nothing of the removed seat is left to clear, the surviving record's bit for it goes
+	// (the manager's own 15 s pending-pair fallback 0x607dc0 would clear it the same way without dropping anyone), and the
+	// manager's wait for exactly this pair ends as it would have a tick earlier. 2- and 3-player sessions never reach the
+	// missing branch (every report in live-b2c arrived while the seat's record existed).
+	enum class mesh_pair_report { stock, partial, none };
+	inline mesh_pair_report mesh_pair_decide(bool a_present, bool b_present)
+	{
+		if (a_present && b_present) return mesh_pair_report::stock;
+		return a_present || b_present ? mesh_pair_report::partial : mesh_pair_report::none;
+	}
+	inline std::uint32_t mesh_pair_mask(std::uint32_t a, std::uint32_t b) { return (1u << (a & 0x1fu)) | (1u << (b & 0x1fu)); } // 0x6073d7/0x6073e0: shl by cl
+	// The handler's index of a payload half (0x604dcf..0x604de4 / 0x604deb..0x604e01): the first set bit of the low 4, else 4.
+	inline std::uint32_t mesh_pair_index(std::uint32_t half)
+	{
+		for (std::uint32_t i = 0; i < 4; ++i) if (half & (1u << i)) return i;
+		return 4;
 	}
 	// The store's kind argument (0x559560's third argument, the decoder 0x559eb0's `push`) says which fields of the decoder's
 	// stack record (label +0, step +2, mask +4, axes +8/+0xa, body +0xc) the decoder wrote for this call; the others hold
@@ -892,10 +924,10 @@ namespace join_in_progress_core
 	// A marker itself is always a full record (kind 0): it is posted right after a ring reset (write - read < 3 at 0x5597d2,
 	// so the sender takes the full path 0x5597db), and AR6 keeps the first 32 frames full anyway.
 	inline bool input_epoch_store_kind_has_mask(std::uint32_t kind) { return kind == 0u || kind == 1u || kind == 3u || kind == 5u; }
-	inline input_epoch_action input_epoch_store_action(std::uint32_t kind, std::uint32_t mask, std::uint16_t last_nonce)
+	inline input_epoch_action input_epoch_store_action(std::uint32_t kind, std::uint32_t mask, std::uint16_t last_nonce, std::uint32_t consumed = 0)
 	{
 		if (!input_epoch_store_kind_has_mask(kind)) return input_epoch_action::store;
-		return input_epoch_receive(mask, last_nonce);
+		return input_epoch_receive(mask, last_nonce, consumed);
 	}
 	// The receiver's nonce memory (the last accepted nonce per participant index, 0 = none). It must not outlive the blocks
 	// it describes: a stored nonce from an earlier session or an earlier occupant of the index would make a new peer's
