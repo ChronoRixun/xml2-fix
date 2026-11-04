@@ -1,5 +1,17 @@
 # Local gate scripts
 
+`xml2_test.exe --pipe-fixture` runs only the input-pipe child and checks that
+its startup log did not overwrite the parent's log. The pipe and CRT-exit
+children copy the test executable and unchanged `dinput.dll` into private
+subdirectories before launch, so each DLL instance owns its INI and log.
+The fixture waits up to five seconds for the specific pipe startup log line;
+file visibility is checked separately from pipe connectivity.
+Normal `xml2_test.exe` also checks parent-log isolation. Children run without
+a console window at Idle priority. Successful child fixture directories are
+removed after process exit; failures retain the directory and its log for diagnosis.
+For concurrent top-level invocations, stage each invocation
+in its own directory too (the DLL opens its log before `main`).
+
 XML1 economy foundation adds `xml2_economy_rules_test` and the mapped-retail
 `xml2_economy_test` modes run by `run_native.py`. The read-only constructor
 census is `python scripts/check_xml1_economy_text.py <retail exe>`. The existing
