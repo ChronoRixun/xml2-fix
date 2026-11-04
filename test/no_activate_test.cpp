@@ -8,10 +8,13 @@
 #include <string>
 #include <vector>
 
+namespace online_menus { extern bool fixture_editor,fixture_enabled; }
+
 namespace
 {
     int checks = 0, forwarded = 0, hook_calls = 0;
-    bool fail_hook = false;
+    bool fail_hook = false,window_install_fixture=false;
+    int window_imports=0;
     HWND fake = reinterpret_cast<HWND>(0x1234), child = reinterpret_cast<HWND>(0x1235), other = reinterpret_cast<HWND>(0x2345);
     DWORD created_ex = 0;
     UINT positioned_flags = 0;
@@ -51,6 +54,8 @@ namespace
     void WINAPI fake_switch(HWND, BOOL) { ++forwarded; }
 
     int delivered = 0;
+    std::vector<unsigned> editor_characters;
+    unsigned editor_scan=0;
     int rendered = 0, paced = 0, sampled = 0;
     HRESULT STDMETHODCALLTYPE synthetic_present(void*, const RECT*, const RECT*, HWND, const void*) { ++rendered; return S_OK; }
     HRESULT STDMETHODCALLTYPE synthetic_cooperative(void*) { return S_OK; }
@@ -153,9 +158,60 @@ namespace
         display::real_create_window_ex_a = &create_window;
         display::real_set_window_pos = &position_window;
         display::real_show_window = &show_window;
+        online_menus::fixture_enabled=false;
+        const auto plain = display::hooked_create_window_ex_a(0,game_class,"ANSI synthetic host",WS_OVERLAPPEDWINDOW,
+                                          0,0,320,240,nullptr,nullptr,cls.hInstance,nullptr);
+        check(plain && !IsWindowUnicode(plain));
+        check(DestroyWindow(plain));
+        online_menus::fixture_enabled=true;
+        for(const auto mode:{display_rules::mode::stock,display_rules::mode::fullscreen}) {
+            display::opts.window_mode=mode;display::geometry_hooked=false;
+            const auto native=display::hooked_create_window_ex_a(0,game_class,"native geometry",WS_OVERLAPPEDWINDOW,
+                                          0,0,320,240,nullptr,nullptr,cls.hInstance,nullptr);
+            RECT rectangle{};check(native && IsWindowUnicode(native) && GetWindowRect(native,&rectangle));
+            check(rectangle.right-rectangle.left==320 && rectangle.bottom-rectangle.top==240);
+            online_menus::fixture_editor=true;editor_characters.clear();
+            PostMessageW(native,WM_CHAR,0x4e61,1);MSG native_message{};
+            check(PeekMessageA(&native_message,native,WM_CHAR,WM_CHAR,PM_REMOVE));
+            DispatchMessageA(&native_message);
+            check(editor_characters==std::vector<unsigned>{0x4e61});
+            online_menus::fixture_editor=false;
+            check(DestroyWindow(native) && !display::text_message_hook);
+        }
+        display::opts.window_mode=display_rules::mode::windowed;display::geometry_hooked=true;
         const auto window = display::hooked_create_window_ex_a(WS_EX_TOPMOST, game_class, "NoActivate synthetic host", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                                           0, 0, 320, 240, nullptr, nullptr, cls.hInstance, nullptr);
         check(window != nullptr); // runner STARTUPINFO may hide the first show
+        check(IsWindowUnicode(window));
+        online_menus::fixture_editor=true;
+        editor_characters.clear();
+        SendMessageW(window,WM_CHAR,0x4e61,1);
+        SendMessageW(window,WM_IME_CHAR,0x4e61,1);
+        check(editor_characters==std::vector<unsigned>({0x4e61,0x4e61}));
+        SendMessageW(window,WM_CHAR,',',0x00530001);
+        check(editor_characters.back()==',' && editor_scan==0x53);
+        // The retail loop retrieves and dispatches ANSI messages. Exercise that
+        // conversion boundary too, using only this private synthetic window.
+        check(display::text_message_hook!=nullptr);
+        const auto before_peek=editor_characters.size();
+        PostMessageW(window,WM_CHAR,0x4e61,1);
+        MSG message{};
+        check(PeekMessageA(&message,window,WM_CHAR,WM_CHAR,PM_NOREMOVE));
+        check(PeekMessageA(&message,window,WM_CHAR,WM_CHAR,PM_NOREMOVE));
+        check(editor_characters.size()==before_peek);
+        check(PeekMessageA(&message,window,WM_CHAR,WM_CHAR,PM_REMOVE));
+        check(message.message==WM_NULL && editor_characters.size()==before_peek+1 && editor_characters.back()==0x4e61);
+        DispatchMessageA(&message);
+        check(editor_characters.size()==before_peek+1);
+        PostMessageW(window,WM_IME_CHAR,0x4e61,1);
+        check(PeekMessageA(&message,window,WM_IME_CHAR,WM_IME_CHAR,PM_REMOVE));
+        DispatchMessageA(&message);
+        check(editor_characters.size()==before_peek+2 && editor_characters.back()==0x4e61);
+        PostMessageW(window,WM_CHAR,0x4e61,1);
+        check(GetMessageA(&message,window,WM_CHAR,WM_CHAR)>0);
+        DispatchMessageA(&message);
+        check(editor_characters.size()==before_peek+3 && editor_characters.back()==0x4e61);
+        online_menus::fixture_editor=false;
         show_window(window, SW_SHOW);
         check((GetWindowLongA(window, GWL_EXSTYLE) & WS_EX_NOACTIVATE) != 0);
         check((GetWindowLongA(window, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0);
@@ -182,7 +238,9 @@ namespace
         check(delivered == 10 && (GetWindowLongA(window, GWL_STYLE) & WS_VISIBLE));
         device_host(window);
         render_host();
+        const auto retired_hook=display::text_message_hook;
         check(DestroyWindow(window));
+        check(display::text_message_hook==nullptr && !UnhookWindowsHookEx(retired_hook));
         check(UnhookWindowsHookEx(thread_hook())); check(TlsSetValue(cbt_index, nullptr));
         check(UnregisterClassA(game_class, cls.hInstance));
         check(SetThreadDesktop(original_desktop));
@@ -196,14 +254,27 @@ namespace ini
     std::optional<std::string> text(const wchar_t*, const wchar_t*) { return std::nullopt; }
     int number(const wchar_t*, const wchar_t*, int fallback) { return fallback; }
 }
-namespace iat_hook { void* hook(HMODULE, const char*, const char*, WORD, void*) { assert(false); return nullptr; } }
-namespace frame_rate { void on_present() { ++paced; } void retarget(const frame_rate_rules::cap&, bool) {} bool paces() { return false; } }
+namespace iat_hook {
+void* hook(HMODULE,const char* dll,const char* function,WORD,void* replacement) {
+    check(window_install_fixture && std::string(dll)=="USER32.dll" && std::string(function)=="CreateWindowExA" &&
+          replacement==reinterpret_cast<void*>(&display::hooked_create_window_ex_a));
+    ++window_imports;return reinterpret_cast<void*>(&fake_create);
+}
+}
+namespace display_settings { void install(HMODULE,bool) { assert(false); } }
+namespace resolution_list { unsigned install(HMODULE,display_rules::resolution_list) { assert(false);return 0; } }
+namespace frame_rate { void install(HMODULE,const frame_rate_rules::cap&,unsigned,bool) { assert(false); } void on_present() { ++paced; } void retarget(const frame_rate_rules::cap&, bool) {} bool paces() { return false; } }
 namespace pool_counters { void sample() { ++sampled; } bool enabled() { return false; } }
 // 0.4.2 tree: display.cpp's Present also samples W3's ScriptPools and the opt-in E4 observer; both are off in this host.
 namespace script_pools { void sample() {} }
 namespace e4_observe { void sample() {} bool enabled() { return false; } }
 namespace options_menu { void install(HMODULE) {} bool installed() { return false; } }
-namespace online_menus { bool fixture_editor=false;bool text_entry_active() { return fixture_editor; } }
+namespace online_menus {
+bool fixture_editor=false,fixture_enabled=true;
+bool installed() { return fixture_enabled; }
+bool text_entry_active() { return fixture_editor; }
+bool text_entry_character(unsigned value,unsigned scan) { if(!fixture_editor) return false;editor_characters.push_back(value);editor_scan=scan;return true; }
+}
 namespace logger
 {
     void write_once(std::string_view, const char*, ...) {}
@@ -293,15 +364,29 @@ int main()
     check(TlsSetValue(cbt_index, nullptr)); fail_hook = true; count = forwarded;
     check(create_window(0, game_class, "fake", WS_VISIBLE, 0, 0, 1, 1, nullptr, nullptr, nullptr, nullptr) == nullptr && forwarded == count);
     check(!ours(nullptr));
-    // LC's DI editor owns physical text delivery; the explicit test lane stays
-    // available, and other native screens retain their original WM_CHAR path.
+    // Native display mode still installs text-window interception, exactly
+    // once, without requesting any D3D or geometry import hooks.
+    active=false;window_install_fixture=true;display::real_create_window_ex_a=nullptr;
+    display::install(nullptr);
+    check(window_imports==1 && display::real_create_window_ex_a==&fake_create);
+    display::install(nullptr);check(window_imports==1);
+    online_menus::fixture_enabled=false;display::real_create_window_ex_a=nullptr;
+    display::install(nullptr);check(window_imports==1);
+    online_menus::fixture_enabled=true;window_install_fixture=false;active=true;
+    // Physical and explicit test text enter the same Unicode LC lane.
+    // Other native screens retain their original WM_CHAR path.
     const auto saved_engine=display::engine_window_procedure;
     display::engine_window_procedure=&fake_engine;count=forwarded;
     check(display::filtered_window_procedure(fake,WM_CHAR,'a',1)==19 && forwarded==count+1);
     online_menus::fixture_editor=true;
     check(display::filtered_window_procedure(fake,WM_CHAR,'a',1)==0 && forwarded==count+1);
+    check(editor_characters==std::vector<unsigned>{'a'});
+    check(display::filtered_window_procedure(fake,WM_CHAR,0x4e61,1)==0 && editor_characters.back()==0x4e61 && forwarded==count+1);
+    display::unicode_window_procedure=true;
+    check(display::filtered_window_procedure(fake,WM_CHAR,'a',1)==0 && editor_characters.back()==0xfffd);
+    display::unicode_window_procedure=false;
     display::test_pointer_enabled=true;display::test_char_message=WM_APP+123;
-    check(display::filtered_window_procedure(fake,WM_APP+123,'a',1)==1 && forwarded==count+2);
+    check(display::filtered_window_procedure(fake,WM_APP+123,'a',1)==1 && forwarded==count+1 && editor_characters.back()=='a');
     display::test_pointer_enabled=false;display::test_char_message=0;
     online_menus::fixture_editor=false;display::engine_window_procedure=saved_engine;
     system_host();

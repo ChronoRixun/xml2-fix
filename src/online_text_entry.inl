@@ -1,10 +1,10 @@
-// LC uses menu context 1 (normal pad bindings) plus scoped DI characters.
+// LC uses menu context 1 (normal pad bindings) plus Windows-translated text.
 // Pad/mouse feed that same lane: native tags, charset, limits and results win.
 namespace text_entry_ui {
 constexpr int first=100,last=140;
-struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0; } edit;
+struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0;const char* notice=nullptr;DWORD notice_at=0;int attempted_length=-1; } edit;
 online_text_entry_rules::inbox input;
-void reset_input() { input.clear();edit.pending=-1;edit.held=0; }
+void reset_input() { input.clear();edit.pending=-1;edit.held=0;edit.notice=nullptr; }
 bool live(void* menu) {
     __try {
         return ready && menu && *static_cast<unsigned*>(menu)==0x69f06c &&
@@ -16,15 +16,15 @@ bool keyboard(void* menu,unsigned char* state,const std::array<bool,256>& edges)
     if(edit.owner!=menu) return true;
     if(keyboard_note) for(unsigned scan=0;scan<256;++scan) if(edges[scan]) { keyboard_note();break; }
     const bool control=(state[0x1d]|state[0x9d]|state[0x38]|state[0xb8])&0x80;
-    const bool shift=(state[0x2a]|state[0x36])&0x80;
-    const bool caps=(GetKeyState(VK_CAPITAL)&1)!=0;
-    for(unsigned scan=0;scan<256;++scan) if(const int value=online_text_entry_rules::key(scan,shift,caps)) {
+    for(unsigned scan=0;scan<256;++scan) if(const int value=online_text_entry_rules::key(scan)) {
         if(!control && edges[scan]) {
             if(value==27) { input.clear();edit.pending=40; }
             else input.push_back(value);
         }
-        state[scan]=0;
     }
+    // Normal menu bindings include printable/numpad keys. None may also run a
+    // grid action; WM_CHAR alone supplies their layout-derived characters.
+    std::memset(state,0,256);
     return true;
 }
 const char* characters() {
@@ -95,13 +95,31 @@ bool native_tick(void* menu) {
     __try { at<tick_fn>(0x5e72f0)(menu);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+void notify(const char* message) { edit.notice=message;edit.notice_at=now_ms(); }
+void character(unsigned value,unsigned scan) {
+    if(const int translated=online_text_entry_rules::character(value,scan,edit.tag==3))
+        if(!input.push_back(translated)) notify("Input full");
+}
+int native_length(void* menu) {
+    __try {
+        const auto* text=static_cast<const char*>(menu)+0x1c10;
+        const auto* end=static_cast<const char*>(std::memchr(text,0,256));
+        return end ? int(end-text) : -1;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+int native_limit(void* menu) {
+    __try { return *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1d10); }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
 bool inject(unsigned char character) {
     __try {
         auto* request=at<getter>(0x60c7e0)();
         if(at<bool(__thiscall*)(void*)>(0x60b960)(request)) return true;
         auto& input=*at<unsigned char*>(0xa0a061);
         if(input) return false;
-        input=character;return true;
+        input=character;
+        if(character>=32) edit.attempted_length=native_length(edit.owner);
+        return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return true; }
 }
 void __fastcall tick(void* menu,void*) {
@@ -110,17 +128,17 @@ void __fastcall tick(void* menu,void*) {
     bool native_called=false;
     try {
         if(edit.owner!=menu) { edit={menu,0,-1,request_tag()};input.clear(); }
+        edit.attempted_length=-1;
         sync_focus(menu);
         const auto raw=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());
         const auto edge=raw&~edit.held;edit.held=raw;
         const int pad_action=online_text_entry_rules::pad(edge);
         if(pad_action==27) { input.clear();edit.pending=40; }
         else if(pad_action && (pad_action!=online_text_entry_rules::accept || edit.pending<0)) input.push_back(pad_action);
-        // A native/test WM_CHAR Enter also means press the focused key.
-        if(*at<unsigned char*>(0xa0a061)==13) { *at<unsigned char*>(0xa0a061)=0;input.push_back(online_text_entry_rules::accept); }
         if(edit.pending<0 && !input.empty()) {
             const int value=input.front();input.pop_front();
             if(value==online_text_entry_rules::accept) edit.pending=edit.focus;
+            else if(value==online_text_entry_rules::unsupported) notify("Unsupported");
             else if(value>=online_text_entry_rules::left) navigate(menu,value);
             else if(!inject(static_cast<unsigned char>(value))) input.push_front(value);
         }
@@ -144,8 +162,13 @@ void __fastcall tick(void* menu,void*) {
         native_called=true;const bool ok=native_tick(menu);text_entry_ticking=false;
         if(!ok) {edit={};input.clear();}
         else if(current()==menu) {
+            if(edit.attempted_length>=0) {
+                if(native_length(menu)<=edit.attempted_length)
+                    notify(edit.attempted_length>=native_limit(menu) ? "Text limit" : "Unsupported");
+            }
+            if(edit.notice && DWORD(now_ms()-edit.notice_at)>=3000) edit.notice=nullptr;
             const bool pad=pad_probe && pad_probe(menu_player);
-            const char* prompts[]{pad ? "B Cancel" : "Esc Cancel","Backspace Delete",pad ? "D-pad Move" : "Arrows Move","",pad ? "A Select" : "Enter Select"};
+            const char* prompts[]{pad ? "B Cancel" : "Esc Cancel","Backspace Delete",pad ? "D-pad Move" : "Arrows Move",edit.notice ? edit.notice : "",pad ? "A Select" : "Enter Select"};
             for(unsigned i=0;i<5;++i) {
                 const auto key="desctext"+std::to_string(i+1);bindings.text.erase(key);
                 bind_text(menu,key.c_str(),prompts[i]);

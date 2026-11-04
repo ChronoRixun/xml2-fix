@@ -2,7 +2,7 @@
 #include <array>
 #include <cstdlib>
 namespace online_text_entry_rules {
-// Bounded, allocation-free queue on the DirectInput/game thread.
+// Bounded, allocation-free queue on the shared window/game input thread.
 struct inbox {
     std::array<int,64> values{};unsigned begin=0,count=0;
     void clear() {begin=count=0;}
@@ -10,25 +10,29 @@ struct inbox {
     bool empty() const {return count==0;}
     int front() const {return values[begin];}
     void pop_front() {if(count) {begin=(begin+1)%64;--count;}}
-    void push_back(int value) {if(count<64) {values[(begin+count)%64]=value;++count;}}
+    bool push_back(int value) {if(count==64) return false;values[(begin+count)%64]=value;++count;return true;}
     void push_front(int value) {if(count==64) --count;begin=(begin+63)%64;values[begin]=value;++count;}
 };
 inline constexpr int accept=256,left=257,right=258,up=259,down=260;
-inline int key(unsigned scan,bool shift,bool caps) {
-    constexpr unsigned letters[]{0x1e,0x30,0x2e,0x20,0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26,0x32,0x31,0x18,0x19,0x10,0x13,0x1f,0x14,0x16,0x2f,0x11,0x2d,0x15,0x2c};
-    for(unsigned i=0;i<26;++i) if(scan==letters[i]) return (shift!=caps ? 'A' : 'a')+int(i);
-    if(scan>=2 && scan<=11) return shift ? "!@#$%^&*()"[scan-2] : "1234567890"[scan-2];
+// Printable characters belong exclusively to Windows' translated WM_CHAR lane.
+// Physical scan codes are used only for layout-independent editor controls.
+inline int key(unsigned scan) {
     switch(scan) {
-    case 0x0e:return 8;case 0x01:return 27;case 0x39:return ' ';
-    case 0x34:return shift ? '>' : '.';case 0x33:return shift ? '<' : ',';case 0x0c:return shift ? '_' : '-';
+    case 0x0e:return 8;case 0x01:return 27;
     case 0x1c:case 0x9c:return accept;
     case 0xcb:return left;case 0xcd:return right;case 0xc8:return up;case 0xd0:return down;
-    case 0x53:return '.';
-    default:break;
+    default:return 0;
     }
-    constexpr unsigned pad[]{0x52,0x4f,0x50,0x51,0x4b,0x4c,0x4d,0x47,0x48,0x49};
-    for(unsigned i=0;i<10;++i) if(scan==pad[i]) return '0'+int(i);
-    return 0;
+}
+inline constexpr int unsupported=261;
+inline int character(unsigned value,unsigned scan=0,bool address=false) {
+    // A locale's numpad decimal separator still denotes a period in an IPv4
+    // address. Keep a main-keyboard comma and every name request unchanged.
+    if(address && scan==0x53 && value==',') value='.';
+    // Ignore WM_CHAR copies of DI controls (and Ctrl shortcuts). Do not narrow
+    // Unicode/IME text to a byte: the native editor's charset is ASCII only.
+    if(value<32 || value==127) return 0;
+    return value<127 ? int(value) : unsupported;
 }
 // Retail UI codes: MOVE_Y=1, MOVE_X=0, MOVE_RIGHT=30, MOVE_DOWN=31;
 // NextHero/PreviousHero and Increase/DecreaseHeroAggr are the bound D-pad.
