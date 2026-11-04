@@ -157,8 +157,19 @@ void hub_select() {
     // native refresh; do not seed the synthetic widget name as displayed text.
     text_of(123,expanded ? "~84[Esc] Back" : "~84$MENU_BACK Back");put(back.mem.data(),0x9c,123);
     text_of(122,"~84$MENU_ACCEPT Select");put(select.mem.data(),0x9c,122);
+    auto& rejoin=item_named("lc_online","rejoin");
+    text_of(124,"~84$MENU_NEXT Rejoin");put(rejoin.mem.data(),0x9c,124);
+    auto& rejoin_footer=item_named("lc_online","desctext4");
+    text_of(125,"~84$MENU_NEXT Rejoin");put(rejoin_footer.mem.data(),0x9c,125);
     const auto display_get=*reinterpret_cast<const char*(__fastcall**)(void*,void*)>(0x6a02c0);
     assert(std::string(display_get(select.mem.data(),nullptr)).find("Enter Select")!=std::string::npos);
+    assert(std::string(display_get(rejoin.mem.data(),nullptr))=="~84F4 Rejoin");
+    online_menus::set_pad_probe(pad_probe_yes);
+    // A real device switch is rebound by the tick, including the card action.
+    const auto prompts_tick=*reinterpret_cast<tick_t*>(0x69e454);prompts_tick(hub.data(),nullptr);
+    assert(texts["rejoin"]=="~84Y Rejoin" && texts["desctext4"].find("Y Rejoin")!=std::string::npos);
+    online_menus::set_pad_probe(pad_probe_no);prompts_tick(hub.data(),nullptr);
+    assert(texts["rejoin"]=="~84F4 Rejoin" && texts["desctext4"].find("F4 Rejoin")!=std::string::npos);
     assert(std::string(reinterpret_cast<const char*(__thiscall*)(void*)>(0x5c67f0)(select.mem.data())).find("$MENU_ACCEPT")!=std::string::npos);
     auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));row[0x54]|=1;
     if(mode=="r22-hub-footer") { footer_fills.clear();redirect(0x5ae580,footer_events); }
@@ -281,6 +292,42 @@ void compact_footer() {
         assert(displayed()=="~84[Esc] Translated");
     }
     std::cout<<"PASS Code Delete / Browse Back navy for native focus and hover; localized label retained\n";
+}
+void code_delete_footer() {
+    setup("lc_code");
+    auto value=item_named("lc_code","host");value.name="code_value";value.flags=0x20;value.bar=nullptr;
+    items.push_back(std::move(value));auto& field=items.back();lay_out(field,124);
+    text_of(124,"code_value");put(field.mem.data(),8,124);put(field.mem.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(hub.data())));
+    auto cell=item_named("lc_code","host");cell.name="key_31";cell.flags=8;cell.bar=nullptr;
+    items.push_back(std::move(cell));auto& delete_cell=items.back();lay_out(delete_cell,125);
+    text_of(125,"key_31");put(delete_cell.mem.data(),8,125);put(delete_cell.mem.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(hub.data())));
+    command_on(delete_cell,126,11);
+    auto& erase=item_named("lc_code","desctext5");
+    erase.ax=305.6f;erase.az=20;erase.l=0;erase.b=-14.4f;erase.r=62.4f;erase.t=0;erase.flags=8;erase.kind=0;
+    lay_out(erase,120);text_of(120,"desctext5");put(erase.mem.data(),8,120);
+    put(erase.mem.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(hub.data())));
+    text_of(121,"Del Delete");put(erase.mem.data(),0x9c,121);command_on(erase,122,11);
+    build_menu(hub.data(),"lc_code");
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
+    online_menus::set_pad_probe(pad_probe_no);tick(hub.data(),nullptr);
+    for(const unsigned scan:{0x1eu,0x30u,0x2eu}) {
+        std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());keys[scan]=128;online_menus::keyboard(keys.data());tick(hub.data(),nullptr);
+    }
+    assert(texts["code_value"]=="ABC_-____" && texts["desctext5"]=="Del Delete");
+    auto& other=item_named("lc_code","host");command_on(other,123,12);
+    put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(other.mem.data())));
+    write_table_text("lc-online-hits/1\nlc_code desctext5 303 5 370 26\n");
+    *reinterpret_cast<unsigned char*>(0xa09fa0)=0;
+    ask_unit(mouse,hub.data(),330,15);ask_unit(mouse,hub.data(),330,15,WM_LBUTTONUP);
+    assert(*reinterpret_cast<unsigned char*>(0xa09fa0)==1 && *reinterpret_cast<void**>(hub.data()+0x324)==erase.mem.data());
+    accept_focused(hub.data());tick(hub.data(),nullptr); // the fixture substitutes the base tick's Accept dispatch
+    assert(texts["code_value"]=="AB__-____"); // one Delete, never the other focused Clear command
+    tick(hub.data(),nullptr);assert(texts["code_value"]=="AB__-____");
+    online_menus::set_pad_probe(pad_probe_yes);tick(hub.data(),nullptr);assert(texts["desctext5"].empty());
+    assert((erase.mem[0x54]&0xc)==4 && *reinterpret_cast<void**>(hub.data()+0x324)==delete_cell.mem.data());
+    online_menus::set_pad_probe(pad_probe_no);tick(hub.data(),nullptr);assert((erase.mem[0x54]&0xc)==8);
+    std::cout<<"PASS literal Del Delete footer through retail mouse/focus/usecmd; one erase, stays in Code, hidden on pad\n";
 }
 void run() {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);

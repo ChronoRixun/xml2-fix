@@ -767,10 +767,11 @@ characters; counts one digit; fixture ping at most five digits); clip/ellipsis
 inside the approved region without changing the round-3 allowlist.
 
 Compose the localized summary from the numeric/name DATA nodes at the approved
-summary anchor: "2 of 3 ready. Waiting for Alex to get ready." Keep static words
-and suffix within the selected scene; `lc_ready_summary` may be a static scene
-container but is not overwritten by the DLL. The waiting scene shows only for
-an admitted unready member; all-ready and solo scenes are mutually exclusive.
+summary anchor: "2 of 3 ready. Waiting for Alex to get ready." The numeric `lc_ready_summary` remains a static scene. The hidden text
+`lc_ready_waiting` supplies a localized `Waiting for %s to get ready.` template;
+`lc_waiting_name` now holds that entire formatted sentence in one 400-unit DATA
+field. This removes fixed gaps around short names. The field is populated only
+for an admitted unready member; all-ready and solo scenes are mutually exclusive.
 Hero fallback is "Hero assigned at start". RTT unknown = Measuring with neutral
 bars; local = You. SAME BUILD means fixture/token preview, not certified wire
 compatibility. No actual hero, room title, campaign, visibility or route is
@@ -2033,9 +2034,15 @@ binds its matching font atlas to the viewport material, using the borrowed
 texture getter and material setter used by `0x5f1049..0x5f105c`. The viewport
 initializer only binds its original atlas once: changing deferred font metrics
 alone samples the wrong texture and produces sliced glyphs. The original atlas
-is restored after the split. Host fixtures
-cover the installed adapters and deferred batches; actual graphics traversal,
-clipping and final appearance still need live acceptance on host and guest.
+is restored after the split. The material setter changes the scene attribute
+only: it does not bind the already-active graphics context. Each batch therefore
+uses the guarded material binding accessor `0x571c80`, then calls
+`igTextureBindAttr::apply` (vtable +0x54) with the context selected by the engine
+export `igDxVisualContext::_pCurrentContext`. This also prepares a texture that
+has not yet been uploaded. No current context retains native font arguments.
+The fixture separates stored and active atlases, exercises native viewport 0
+at the failed resolutions, and rejects the prior setter-only implementation.
+Actual Direct3D pixels and clipping still need live acceptance on host and guest.
 
 ### Optional native online scenes and text entry
 
@@ -2095,7 +2102,12 @@ Enter/Start terminal shortcut cannot also close the grid. Mouse commands retain
 the same 100..140 lane. Owner activation/deactivation and input loss retire queued
 input; page changes repair focus if a cell becomes unavailable.
 The native tag 3 IP editor exposes digits and period only. Hub and Game Options
-names retain their 31-byte limit; the Other ways name and IP requests retain
+names retain their 31-byte limit. An inherited seed is truncated on activation
+to the request byte limit without splitting UTF-8, and the native display is
+refreshed immediately. Printable input at or above the limit is refused; Cancel
+retains the caller's original seed. Disabled character keys and their separate
+background model items are hidden together (including the IP grid's empty cells).
+The Other ways name and IP requests retain
 their native 15-byte limit. Unscoped requests for this legacy editor also select the plain failure page.
 
 The native campaign chooser's Join action requests `player_game_options` on
@@ -2248,3 +2260,19 @@ localized suffix, and cached tokens remain tied to the widget owner/name and
 resource lifetime. This keeps native mouse hover/activation while preventing
 startup binding-row names from flashing on screen. Native first-getter and raw
 getter assertions cover both sides of that contract.
+
+
+### b2c live prompt corrections
+
+The Hub card's `rejoin` action uses the same first-getter and device binding as
+its footer: F4 on keyboard, Y on pad. The serialized MENU token remains available
+to native mouse routing. F4 is handled by the existing DirectInput shortcut.
+
+Code entry's Escape/B action now returns to Online even with a partial code.
+Delete/Backspace remove one symbol; the fifth footer action shows `Del Delete`
+on keyboard and is hidden on pad. The Back footer and its localized hover
+sources say Back. The on-screen Delete grid cell remains available on pad.
+
+These content changes require regenerating the companion menus together with
+the DLL; they add no release or gameplay identity. No full owned-input build or
+game launch is part of the offline fixtures.

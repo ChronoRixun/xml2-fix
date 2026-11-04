@@ -9,6 +9,7 @@ int measured_font=-1,drawn_font=-1,draws=0;
 float measured_scale=0,drawn_scale=0;
 std::string drawn_text;
 bool viewport_ok=true;
+void* visual_context=reinterpret_cast<void*>(0x77889900);
 std::array<float,4> rgba{};
 float __fastcall width(void*,void*,const char* value,float scale,int index) {
     assert(std::string_view(value)=="Test player (Test hero): Not ready");
@@ -21,7 +22,7 @@ float __fastcall height(void*,void*,int length,const char* value,float scale,int
 void* __fastcall color(void* out,void*,float r,float g,float b,float a) {
     rgba={r,g,b,a};return out;
 }
-bool __fastcall viewport(void*,void*,int index) { assert(index==2);return viewport_ok; }
+bool __fastcall viewport(void*,void*,int index) { assert(index>=0 && index<4);return viewport_ok; }
 void __fastcall draw(void* renderer,void*,int index,int x,int y,int w,int h,float scale,int flags,const void* shade,const char* value) {
     assert(index==2 && x==11 && y==22 && w==333 && h==444 && flags==18 && shade==rgba.data());
     drawn_font=*reinterpret_cast<int*>(static_cast<char*>(renderer)+index*0x21634+0x2140c);
@@ -60,7 +61,7 @@ void run() {
     methods[0x38/4]=unsigned(reinterpret_cast<std::uintptr_t>(&height));
     auto* font=methods.data();
     constexpr char value[]="Test player (Test hero): Not ready";
-    for(int screen_height:{480,720,768,1080}) {
+    for(int screen_height:{480,600,720,768,960,1080}) {
     *reinterpret_cast<int*>(0xa0a000)=screen_height;
     const float expected_scale=(10.f/64.f)*(float(screen_height)/384.f);
     for(bool available:{false,true}) {
@@ -112,7 +113,7 @@ std::map<unsigned,command> queued;
 std::vector<std::tuple<std::string,int,float,int>> rendered;
 std::map<unsigned,unsigned> freed_tokens;
 unsigned next_token=0x01000000,passes=0;
-int atlas_font=1;
+int atlas_font=1,material_font=1,applications=0;
 constexpr unsigned queue_at=0x2142c,count_at=0x21630,font_at=0x2140c;
 template<class T> T& f(void* p,unsigned offset) { return *reinterpret_cast<T*>(static_cast<char*>(p)+offset); }
 void __fastcall enqueue(void* renderer,void*,int index,int,int,int,int,float scale,int,const void*,const char* value) {
@@ -155,17 +156,26 @@ void __fastcall render_later(void* stream,void*,void* context,unsigned time,void
     reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5ef1a0)(stream,nullptr);
 }
 std::array<unsigned,8> material_vt{},node_vt{},font_vt{};
-unsigned* material_object=material_vt.data();unsigned* node_object=node_vt.data();unsigned* font_object=font_vt.data();
-void* __fastcall material_get(void*,void*) { return &material_object; }
+std::array<unsigned,32> binding_vt{};
+std::array<unsigned,11> material_object{};
+unsigned* node_object=node_vt.data();unsigned* font_object=font_vt.data();unsigned* binding_object=binding_vt.data();
+void* __fastcall material_get(void*,void*) { return material_object.data(); }
 void* __cdecl font_get() { return &font_object; }
 void** __fastcall texture_get(void*,void*,void** out,int index) { *out=reinterpret_cast<void*>(index+1);return out; }
-void __fastcall texture_set(void*,void*,void* texture) { atlas_font=int(reinterpret_cast<std::uintptr_t>(texture))-1; }
+void __fastcall texture_set(void*,void*,void* texture) { material_font=int(reinterpret_cast<std::uintptr_t>(texture))-1; }
+void __fastcall texture_apply(void* binding,void*,void* context) {
+    assert(binding==&binding_object && context==visual_context);
+    atlas_font=material_font;++applications;
+}
 void deferred() {
     lc_fonts::body_ready=true;viewport_ok=true;
     redirect(0x5f0fd0,&viewport);redirect(0x5f11b0,&enqueue);
     redirect(0x5ef2e0,&render_later);redirect(0x5ef1aa,&cleanup_tail);
     std::vector<unsigned char> renderer(0x90000,0);
     material_vt[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&texture_set));
+    material_object[0]=unsigned(reinterpret_cast<std::uintptr_t>(material_vt.data()));
+    material_object[0x20/4]=unsigned(reinterpret_cast<std::uintptr_t>(&binding_object));
+    binding_vt[0x54/4]=unsigned(reinterpret_cast<std::uintptr_t>(&texture_apply));
     node_vt[0xc/4]=unsigned(reinterpret_cast<std::uintptr_t>(&material_get));
     font_vt[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&texture_get));
     redirect(0x597c20,&font_get);
@@ -174,6 +184,9 @@ void deferred() {
     using text_fn=void(__fastcall*)(void*,void*,int,int,int,int,int,float,int,const void*,const char*);
     using render_fn=void(__fastcall*)(void*,void*,void*,unsigned,void*);
     auto flush=[&] {
+        // The visitor installed the scene's texture BEFORE this custom render
+        // callback. setTexture alone changes material_font, never atlas_font.
+        atlas_font=material_font;
         reinterpret_cast<render_fn>(*reinterpret_cast<unsigned*>(0x6a362c))(stream,nullptr,
             reinterpret_cast<void*>(0x11223344),0x3f800000,reinterpret_cast<void*>(0x55667788));
     };
@@ -193,7 +206,7 @@ void deferred() {
     assert(rendered[0]==std::make_tuple(std::string("PUSH"),1,1.f,5));
     assert(rendered[1]==std::make_tuple(std::string("Peer: Not ready"),6,.3125f,5) && rendered[2]==rendered[1]);
     assert(rendered[3]==std::make_tuple(std::string("POP"),1,1.f,0));
-    assert(atlas_font==1 && f<int>(stream,font_at)==1 && f<int>(stream,count_at)==0 && f<unsigned>(stream,0x21408)==123 && f<unsigned>(stream,0x21424)==0);
+    assert(atlas_font==1 && material_font==1 && applications==4 && f<int>(stream,font_at)==1 && f<int>(stream,count_at)==0 && f<unsigned>(stream,0x21408)==123 && f<unsigned>(stream,0x21424)==0);
     // The next native command retains its font, with no stale marks or replay.
     enqueue(renderer.data(),nullptr,2,0,0,0,0,1,0,nullptr,"Native after roster");flush();
     assert(std::get<1>(rendered.back())==1 && queued.empty() && passes==4);
@@ -214,6 +227,33 @@ void deferred() {
     reinterpret_cast<text_fn>(target(0x5d9a78))(renderer.data(),nullptr,2,11,22,333,444,1,18,rgba.data(),"Roster at queue boundary");
     assert(f<unsigned>(stream,count_at)==129);flush();
     assert(std::get<1>(rendered.back())==6 && queued.empty() && f<int>(stream,font_at)==1);
+    // No active graphics context: enqueue and render retain the native font.
+    const auto applied=applications;visual_context=nullptr;
+    reinterpret_cast<text_fn>(target(0x5d9a78))(renderer.data(),nullptr,2,11,22,333,444,1,18,rgba.data(),"No graphics context");flush();
+    assert(std::get<1>(rendered.back())==1 && std::get<2>(rendered.back())==1.f && applications==applied);
+    visual_context=reinterpret_cast<void*>(0x77889900);
+    // Retail's two PDA call sites both select viewport 0. Keep native commands
+    // around its roster at the sizes that failed live, plus full HD.
+    for(const auto size:{std::pair{800,600},std::pair{1280,960},std::pair{1280,720},std::pair{1920,1080}}) {
+        *reinterpret_cast<int*>(0xa0a000)=size.second;
+        std::vector<unsigned char> pda(0x90000,0);
+        *reinterpret_cast<void**>(pda.data()+0x858d4)=&node_object;
+        auto* pda_stream=pda.data();f<int>(pda_stream,font_at)=0;
+        material_font=atlas_font=0;rendered.clear();freed_tokens.clear();
+        enqueue(pda.data(),nullptr,0,0,0,0,0,1,0,nullptr,"Native before");
+        for(const auto site:{0x5d9a78u,0x5d9b17u})
+            reinterpret_cast<text_fn>(target(site))(pda.data(),nullptr,0,size.first-240,40,220,24,1,18,rgba.data(),"Peer: Ready / Not ready");
+        enqueue(pda.data(),nullptr,0,0,0,0,0,1,0,nullptr,"Native after");
+        atlas_font=material_font;
+        reinterpret_cast<render_fn>(*reinterpret_cast<unsigned*>(0x6a362c))(pda_stream,nullptr,
+            reinterpret_cast<void*>(0x11223344),0x3f800000,reinterpret_cast<void*>(0x55667788));
+        assert(rendered.size()==4 && queued.empty() && freed_tokens.size()==4);
+        assert(std::get<1>(rendered[0])==0 && std::get<1>(rendered[3])==0);
+        assert(std::get<1>(rendered[1])==6 && rendered[1]==rendered[2]);
+        assert(std::get<2>(rendered[1])==(10.f/64.f)*(float(size.second)/384.f));
+        assert(material_font==0 && atlas_font==0 && f<int>(pda_stream,font_at)==0);
+    }
     std::cout<<"PASS ready roster deferred render: real pass arguments, native/LC/native batches, font restoration, cross-command colors, generation-safe marks, one cleanup per token\n";
+    std::cout<<"PASS active-context atlas application, missing-context fallback, actual PDA viewport 0 at 800x600 / 1280x960 / 1280x720 / 1920x1080\n";
 }
 }

@@ -69,6 +69,8 @@ void bind(void* menu) {
             bindings.text.insert_or_assign(key,value);
         }
         enable(menu,key,enabled);hide(menu,key,!enabled);
+        std::snprintf(key,sizeof(key),"lc_text_key_bg%02d",i+1);
+        hide(menu,key,!enabled);
     }
 }
 void focus(void* menu,int key) {
@@ -111,6 +113,16 @@ int native_limit(void* menu) {
     __try { return *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1d10); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
+void truncate_seed(void* menu) {
+    const int length=native_length(menu),limit=std::clamp(native_limit(menu),0,255);
+    if(length<=limit) return;
+    auto* buffer=static_cast<char*>(menu)+0x1c10;
+    const auto clipped=online_status_core::utf8_clean(std::string(buffer,length),std::size_t(limit));
+    std::memcpy(buffer,clipped.c_str(),clipped.size()+1);
+    at<void(__thiscall*)(void*,bool)>(0x5e6fc0)(menu,false);
+    // The native cancellation snapshot stays intact: Cancel restores the
+    // caller's original name, whereas Done accepts the shortened edit buffer.
+}
 bool inject(unsigned char character) {
     __try {
         auto* request=at<getter>(0x60c7e0)();
@@ -128,6 +140,7 @@ void __fastcall tick(void* menu,void*) {
     bool native_called=false;
     try {
         if(edit.owner!=menu) { edit={menu,0,-1,request_tag()};input.clear(); }
+        truncate_seed(menu);
         edit.attempted_length=-1;
         sync_focus(menu);
         const auto raw=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());
@@ -158,6 +171,10 @@ void __fastcall tick(void* menu,void*) {
         }
         bind(menu);
         if(!online_text_entry_rules::enabled(edit.focus,int(std::strlen(characters())),edit.tag==3)) focus(menu,0);
+        // Retail rejects length==limit only. Guard >= as well, including the
+        // native character lane used by tests/other input producers.
+        auto& character=*at<unsigned char*>(0xa0a061);
+        if(character>=32 && native_length(menu)>=native_limit(menu)) { character=0;notify("Text limit"); }
         text_entry_ticking=true;
         native_called=true;const bool ok=native_tick(menu);text_entry_ticking=false;
         if(!ok) {edit={};input.clear();}
@@ -181,7 +198,7 @@ void __fastcall activate(void* menu,void*,int argument) {
     edit={};input.clear();bindings.clear();
     at<void(__thiscall*)(void*,int)>(0x5e6ec0)(menu,argument);
     if(live(menu)) {
-        try { edit={menu,0,-1,request_tag()};bind(menu);
+        try { edit={menu,0,-1,request_tag()};truncate_seed(menu);bind(menu);
             edit.held=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());focus(menu,0); }
         catch(...) { edit={}; } // native keyboard/result service remains available
     }

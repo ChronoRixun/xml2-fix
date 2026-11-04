@@ -127,7 +127,8 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     screen("lc_code");tick(child.data(),nullptr);
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
     assert(menu_resolves==2 && menu_view().state==bm::phase::resolving && visibility["lc_code_complete"] && !enabled_items["done"]);
-    menu_complete=true;post(intent::back);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && menu_view().state==bm::phase::idle);
+    // Delete edits and cancels a late resolve; Back now leaves Code directly.
+    menu_complete=true;post(intent::erase);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && menu_view().state==bm::phase::idle);
     assert(!std::filesystem::exists(root/L"local/XML2 Fix/online/last-game.txt"));
     ticks+=2000;post(static_cast<intent>(39));tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::room && std::filesystem::exists(root/L"local/XML2 Fix/online/last-game.txt"));
@@ -153,6 +154,9 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     for(unsigned i=0;i<20;++i) tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_err_test_mode"] && visibility["retry"]);
     post(intent::done);tick(child.data(),nullptr);assert(menu_resolve_attempts==attempts+1);
+    const auto back_generation=menu_view().generation;
+    post(intent::back);tick(child.data(),nullptr);
+    assert(calls.back()=="request:lc_online" && menu_view().state==bm::phase::idle && menu_view().generation!=back_generation);
     std::cout<<"round5 menus PASS Hub no host; row allowlist/RTT/build; bounded page/select; refresh limiter; host visibility; Back/edit before late completion; confirmed Rejoin storage\n";
 }
 

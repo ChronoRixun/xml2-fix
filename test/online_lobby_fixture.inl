@@ -940,7 +940,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");
     assert(texts["lc_room_code"]=="ABCD-EFGH" && texts["lc_ready_count"]=="2" && texts["lc_member_count"]=="3");
-    assert(texts["lc_waiting_name"]=="Alex" && !visibility["lc_ready_waiting"]);
+    assert(texts["lc_waiting_name"]=="Waiting for Alex to get ready." && visibility["lc_ready_waiting"]);
     assert(!visibility["lc_p3_hero_fallback"] && texts[host ? "lc_p2_ping" : "lc_p1_ping"]==(host ? "38" : "0"));
     lobby_rate_facts=true;tick(child.data(),nullptr);
     assert(texts["lc_p2_hero_fallback"]=="60 local / 30 online" && !visibility["lc_p2_hero_fallback"]);

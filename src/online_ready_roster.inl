@@ -5,6 +5,15 @@
 // A missing/not-yet-loaded private body atlas leaves every argument native.
 namespace ready_roster {
 constexpr int body_font=6;
+void** visual_context_slot=nullptr;
+void* visual_context() {
+    if(!visual_context_slot) {
+        const auto module=GetModuleHandleW(L"libIGGfx.dll");
+        if(module) visual_context_slot=reinterpret_cast<void**>(GetProcAddress(module,
+            "?_pCurrentContext@igDxVisualContext@Gfx@Gap@@1PAV123@A"));
+    }
+    return visual_context_slot ? *visual_context_slot : nullptr;
+}
 constexpr float body_view_scale=10.0f/64.0f; // LC body: 12.5 on the 640 canvas
 constexpr unsigned stream_bytes=0x21634, queue_at=0x2142c, count_at=0x21630, font_at=0x2140c;
 constexpr unsigned queue_capacity=(count_at-queue_at)/sizeof(unsigned), colors_at=0x21410, colors_bytes=24;
@@ -43,7 +52,8 @@ void __fastcall reset(void* stream,void*) {
 }
 // Native viewport initialization binds a texture ONCE to its render material.
 // Selecting another font in the command stream changes UV metrics, not that
-// material. Every split batch must bind the atlas matching its selected font.
+// material. Also, changing a scene attribute does not apply it to the ALREADY
+// active visual context. The callback must apply the changed texture binding.
 void atlas(const marks& selected,int font) {
     auto* node=*reinterpret_cast<void**>(static_cast<char*>(selected.renderer)+0x858d4+selected.viewport*4);
     if(!node) return;
@@ -51,6 +61,10 @@ void atlas(const marks& selected,int font) {
     auto* fonts=at<getter>(0x597c20)();void* texture=nullptr;
     auto* result=at<void**(__thiscall*)(void*,void**,int)>((*static_cast<unsigned**>(fonts))[0x1c/4])(fonts,&texture,font);
     at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(material))[0x1c/4])(material,*result);
+    auto* binding=at<void*(__thiscall*)(void*)>(0x571c80)(material);
+    // igTextureBindAttr::apply, not merely setTexture: this initializes an
+    // unloaded texture for the context and updates the engine's texture cache.
+    at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(binding))[0x54/4])(binding,visual_context());
 }
 using render_fn=void(__thiscall*)(void*,void*,unsigned,void*);
 // A separate slow path keeps the large snapshot off every ordinary text-stream
@@ -99,7 +113,7 @@ void __fastcall render(void* stream,void*,void* context,unsigned time,void* view
     }
     at<render_fn>(0x5ef2e0)(stream,context,time,viewport);
 }
-bool styled() { return ready && lc_fonts::online_body_ready(); }
+bool styled() { return ready && lc_fonts::online_body_ready() && visual_context(); }
 float body_scale() {
     const int h=*at<const int*>(0xa0a000);
     return body_view_scale*(h>=240 && h<=16384 ? float(h)/384.0f : 1.0f);

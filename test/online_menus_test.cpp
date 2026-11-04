@@ -635,6 +635,7 @@ int main(int argc,char** argv) {
     auto& overflow=script_function_overflow::table();overflow.reset(704);
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
+    install_hooks.visual_context=&ready_fixture::visual_context;
     if(mode=="r21-data-churn") { data_text_fixture::prepare();install_hooks.broker=&data_text_fixture::api; }
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
@@ -857,6 +858,7 @@ int main(int argc,char** argv) {
     if(mode=="r20-hub-select" || mode=="r22-hub-footer" || mode=="r23-footer-expanded") { live_input_fixture::hub_select();return 0; }
     if(mode=="r25-drop-in") { live_input_fixture::ac_drop_controls();return 0; }
     if(mode=="r29-host-input" || mode=="r29-service") { forwarded_fixtures::run();return 0; }
+    if(mode=="r30-code-delete") { live_input_fixture::code_delete_footer();return 0; }
     if((mode=="r24-party-native" || mode.starts_with("r25-party")) || (mode=="r24-visibility" || mode=="r25-visibility")) { live_input_fixture::ab_native_controls((mode=="r24-visibility" || mode=="r25-visibility"));return 0; }
     if(mode=="r23-empty-paging") { live_input_fixture::empty_paging();return 0; }
     if(mode=="r23-compact-footer") { live_input_fixture::compact_footer();return 0; }
@@ -970,7 +972,7 @@ int main(int argc,char** argv) {
         keys.fill(0);online_menus::keyboard(keys.data());keys[0x18]=128;online_menus::keyboard(keys.data());tick(child.data(),nullptr);assert(texts["code_value"]=="A___-____" && !visibility["lc_notice_code_invalid"]);
         keys.fill(0);online_menus::keyboard(keys.data());keys[0x1c]=128;online_menus::keyboard(keys.data());assert(keys[0x1c]==0);tick(child.data(),nullptr);assert(texts["code_value"]=="A___-____");
         const auto back=*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69e440);
-        mask=0x200000;back(child.data(),nullptr);tick(child.data(),nullptr);assert(texts["code_value"]=="____-____");
+        mask=0x200000;back(child.data(),nullptr);tick(child.data(),nullptr);assert(calls.back()=="request:lc_online");
         const auto calls_before=calls.size();back(child.data(),nullptr);tick(child.data(),nullptr);assert(calls.size()==calls_before);
         mask=0;tick(child.data(),nullptr);mask=0x200000;back(child.data(),nullptr);tick(child.data(),nullptr);assert(calls.back()=="request:lc_online");mask=0;
         fake_clipboard_imports();
