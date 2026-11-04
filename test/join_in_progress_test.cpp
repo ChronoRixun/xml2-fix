@@ -1064,6 +1064,49 @@ int main(int argc, char** argv)
 		check(input_block_counter == 0x317e && gns_transport_rules::input_block_size == 0x3184 && gns_transport_rules::input_read == 0x3170 && gns_transport_rules::input_write == 0x3174 && gns_transport_rules::input_next == 0x317c,
 		      "AR8: the block layout the hooks read (counter +0x317e next to the next frame +0x317c)");
 	}
+	// b2c-fix-crash (live-b2c X-2c N-2c): a marker that reaches a block this PC has already consumed from is late - ignored.
+	{
+		check(input_epoch_receive(0xfffa0007u, 0, 0) == input_epoch_action::reset && input_epoch_receive(0xfffa0007u, 0, 1) == input_epoch_action::late && input_epoch_receive(0xfffa0007u, 0, 299) == input_epoch_action::late,
+		      "late marker: a new nonce after this PC consumed from the block (read index moved) is late, not a reset");
+		check(input_epoch_receive(0xfffa0007u, 7, 1) == input_epoch_action::ignore && input_epoch_receive(0x00080000u, 0, 5) == input_epoch_action::store && input_epoch_receive(0xfff31fffu, 0, 5) == input_epoch_action::store,
+		      "late marker: a repeat stays a repeat; real records and native events are stored whatever was consumed");
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0, 1) == input_epoch_action::late && input_epoch_store_action(2, input_epoch_mark_for(0x0801), 0, 1) == input_epoch_action::store && input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0, 0) == input_epoch_action::reset,
+		      "late marker: X-2c's host marker 0801 at read 1 is late through the store action; a stale-slot kind is stored; read 0 still resets");
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0) == input_epoch_action::reset && input_epoch_receive(input_epoch_mark_for(0x0801), 0) == input_epoch_action::reset,
+		      "late marker: the three-argument forms (nothing consumed) are the AR8 rules unchanged");
+		// X-2c's receiver sequence: one record consumed (read 1), the host's marker 0801 arrives -> late (ignored, nonce
+		// remembered), its second copy -> the repeat it always was; the next all-blocks reset forgets, a new nonce resets.
+		input_epoch_memory memory;
+		const auto m = input_epoch_mark_for(0x0801);
+		check(input_epoch_store_action(0, m, memory.last[0], 1) == input_epoch_action::late, "late marker: X-2c - the first copy is late");
+		memory.last[0] = input_epoch_nonce(m);
+		check(input_epoch_store_action(0, m, memory.last[0], 1) == input_epoch_action::ignore && input_epoch_store_action(0, m, memory.last[0], 0) == input_epoch_action::ignore,
+		      "late marker: the remembered nonce makes the second copy a repeat, consumed or not");
+		memory.forget();
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0802), memory.last[0], 0) == input_epoch_action::reset && input_epoch_store_action(0, m, memory.last[0], 0) == input_epoch_action::reset,
+		      "late marker: after this PC's next all-blocks reset a new nonce (or the same one) resets again");
+	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report 0x607390 with a seat whose record was removed.
+	{
+		using namespace join_in_progress_rules;
+		check(mesh_pair_decide(true, true) == mesh_pair_report::stock && mesh_pair_decide(true, false) == mesh_pair_report::partial && mesh_pair_decide(false, true) == mesh_pair_report::partial && mesh_pair_decide(false, false) == mesh_pair_report::none,
+		      "AS: the stock function runs only with both records; one record is partial; neither is none");
+		check(mesh_pair_mask(3, 2) == 0xc && mesh_pair_mask(0, 1) == 0x3 && mesh_pair_mask(4, 2) == 0x14 && mesh_pair_mask(35, 2) == 0xc,
+		      "AS: the pair mask is (1<<a)|(1<<b) with shl-by-cl's 5-bit count (X-4p: edx 0xc = seats 3 and 2)");
+		check(mesh_pair_index(0x8) == 3 && mesh_pair_index(0x4) == 2 && mesh_pair_index(0x1) == 0 && mesh_pair_index(0x6) == 1 && mesh_pair_index(0) == 4 && mesh_pair_index(0x10) == 4,
+		      "AS: the handler's index of a payload half is its first set bit of four, else 4 (no record carries 4: the guard's partial/none branch)");
+		const std::uint32_t payload = (1u << 3) << 16 | (1u << 2); // X-4p: m85 (seat 2) reports its mesh with the removed seat 3
+		check(mesh_pair_index(payload >> 16) == 3 && mesh_pair_index(payload & 0xffff) == 2 && mesh_pair_mask(mesh_pair_index(payload >> 16), mesh_pair_index(payload & 0xffff)) == 0xc && mesh_pair_decide(false, true) == mesh_pair_report::partial,
+		      "AS: X-4p's 0x23 payload names seats 3 (adding, removed) and 2 (sender) - mask 0xc as the crash registers (edx 0xc, ebx 4, ecx 2); partial: seat 2's record alone");
+		check(mesh_pair_original.size() == 5 && mesh_pair_resume == mesh_pair_site + 5 && mesh_pair_original[0] == 0x53 && mesh_pair_original[1] == 0x8b && mesh_pair_original[2] == 0x5c && mesh_pair_original[3] == 0x24 && mesh_pair_original[4] == 0x08,
+		      "AS: the entry's push ebx / mov ebx,[esp+8] (5 bytes) are re-executed by the bridge; resume at 0x607395");
+		for (const auto va : {mesh_pair_site, mesh_pair_resume, 0x6073e4u, 0x6073f3u, 0x60741cu, mesh_pair_handler, 0x604e0au, 0x604e1eu, 0x6141e0u, record_by_index})
+			check(std::any_of(std::begin(mesh_pair_guards), std::end(mesh_pair_guards), [va](const auto& g) { return g.va <= va && va + 4 <= g.va + g.hex.size() / 2; }), "AS: the entry, the faulting load, the manager compare and timer, the handler, both callers and both helpers are guarded");
+		check(std::string(mesh_pair_guards[0].hex).substr(0, 10) == "538b5c2408" && std::string(mesh_pair_guards[1].hex).substr((0x6073e4 - 0x6073a0) * 2, 6) == "8b5e20" && std::string(mesh_pair_guards[1].hex).substr((0x6073f3 - 0x6073a0) * 2, 12) == "3b9720220000" && std::string(mesh_pair_guards[2].hex).substr((0x60741c - 0x6073f9) * 2, 12) == "d99f28220000",
+		      "AS: the guarded bytes hold the entry the transaction replaces, the faulting load at 0x6073e4, the manager+0x2220 compare and the +0x2228 timer store");
+		check(mesh_pair_manager_pending == 0x2220 && mesh_pair_manager_retries == 0x2238 && mesh_pair_manager_settle == 0x2228 && record_mesh_pending == 0x60 && clock_time_slot == 0x28,
+		      "AS: the manager fields and the record's pending-mesh mask the guard writes are the stock function's (0x6073f3..0x60741c; 0x6073e4/0x6073f0 = record+0x40+0x20)");
+	}
 	lost_newcomer_units(); // p060fix/AR
 	restart_execution_units(); // AR5
 	std::printf("%d PASS / %d FAIL\n", passes, failures);

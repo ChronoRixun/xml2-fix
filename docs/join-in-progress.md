@@ -577,6 +577,43 @@ ignores the decision or times out by itself). The model's frame 0 and host-left 
 restart, restart entry (its bounded wait), the restart window and session end; the transport half (the decision on
 the wire, carrying it out, the queued resend) has no fixture and is checked live.
 
+### A mesh report about the removed seat (b2c-fix-crash, AS)
+
+Live b2c X-4p (host + two lobby guests + a newcomer killed 1 ms after the host's image): the host carried out its
+decision at 00:25:47.013 (native removal, reason 0x10cd); the slowest lobby guest finished its zone load 2.5 s later,
+then ran the newcomer's queued mesh completion and sent the stock 0x23 report "seat 2 is meshed with seat 3"
+(0x607210: one dword, `(1 << adding) << 16 | (1 << self)`). The host's 0x23 handler 0x604dc0 turns both halves into
+indices and calls 0x607390(3, 2), which looks both up with record_by_index 0x6110c0 (null for a removed index), takes
+record+0x40 (0x6141e0, a `lea`) and clears the pair's bits in `[record+0x60]` of both: `mov ebx,[esi+0x20]` at
+0x6073e4 read 0x60 (esi = null+0x40) and the host died (`exception 0xc0000005 at 0x006073E4 ... eax 00a531f8 ebx 4
+ecx 2 edx c esi 40`; edx 0xc = seats 3 and 2). The null read is stock code; the exposure is the decision above: stock
+would have kept the record until its 10 s watchdog, long after every report. Three-player sessions never reach it (one
+lobby guest, whose report arrives before the newcomer's loss is even noticed).
+
+The entry of 0x607390 (5 bytes) jumps to a bridge. With both records present the stock function runs unchanged.
+Otherwise the bridge does the stock function's two effects for the record(s) that exist (`join_in_progress_core::
+mesh_pair_decide`): the pair's bits are cleared on the surviving record (the manager's own 15 s pending-pair fallback
+0x607dc0 clears them the same way without dropping anyone when a record is missing), and when the manager waits for
+exactly this pair (+0x2220) that wait ends as stock would (+0x2220/+0x2238 := 0, settle +0x2228 := game time + 1.0),
+so a following admission is not held for the fallback. Logged `online: 0x23 mesh report names participant 3 and 2 but
+only the second has a record here ...`. Guards: the entry, the body through the manager compare, the tail, the handler,
+both callers, 0x6141e0 and 0x6110c0 (`mesh_pair_guards`, composed into `mismatch()`; the boundary fixture installs
+the site against the retail image).
+
+### A late input-epoch marker (b2c-fix-crash, after AR8)
+
+Live b2c X-2c (under heavy load): the host queued its start marker and its 0x5b acks at 23:15:43.245 but its pump,
+starved by its own load, flushed them at 44.390; the guest's parser had meanwhile consumed a stale pre-release host
+batch (0x69 sent 42.528), passed its frame-0 gate at 43.524 and ran frame 0. The marker then reset a block the guest
+had already read from (`read 1 write 1 next 1`), the next host record became label 0 again and native arbitration
+dropped the guest 0.13 s later - worse than stock. Now a new nonce that reaches a block whose ring read index has moved
+since the block's last reset is **late**: ignored (the block keeps its records and labels, the decoder's counter
+increment is given back), the nonce remembered (its second copy is the usual repeat), logged `jip input epoch:
+participant index 0's epoch 0801 marker ... arrived late ... IGNORED`. That is the stock labelling for the epoch:
+if the consumed record was stale the one-label offset of fable-ar7 is back for that epoch (as without AR8), never a
+re-labelling after consumption. The restart-release barrier (holding a peer's pre-marker records until its marker or a
+cap, so the gate cannot pass on a stale record) is designed in the b2c-fix-crash report and not part of this change.
+
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 
 The late admission already reloads EVERY peer from one campaign image: the host

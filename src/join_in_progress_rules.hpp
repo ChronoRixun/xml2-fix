@@ -756,6 +756,35 @@ namespace join_in_progress_rules
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
 		return nullptr;
 	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report. A peer that completes natneg with the participant
+	// being added sends 0x23 with one dword {bit (1 << adding) << 16 | bit (1 << self)} (0x607210, 0x60725e..0x607298). The
+	// handler 0x604dc0 turns each half into an index (first set bit; 4 when none) and calls 0x607390(adding, self) - its
+	// only two callers (0x604e0a, 0x604e1e). 0x607390 looks both indices up with record_by_index 0x6110c0 (null when no
+	// record carries that index), takes record+0x40 through 0x6141e0 (lea, no null test) and clears the pair's bits in
+	// [record+0x60] of both (0x6073e4 `mov ebx,[esi+0x20]`: the 4-player host crash reading 0x60 = null+0x40+0x20 after
+	// p060fix/AR removed the lost newcomer's record at once while the slowest lobby guest still had to report its mesh
+	// with it). The entry's 5 bytes (push ebx; mov ebx,[esp+8]) are replaced by a JMP; the bridge re-executes them when
+	// both records exist, and otherwise does what the stock function would for the record(s) that exist.
+	constexpr std::uint32_t mesh_pair_site = 0x607390, mesh_pair_resume = 0x607395, mesh_pair_handler = 0x604dc0;
+	constexpr std::uint32_t mesh_pair_manager_pending = 0x2220, mesh_pair_manager_retries = 0x2238, mesh_pair_manager_settle = 0x2228;
+	constexpr std::uint32_t record_mesh_pending = 0x60; // record+0x40 (0x6141e0) +0x20: the participants this record still has to mesh with
+	constexpr std::uint32_t clock_time_slot = 0x28;    // clock_getter()'s vtable slot 0x28 (thiscall, one argument 0) -> float game time
+	inline constexpr std::array<unsigned char, 5> mesh_pair_original{0x53,0x8b,0x5c,0x24,0x08};
+	inline constexpr guard mesh_pair_guards[]{
+		{0x607390,"538b5c2408555657538bf9e840b80000","AS: 0x607390 entry - push ebx; mov ebx,[esp+8]; push ebp/esi/edi/ebx; mov edi,ecx; call 0x612be0 (session)"},
+		{0x6073a0,"8bc8e8199d00008b6c2418558bf0e82db800008bc8e8069d00008bce89442414e81bce00008b4c24148bf0e810ce00008bcbba01000000d3e28bcdbb01000000d3e30bd38b5e208bcaf7d123d9895e202148203b9720220000","AS: 0x607390 body - record_by_index x2, +0x40 x2, (1<<a)|(1<<b), [rec+0x60] &= ~mask x2, cmp with manager+0x2220"},
+		{0x6073f9,"752733f689b72022000089b738220000e80242f5ff8b10568bc8ff5228d8052c016800d99f282200005f5e5d5bc20800","AS: 0x607390 tail - manager+0x2220/+0x2238 := 0, +0x2228 := clock time + 1.0 (0x68012c); ret 8"},
+		{0x604dc0,"8b4424048b48048b018bd0c1ea1033c9","AS: 0x23 handler 0x604dc0 - payload dword: high half the seat being added, low half the sender"},
+		{0x604e0a,"e881250000","AS: 0x23 handler call 0x607390 (low mask had a bit)"},
+		{0x604e1e,"e86d250000","AS: 0x23 handler call 0x607390 (low mask had none: index 4)"},
+		{0x6141e0,"8d4140c3","AS: 0x6141e0 = record + 0x40 (no null test)"},
+		{0x6110c0,"8b817802000085c05356577430","AS: record_by_index 0x6110c0 - null when the session has no record with that index"},
+	};
+	inline const guard* mesh_pair_mismatch(const std::uint8_t* image) {
+		for (const auto& g : mesh_pair_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
 		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
