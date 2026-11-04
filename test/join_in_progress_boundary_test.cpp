@@ -70,6 +70,9 @@ namespace pad_prompts { unsigned device_switches() { return 0; } }
 namespace entity_capacity { entity_capacity_layout::descriptor fixture_descriptor; std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { return fixture_descriptor; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace display { void (*fixture_overlay)(void*) = nullptr; void set_overlay(void (*draw)(void*)) { fixture_overlay = draw; } } // p060fix/AQ2: the hold's message hook
+// int31: the online menus' 0x6141e0 accessor (the AS guard composes with exactly a JMP to it); a synthetic getter here.
+namespace online_menus { const char* __fastcall fixture_display_name(void* p,void*) { return reinterpret_cast<const char*>(p)+0x40; }
+const void* display_name_getter() { return reinterpret_cast<const void*>(&fixture_display_name); } }
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }
 bool flag(const wchar_t*,const wchar_t*,bool n) { return n; }
@@ -110,7 +113,29 @@ void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_execution_fixture.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
+// int31: AS + online menus - the 0x6141e0 accessor guard accepts retail bytes or exactly `e9 rel32` to
+// online_menus::display_name_getter(); a JMP elsewhere, another opcode or any other altered AS byte still refuses.
+void as_menus_composition() {
+    auto* site=reinterpret_cast<unsigned char*>(0x6141e0);
+    unsigned char retail[5];std::memcpy(retail,site,5);
+    assert(join_in_progress::mismatch()==nullptr && !join_in_progress::composed_display_name);
+    auto jmp=[&](std::uintptr_t target) { site[0]=0xe9;const auto rel=static_cast<std::uint32_t>(target-0x6141e0-5);std::memcpy(site+1,&rel,4); };
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+    assert(join_in_progress::mismatch()==nullptr && join_in_progress::composed_display_name);
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter())+1);
+    { const auto* g=join_in_progress::mismatch();assert(g && g->va==0x6141e0); }
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));site[0]=0xe8;
+    { const auto* g=join_in_progress::mismatch();assert(g && g->va==0x6141e0); }
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+    auto* other=reinterpret_cast<unsigned char*>(0x6110c0);const auto keep=*other;*other^=0xff;
+    assert(join_in_progress::mismatch()!=nullptr);
+    *other=keep;assert(join_in_progress::mismatch()==nullptr);
+    std::memcpy(site,retail,5);
+    assert(join_in_progress::mismatch()==nullptr && !join_in_progress::composed_display_name);
+    std::cout<<"PASS AS/online menus: the 0x6141e0 accessor guard takes retail bytes or exactly the menus' JMP to display_name_getter; a wrong target, opcode or other AS byte refuses\n";
+}
 void e4_guard_composition() {
+    as_menus_composition();
     assert(join_in_progress::mismatch()==nullptr);
     // Exact E4 operand edits from its published 96-controller layout. The last
     // byte of the pop prefix also belongs to its mandatory observer detour.
