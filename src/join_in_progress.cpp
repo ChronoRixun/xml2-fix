@@ -2168,7 +2168,7 @@ namespace join_in_progress
 		whole_inputs = ini::flag(L"Online", L"RestartEpochWholeInputs", true); // AR6 Layers 1 + 2: default ON
 		clock_step = ini::flag(L"Online", L"SymmetricClockStep", true); // AR7: default ON; every peer must agree (the clock step is part of the lockstep)
 		canonical_step = ini::flag(L"Online", L"CanonicalClockStep", false); // AR7 belt: default OFF (FINDINGS 2.2); every peer must agree
-		input_epoch = ini::flag(L"Online", L"RestartInputEpoch", false); // AR8: default OFF until the live round proves it; the receiver side is always on
+		input_epoch = ini::flag(L"Online", L"RestartInputEpoch", true); // AR8: default ON (fable-ar8 live: X8-2a/2c/2a2 recovered, LJ/2e/2P/2f no regression); the receiver side is always on
 		if (execution_observer) execution_log = new (std::nothrow) join_in_progress_diagnostics::execution_capture();
 		if (execution_observer && !execution_log) { logger::write("join in progress: JoinDiagnostics allocation failed - observer disabled"); execution_observer = false; }
 		probe_enabled = ini::flag(L"Dev", L"LateJoinProbe", false);
@@ -2348,7 +2348,7 @@ namespace join_in_progress
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			if (input_epoch) logger::write("join in progress: AR8 input epoch marker ON ([Online] RestartInputEpoch=1) - after each ring reset of a cohort restart (the release 0x613f68 and the start 0x6140b3) this PC posts %u marker record(s) (mask 0xfffa|nonce) ahead of its first real record, so every peer counts its records from 0 at the marker instead of from a stale pre-reset record (the one-label-late guest stream of fable-ar7 X7-2a); markers are honoured by every peer of this build", join_in_progress_core::input_epoch_copies);
-			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0, the default) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));
+			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));
 			if (clock_step) logger::write("join in progress: AR7 symmetric clock step installed at 0x%06X - a placeholder record's frame time counts the same on its owner as on every other peer (the stock owner-side 0.025 s is gone), so the lockstep clock step is the same on every peer; [Online] SymmetricClockStep=0 turns it off (every peer of a session must use the same setting: the clock step is part of the lockstep)", unsigned(clock_step_site));
 			else logger::write("join in progress: AR7 symmetric clock step OFF ([Online] SymmetricClockStep=0) - two peers in placeholder mode apply each other's frame times and their game clocks drift");
 			if (execution_observer) logger::write("join in progress: AR7 `jip step:` observer at 0x%06X for frames 0..%u of every epoch (JoinDiagnostics=1)", unsigned(clock_step_observe_site), join_in_progress_core::step_observe_frames - 1);
