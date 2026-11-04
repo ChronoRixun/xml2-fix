@@ -55,9 +55,9 @@ namespace join_in_progress
 		bool execution_observer = false, execution_wrapper = false;
 		bool pause_guard = false; unsigned pause_guard_hits = 0; // AR6 (fable-ar6): [Online] RestartPauseGuard (Layer 3)
 		bool whole_inputs = false; // AR6 (fable-ar6): [Online] RestartEpochWholeInputs (Layers 1 + 2)
-		bool clock_step = false; unsigned clock_step_lines = 0; // AR7 (fable-ar7): [Online] SymmetricClockStep; `jip step:` line count
+		bool clock_step = false; unsigned clock_step_lines = 0; // AR7 (fable-ar7): [Online] SymmetricClockStep, default OFF (b2c review: the stock step is already symmetric); `jip step:` line count
 		bool canonical_step = false; // AR7 belt (FINDINGS 2.2): [Online] CanonicalClockStep, default OFF; every peer must agree
-		bool input_epoch = false; std::uint16_t input_epoch_nonce_sent = 0; std::uint16_t input_epoch_last[4]{}; unsigned input_epoch_lines = 0; // AR8 (fable-ar8): [Online] RestartInputEpoch (sender); receivers always honour a marker
+		bool input_epoch = false; std::uint16_t input_epoch_nonce_sent = 0; join_in_progress_core::input_epoch_memory input_epoch_last; unsigned input_epoch_lines = 0; // AR8 (fable-ar8): [Online] RestartInputEpoch (sender); receivers always honour a marker; the nonce memory is forgotten at every all-blocks reset and at the session's end
 		std::uint32_t layer2_zero_record[16] = {}; // AR6 Layer 2: the "previous" for an unresolvable delta (>= 0x28 bytes, 0x558c00 reads prev+0x27)
 		using execution_boundary = join_in_progress_diagnostics::boundary;
 		void execution_snapshot(execution_boundary, const std::uint32_t* saved = nullptr);
@@ -879,7 +879,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { execution_end("session end"); admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { execution_end("session end"); admission.clear(); input_epoch_last.forget(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1964,7 +1964,7 @@ namespace join_in_progress
 		// bridge runs with the run function's frame intact: args[0] = the return address 0x55952b, args[6] = the caller's
 		// [esp+0x14] = A, the frame's clock step (max over participants, float bits). One line per lockstep frame for frames
 		// 0..40 of every epoch: the applied step, the placeholder-mode byte (0x79fbb0 + 0xc68b) and every ring block's head
-		// record (index:frame:step word, bit 15 = flagged on its owner). Reads only, SEH-guarded; the stock fld follows.
+		// record (index:frame:step word, bit 15 = the placeholder flag, carried on the wire). Reads only, SEH-guarded; the stock fld follows.
 		void __cdecl clock_step_note(std::uint32_t* args)
 		{
 			const std::uint32_t stock_a = args[6];
@@ -2033,6 +2033,9 @@ namespace join_in_progress
 		// label in the sender's ring either. Only in a live online session; SEH-guarded; the native call always runs first.
 		void __cdecl input_epoch_post(const char* where)
 		{
+			// Every one of this PC's all-blocks ring resets zeroes the four received-record counters, so no marker seen before
+			// it can be a repeat of one seen after it: forget the nonces (b2c review finding 4). Runs whatever the key says.
+			input_epoch_last.forget();
 			if (!input_epoch) return;
 			__try
 			{
@@ -2093,28 +2096,33 @@ namespace join_in_progress
 			ret 4
 		} }
 		// Receiver: at the store's entry (args[0] return, [1] record = {label u16, step u16, mask u32, ...}, [2] index, [3] kind).
-		// A marker resets that participant's block (stale records dropped, counter 0) and is not stored; a repeated nonce
-		// is dropped and gives the decoder's counter increment back. Returns 1 to skip the native store.
+		// The mask slot is read only for the kinds whose decode wrote it (0, 1, 3, 5: input_epoch_store_kind_has_mask); for
+		// the other delta kinds it is a stale stack slot that may still hold another peer's marker from the previous message
+		// (b2c review finding 2), so those records go straight to the native store. A marker resets that participant's block
+		// (stale records dropped, counter 0) and is not stored; a repeated nonce is dropped and gives the decoder's counter
+		// increment back. Returns 1 to skip the native store.
 		int __cdecl input_epoch_store_filter(std::uint32_t* args)
 		{
 			__try
 			{
 				const auto* record = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(args[1]));
 				if (!record) return 0;
+				const auto kind = args[3];
+				if (!join_in_progress_core::input_epoch_store_kind_has_mask(kind)) return 0;
 				const auto mask = at<std::uint32_t>(record, 4);
 				if (!join_in_progress_core::input_epoch_mark(mask)) return 0;
 				const auto index = args[2];
 				if (index > 3) return 1;
 				auto* block = reinterpret_cast<std::uint8_t*>(0x79fbb0u + index * gns_transport_rules::input_block_size);
 				auto* counter = reinterpret_cast<std::uint16_t*>(block + input_block_counter);
-				const auto action = join_in_progress_core::input_epoch_receive(mask, input_epoch_last[index]);
+				const auto action = join_in_progress_core::input_epoch_store_action(kind, mask, input_epoch_last.last[index]);
 				if (action == join_in_progress_core::input_epoch_action::ignore) { *counter = join_in_progress_core::input_epoch_counter_after_ignore(*counter); return 1; }
-				input_epoch_last[index] = join_in_progress_core::input_epoch_nonce(mask);
+				input_epoch_last.last[index] = join_in_progress_core::input_epoch_nonce(mask);
 				const auto read = at<std::uint32_t>(block, gns_transport_rules::input_read), write = at<std::uint32_t>(block, gns_transport_rules::input_write);
 				const auto next = at<std::uint16_t>(block, gns_transport_rules::input_next), counted = *counter;
 				fn<void(__thiscall*)(void*)>(input_block_reset)(block);
-				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u begins input epoch %04x - its block reset here (read %u write %u next %u counter %u: %u stale record(s) dropped); its records are counted from 0 again",
-					index, unsigned(input_epoch_last[index]), read, write, unsigned(next), unsigned(counted), join_in_progress_core::input_ring_pending(read, write)); }
+				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u begins input epoch %04x (store kind %u) - its block reset here (read %u write %u next %u counter %u: %u stale record(s) dropped); its records are counted from 0 again",
+					index, unsigned(input_epoch_last.last[index]), unsigned(kind), read, write, unsigned(next), unsigned(counted), join_in_progress_core::input_ring_pending(read, write)); }
 				return 1;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
@@ -2166,7 +2174,7 @@ namespace join_in_progress
 		execution_wrapper = ini::flag(L"Online", L"JoinStallWrapper", false);
 		pause_guard = ini::flag(L"Online", L"RestartPauseGuard", true); // AR6 Layer 3: default ON; every peer must agree (see the install line)
 		whole_inputs = ini::flag(L"Online", L"RestartEpochWholeInputs", true); // AR6 Layers 1 + 2: default ON
-		clock_step = ini::flag(L"Online", L"SymmetricClockStep", true); // AR7: default ON; every peer must agree (the clock step is part of the lockstep)
+		clock_step = ini::flag(L"Online", L"SymmetricClockStep", false); // AR7 / b2c review: default OFF - the stock step is already symmetric (the step word travels with bit 15); ON only paces a load stall faster; every peer must agree
 		canonical_step = ini::flag(L"Online", L"CanonicalClockStep", false); // AR7 belt: default OFF (FINDINGS 2.2); every peer must agree
 		input_epoch = ini::flag(L"Online", L"RestartInputEpoch", true); // AR8: default ON (fable-ar8 live: X8-2a/2c/2a2 recovered, LJ/2e/2P/2f no regression); the receiver side is always on
 		if (execution_observer) execution_log = new (std::nothrow) join_in_progress_diagnostics::execution_capture();
@@ -2341,7 +2349,7 @@ namespace join_in_progress
 		if (clock_step) writes.push_back({clock_step_site, bytes(clock_step_original), bytes(clock_step_patch)}); // AR7: in-place, no bridge
 		if (execution_observer || canonical_step) writes.push_back({clock_step_observe_site, bytes(clock_step_observe_original), rel(0xe8, clock_step_observe_site, reinterpret_cast<const void*>(&clock_step_bridge), clock_step_observe_original.size())});
 		writes.push_back({input_epoch_store_site, bytes(input_epoch_store_original), rel(0xe9, input_epoch_store_site, reinterpret_cast<const void*>(&input_epoch_store_bridge), input_epoch_store_original.size())}); // AR8 receiver (always)
-		if (input_epoch) { // AR8 sender
+		{ // AR8 sender sites, always installed: the native call runs first, the marker post is gated by the key, the nonce memory's forget is not (b2c review finding 4)
 			writes.push_back({input_epoch_release_call, bytes(input_epoch_release_original), rel(0xe8, input_epoch_release_call, reinterpret_cast<const void*>(&input_epoch_release_bridge), 5)});
 			writes.push_back({input_epoch_start_call, bytes(input_epoch_start_original), rel(0xe8, input_epoch_start_call, reinterpret_cast<const void*>(&input_epoch_start_bridge), 5)});
 		}
@@ -2349,8 +2357,8 @@ namespace join_in_progress
 		{
 			if (input_epoch) logger::write("join in progress: AR8 input epoch marker ON ([Online] RestartInputEpoch=1) - after each ring reset of a cohort restart (the release 0x613f68 and the start 0x6140b3) this PC posts %u marker record(s) (mask 0xfffa|nonce) ahead of its first real record, so every peer counts its records from 0 at the marker instead of from a stale pre-reset record (the one-label-late guest stream of fable-ar7 X7-2a); markers are honoured by every peer of this build", join_in_progress_core::input_epoch_copies);
 			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));
-			if (clock_step) logger::write("join in progress: AR7 symmetric clock step installed at 0x%06X - a placeholder record's frame time counts the same on its owner as on every other peer (the stock owner-side 0.025 s is gone), so the lockstep clock step is the same on every peer; [Online] SymmetricClockStep=0 turns it off (every peer of a session must use the same setting: the clock step is part of the lockstep)", unsigned(clock_step_site));
-			else logger::write("join in progress: AR7 symmetric clock step OFF ([Online] SymmetricClockStep=0) - two peers in placeholder mode apply each other's frame times and their game clocks drift");
+			if (clock_step) logger::write("join in progress: AR7 clock step patch ON ([Online] SymmetricClockStep=1, an opt-in experiment) at 0x%06X - a placeholder record counts its measured frame time (up to 1.0 s) instead of the stock 0.025 s on every peer, so game time runs ahead through a load stall; every peer of a session must use the same setting (the clock step is part of the lockstep)", unsigned(clock_step_site));
+			else logger::write("join in progress: AR7 clock step patch OFF (default; [Online] SymmetricClockStep=0) - the stock rule is already the same on every peer (the step word travels with its placeholder bit), a placeholder record counts 0.025 s everywhere");
 			if (execution_observer) logger::write("join in progress: AR7 `jip step:` observer at 0x%06X for frames 0..%u of every epoch (JoinDiagnostics=1)", unsigned(clock_step_observe_site), join_in_progress_core::step_observe_frames - 1);
 			if (canonical_step) logger::write("join in progress: AR7 canonical clock step ON ([Online] CanonicalClockStep=1) at 0x%06X - every lockstep frame of a live online session steps the clock by 1/N (N = the session's agreed tick; the host's linked rate, else %u) whatever the records carry; every peer of a session must use the same setting", unsigned(clock_step_observe_site), frame_rate_rules::stock_online_fps);
 			if (pause_guard) logger::write("join in progress: AR6 pause guard installed at the controller apply 0x550fb0 - a lockstep record of frame < %u is applied without UI code 0x13 (the pause code) on every peer; [Online] RestartPauseGuard=0 turns it off (every peer of a session must use the same setting: the applied inputs are part of the lockstep)", join_in_progress_core::pause_guard_frames);

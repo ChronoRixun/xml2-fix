@@ -698,17 +698,17 @@ namespace join_in_progress_rules
 			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
 		return nullptr;
 	}
-	// AR7 (fable-ar7): the symmetric clock step. The input-manager run 0x559190 derives every lockstep frame's clock step
-	// from the participants' head records: 0x559222 movzx eax, word [block + read*0x28 + 0x26e] = the record's step word
-	// (0.1 ms units, capped at 0x2710 = 1.0 s by the producer 0x558f90; bit 15 = produced in placeholder mode, 0x558fc3).
-	// Stock: a flagged record counts 0.025 s for the clock on its OWNER (0x55923b: s14 = 0x3ccccccd) but its full value on
-	// every other peer, because the sender strips bit 15 for the wire (0x5597f1 and the delta kinds). Two peers both in
-	// placeholder mode therefore apply each other's measured frame times, and the one whose partner produced one more capped
-	// 1.0 s record runs 0.1 s (= 2 frames after the 0x46ef25 dt clamp) ahead for the rest of the epoch (fable-ar7 X-2a).
-	// The fix: at 0x559233 (mov [esp+0x10], eax - the first instruction after the mask) jump to the unflagged path 0x55924f,
-	// which computes s10 = s14 = value * 1e-4 from ax (already masked), so a record counts the same on its owner as on every
-	// other peer. Two bytes (eb 1a) + two nops; no bridge, no wire change. The step A = max over participants (0x559282) is
-	// then the same function of the same frame-keyed records on every peer.
+	// AR7 (fable-ar7) / b2c review: [Online] SymmetricClockStep, default OFF. The input-manager run 0x559190 derives every
+	// lockstep frame's clock step from the participants' head records: 0x559222 movzx eax, word [block + read*0x28 + 0x26e]
+	// = the record's step word (0.1 ms units, capped at 0x2710 = 1.0 s by the producer 0x558f90; bit 15 = produced in
+	// placeholder mode, 0x558fc3). Stock: a flagged record counts 0.025 s for the clock (0x55923b: s14 = 0x3ccccccd) on
+	// EVERY peer - the step word travels with bit 15 (0x5597e9 mov cx,[ebp+2] -> 0x5597fe, the same in every delta kind;
+	// the `and eax, 0xffff7fff` at 0x5597f1 masks the code-mask dword [ebp+4]), the decoder stores it unchanged (0x559fd6,
+	// 0x55a1f1, 0x55a238) and the run loop has no own-participant test. The patch at 0x559233 (mov [esp+0x10], eax - the
+	// first instruction after the mask) jumps to the unflagged path 0x55924f, which computes s10 = s14 = value * 1e-4 from
+	// ax (already masked): a flagged record then counts its measured frame time (up to 1.0 s) on every peer instead of
+	// 0.025 s. Both rules are symmetric; the patch only paces game time faster through a load stall, so it stays OFF
+	// (see join_in_progress_core.hpp). Two bytes (eb 1a) + two nops; no bridge, no wire change.
 	constexpr std::uint32_t clock_step_site = 0x559233, clock_step_target = 0x55924f;
 	inline constexpr std::array<unsigned char, 4> clock_step_original{0x89,0x44,0x24,0x10};
 	inline constexpr std::array<unsigned char, 4> clock_step_patch{0xeb,0x1a,0x90,0x90};

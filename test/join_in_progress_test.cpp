@@ -844,20 +844,27 @@ int main(int argc, char** argv)
 				check(restart_whole_input(0) == send_form::force_full && restart_whole_input(31) == send_form::force_full, "AR6 L1: frames 0 and 31 go out full");
 				check(restart_whole_input(32) == send_form::stock && restart_whole_input(2000) == send_form::stock, "AR6 L1: frame 32 and later use the stock delta decision");
 			}
-			// AR7 (fable-ar7): the symmetric clock step - a record's contribution to the frame's clock step is the same on its
-			// owner as on every other peer; the stock rule was owner-relative for placeholder (bit-15) records.
+			// AR7 (fable-ar7) / b2c review: the clock step. The step word travels with its placeholder bit (the sender's
+			// `and eax, 0xffff7fff` masks the code-mask dword), so the stock rule is already the same on every peer; the
+			// patch ([Online] SymmetricClockStep, default OFF) only changes what a flagged record counts, everywhere alike.
 			{
 				using namespace join_in_progress_core;
 				const std::uint16_t capped = std::uint16_t(step_word_cap | step_placeholder_bit), frame33 = std::uint16_t(333u | step_placeholder_bit);
 				check(step_seconds(step_word_cap) == 1.0f && step_seconds(capped) == 1.0f && step_seconds(0) == 0.0f, "AR7: the step word is 0.1 ms units, bit 15 is not part of the value");
-				check(stock_clock_step(capped, true) == step_placeholder_seconds && stock_clock_step(capped, false) == 1.0f, "AR7: stock - a flagged 1.0 s record counts 0.025 s on its owner and 1.0 s elsewhere (the asymmetry)");
-				check(stock_clock_step(step_word_cap, true) == 1.0f && stock_clock_step(step_word_cap, false) == 1.0f, "AR7: stock - an unflagged record counts its value everywhere");
-				check(stock_clock_step(wire_step_word(capped), false) == step_seconds(capped), "AR7: the wire strips bit 15, so a remote peer always sees the value");
-				bool symmetric = true;
+				check(wire_step_word(capped) == capped && wire_step_word(frame33) == frame33 && wire_step_word(step_word_cap) == step_word_cap, "AR7: the wire carries the step word verbatim, placeholder bit included (0x5597e9 -> 0x5597fe)");
+				check(wire_code_mask(0xffffffffu) == 0xffff7fffu && wire_code_mask(0x00088000u) == 0x00080000u && wire_code_mask(0x00080000u) == 0x00080000u, "AR7: it is the code-mask dword that loses bit 15 on the wire (0x5597f1)");
+				check(stock_clock_step(capped) == step_placeholder_seconds && stock_clock_step(wire_step_word(capped)) == step_placeholder_seconds, "AR7: stock - a flagged 1.0 s record counts 0.025 s on its owner and, received verbatim, 0.025 s on every other peer");
+				check(stock_clock_step(step_word_cap) == 1.0f && stock_clock_step(333) == step_seconds(333), "AR7: stock - an unflagged record counts its value everywhere");
+				bool stock_symmetric = true, patched_symmetric = true;
 				for (unsigned w = 0; w < 0x10000u; ++w)
-					if (symmetric_clock_step(std::uint16_t(w), true) != symmetric_clock_step(std::uint16_t(w), false) || symmetric_clock_step(std::uint16_t(w), true) != stock_clock_step(wire_step_word(std::uint16_t(w)), false)) symmetric = false;
-				check(symmetric, "AR7: for every step word the symmetric step on the owner equals what every other peer applies (the stock remote rule)");
-				check(symmetric_clock_step(frame33, true) == step_seconds(333) && stock_clock_step(frame33, true) == step_placeholder_seconds, "AR7: a flagged 33.3 ms record now counts 33.3 ms on its owner (stock: 25 ms)");
+				{
+					const auto word = std::uint16_t(w);
+					if (stock_clock_step(word) != stock_clock_step(wire_step_word(word))) stock_symmetric = false;
+					if (symmetric_clock_step(word) != symmetric_clock_step(wire_step_word(word)) || symmetric_clock_step(word) != step_seconds(word)) patched_symmetric = false;
+				}
+				check(stock_symmetric, "AR7: for every step word the stock step on the owner equals the stock step on a receiver (the stock rule is symmetric; the AR7 premise was wrong)");
+				check(patched_symmetric, "AR7: for every step word the patched step is the value, on the owner and on every receiver alike");
+				check(symmetric_clock_step(frame33) == step_seconds(333) && stock_clock_step(frame33) == step_placeholder_seconds && symmetric_clock_step(capped) == 1.0f, "AR7: with the patch a flagged 33.3 ms record counts 33.3 ms and a capped placeholder 1.0 s (stock: 25 ms) - a pacing change, not a desync fix");
 				check(std::uint32_t(0x3ccccccd) == [] { float f = step_placeholder_seconds; std::uint32_t u; std::memcpy(&u, &f, 4); return u; }(), "AR7: the stock constant at 0x55923f is 0.025f");
 				// The patch: 2 bytes at 0x559233 (the first instruction after `and eax, 0x7fff`) jump to the unflagged path.
 				using namespace join_in_progress_rules;
@@ -996,14 +1003,54 @@ int main(int argc, char** argv)
 		check(natives_clear, "AR8: none of the four native lockstep event codes is a marker");
 		check(input_epoch_mark_for(0x1234) == 0xfffa1234u && input_epoch_mark_for(0) == 0xfffa0001u && input_epoch_nonce(0xfffa1234u) == 0x1234 && input_epoch_mark(input_epoch_mark_for(0)),
 		      "AR8: mark_for/nonce round-trip; a zero nonce becomes 1");
+		// b2c review: the sender strips bit 15 of the code mask (0x5597f1), so the nonce is 15 bits - a marker is the same
+		// dword in the sender's own ring and after the wire, and a nonce 0x8000 can no longer arrive as "not a marker".
+		check(input_epoch_nonce_mask == 0x7fffu && input_epoch_mark_for(0x8000) == 0xfffa0001u && input_epoch_mark_for(0x9234) == 0xfffa1234u && input_epoch_nonce(0xfffa9234u) == 0x1234,
+		      "AR8: the nonce is 15 bits (bit 15 of the mask is stripped on the wire); 0x8000 becomes 1, 0x9234 becomes 0x1234");
+		bool wire_same = true;
+		for (unsigned n = 0; n < 0x10000u && wire_same; ++n) { const auto m = input_epoch_mark_for(std::uint16_t(n)); wire_same = wire_code_mask(m) == m && input_epoch_mark(wire_code_mask(m)) && input_epoch_nonce(wire_code_mask(m)) == input_epoch_nonce(m); }
+		check(wire_same, "AR8: for every nonce the marker survives the wire's mask strip unchanged and is still a marker with the same nonce");
 		bool nonces_ok = true;
 		std::uint16_t prev = 0;
-		for (std::uint32_t seed = 0; seed < 70000u && nonces_ok; seed += 7u) { const auto n = next_input_epoch_nonce(seed, prev); nonces_ok = n != 0 && n != prev; prev = n; }
-		check(nonces_ok && next_input_epoch_nonce(0x5bd1u, 0) != 0 && next_input_epoch_nonce(0, 0) != 0, "AR8: the next nonce is never 0 and never the previous one (70000 seeds)");
+		for (std::uint32_t seed = 0; seed < 70000u && nonces_ok; seed += 7u) { const auto n = next_input_epoch_nonce(seed, prev); nonces_ok = n != 0 && n != prev && !(n & 0x8000u); prev = n; }
+		check(nonces_ok && next_input_epoch_nonce(0x5bd1u, 0) != 0 && next_input_epoch_nonce(0, 0) != 0, "AR8: the next nonce is never 0, never the previous one and never has bit 15 (70000 seeds)");
+		bool nonces_collide_free = true;
+		for (unsigned p = 1; p < 0x8000u && nonces_collide_free; ++p) { const auto seed = std::uint32_t(p ^ 0x5bd1u); const auto n = next_input_epoch_nonce(seed, std::uint16_t(p)); nonces_collide_free = n != 0 && n != p && !(n & 0x8000u); }
+		check(nonces_collide_free, "AR8: when the seed would repeat the previous nonce, the fallback is a different non-zero 15-bit nonce (every previous value)");
 		check(input_epoch_receive(0x00080000u, 7) == input_epoch_action::store && input_epoch_receive(0xfff31fffu, 7) == input_epoch_action::store, "AR8: a real record and a native event are stored as before");
 		check(input_epoch_receive(0xfffa0007u, 0) == input_epoch_action::reset && input_epoch_receive(0xfffa0007u, 6) == input_epoch_action::reset, "AR8: a new nonce resets the participant's block");
 		check(input_epoch_receive(0xfffa0007u, 7) == input_epoch_action::ignore, "AR8: the same nonce again (the extra copy) is ignored");
 		check(input_epoch_counter_after_ignore(5) == 4 && input_epoch_counter_after_ignore(1) == 0 && input_epoch_counter_after_ignore(0) == 0, "AR8: an ignored copy gives the decoder's counter increment back, never below 0");
+		// b2c review finding 2: the store's kind says which decoder kinds wrote the mask slot; only those may be read as a marker.
+		{
+			bool kinds_ok = input_epoch_store_kind_has_mask(0) && input_epoch_store_kind_has_mask(1) && input_epoch_store_kind_has_mask(3) && input_epoch_store_kind_has_mask(5);
+			for (const auto k : {2u, 4u, 6u, 8u, 0x10u, 7u, 0x11u, 0xffffffffu}) kinds_ok = kinds_ok && !input_epoch_store_kind_has_mask(k);
+			check(kinds_ok, "AR8: the decoder writes the mask for store kinds 0 (full), 1 (mask), 3 (mask+axes01) and 5 (mask+axes23) only; 2, 4, 6, 8 and 0x10 leave the slot stale");
+			// Three peers: A's marker (a full record, kind 0) resets A's block; the next message is B's axes-only delta (kind 2)
+			// decoded at the same stack depth, so its record's mask slot still holds A's marker. B's block must not be reset.
+			input_epoch_memory memory;
+			const auto a_mark = input_epoch_mark_for(0x2a2a);
+			std::uint8_t decoder_record[0x28]{};
+			std::memcpy(decoder_record + 4, &a_mark, 4);
+			check(input_epoch_store_action(0, a_mark, memory.last[0]) == input_epoch_action::reset, "AR8: peer A's marker, a full record (kind 0), resets A's block");
+			memory.last[0] = input_epoch_nonce(a_mark);
+			std::uint32_t stale = 0; std::memcpy(&stale, decoder_record + 4, 4); // B's kind-2 decode wrote +2 and +8 only
+			check(stale == a_mark && input_epoch_store_action(2, stale, memory.last[1]) == input_epoch_action::store && memory.last[1] == 0,
+			      "AR8: peer B's axes-only delta (kind 2) reaches the store with A's marker still in the stale mask slot - it is stored, B's block is NOT reset");
+			check(input_epoch_store_action(8, stale, memory.last[1]) == input_epoch_action::store && input_epoch_store_action(4, stale, memory.last[2]) == input_epoch_action::store && input_epoch_store_action(6, stale, memory.last[3]) == input_epoch_action::store && input_epoch_store_action(0x10, stale, memory.last[1]) == input_epoch_action::store,
+			      "AR8: the same for the step-only (8), axes23 (4), both-axes (6) and body (0x10) kinds of every other peer");
+			check(input_epoch_store_action(0, a_mark, memory.last[0]) == input_epoch_action::ignore && input_epoch_store_action(1, a_mark, memory.last[0]) == input_epoch_action::ignore,
+			      "AR8: A's second copy (full, or a mask-carrying delta) is the repeat it always was");
+			check(input_epoch_store_action(0, 0x00080000u, memory.last[0]) == input_epoch_action::store && input_epoch_store_action(3, 0x00080000u, memory.last[0]) == input_epoch_action::store,
+			      "AR8: a real mask in a mask-carrying kind is stored as before");
+			// b2c review finding 4: the nonce memory does not outlive the blocks. A new occupant of index 1 whose first nonce
+			// equals the old occupant's last one is a new epoch after this PC's all-blocks reset or the session's end.
+			memory.last[1] = 0x1357;
+			check(input_epoch_store_action(0, input_epoch_mark_for(0x1357), memory.last[1]) == input_epoch_action::ignore, "AR8: without forgetting, a new peer's equal nonce would be taken for a repeat (no reset: the one-label offset)");
+			memory.forget();
+			check(memory.empty() && input_epoch_store_action(0, input_epoch_mark_for(0x1357), memory.last[1]) == input_epoch_action::reset && input_epoch_store_action(0, input_epoch_mark_for(0x2a2a), memory.last[0]) == input_epoch_action::reset,
+			      "AR8: after the forget (every all-blocks ring reset, the session's end) every index's next marker resets its block, equal nonce or not");
+		}
 		check(input_ring_pending(0, 5) == 5 && input_ring_pending(3, 3) == 0 && input_ring_pending(298, 1) == 3 && input_ring_pending(300, 1) == 0, "AR8: pending records from read/write with the 300-slot wrap; an out-of-range index counts 0");
 		// Sites: the two CALL replacements reach the retail reset and send-enable; the store's displaced prologue is 11 bytes.
 		check(input_epoch_release_original[0] == 0xe8 && input_epoch_start_original[0] == 0xe8 && input_epoch_release_call + 5 + std::int32_t(0xfff451e3u) == input_ring_reset_all && input_epoch_start_call + 5 + std::int32_t(0xfff44798u) == input_send_enable,
