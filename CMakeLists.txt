@@ -784,6 +784,12 @@ add_executable(xml2_xml1_rogue_decide_install_test test/xml1_rogue_decide_instal
 target_include_directories(xml2_xml1_rogue_decide_install_test PRIVATE src)
 target_link_options(xml2_xml1_rogue_decide_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_boss_wave3_test test/boss_wave3_test.cpp)
+add_executable(xml2_boss_stuck_steps_test test/boss_stuck_steps_test.cpp)
+target_include_directories(xml2_boss_stuck_steps_test PRIVATE src)
+target_compile_options(xml2_boss_stuck_steps_test PRIVATE /UNDEBUG)
+add_executable(xml2_boss_mold_stuck_test test/boss_mold_stuck_test.cpp)
+target_include_directories(xml2_boss_mold_stuck_test PRIVATE src)
+target_link_options(xml2_boss_mold_stuck_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /MERGE:.text=.fixture /MERGE:.rdata=.fixture /MERGE:.data=.fixture /SECTION:.fixture,ERW)
 target_include_directories(xml2_boss_wave3_test PRIVATE src)
 target_compile_options(xml2_boss_wave3_test PRIVATE /UNDEBUG)
 

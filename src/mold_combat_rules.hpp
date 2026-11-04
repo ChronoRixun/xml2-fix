@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <charconv>
+#include "boss_wait_rules.hpp"
 namespace mold_combat_rules {
 struct stage_binding {std::string flag;int first=0,width=0;};
 inline std::optional<stage_binding> parse_binding(std::string_view text){
@@ -31,6 +32,27 @@ inline core_action ready_core(bool living_hero,bool valid_target,bool node_avail
     if(!living_hero)return core_action::wait;
     if(!valid_target)return core_action::abandon;
     return node_available?core_action::fire:core_action::wait;
+}
+// Shared with the controller fixture so recovery is tested through the same
+// state transitions as the native adapter, rather than a second interpreter.
+template<class State> void begin_core(State& s,std::uint32_t target,float now){s.target=target;s.step=1;s.step_started=now;}
+template<class State,class Game> bool update_core(State& s,float now,Game& g){
+    if(s.step!=1&&s.step!=2)return false;
+    if(!g.valid(s.target)||now-s.step_started>5.f){s.step=0;s.target=0;s.retry_at=now+9;return false;}
+    if(s.step==1){if(g.face(s.target)){s.step=2;s.step_started=now;}return true;}
+    if(!g.node_available())return true;
+    g.fire(s.target);s.step=3;s.shot_until=now+4;s.retry_at=now+9;g.wait(4);return true;
+}
+enum class travel_action { move, face, attack };
+struct travel_state {boss_wait_rules::window approach,facing;};
+// Native facing is queried only after arrival or travel expiry. An expired
+// approach gets one bounded facing/attack attempt, then movement is rearmed
+// even if the attack's cooldown or availability prevents it from firing.
+template<class Face> travel_action waypoint(travel_state& s,float now,bool arrived,Face face){
+    if(!s.approach.ready(now,arrived,10.f))return travel_action::move;
+    if(!s.facing.ready(now,face(),5.f))return travel_action::face;
+    if(!arrived)s={};
+    return travel_action::attack;
 }
 struct deadlines {
     std::array<float,4> value{};

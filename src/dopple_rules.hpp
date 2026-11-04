@@ -20,6 +20,7 @@ constexpr float move_speed=3.f, wait_long=1.f, wait_short=.4f, hazard_radius=400
 // Not in the original: a fastball that has not been thrown 10 s after it started is abandoned (both flags 0), so a
 // throw the PC move set never performs cannot hold both dopples for the rest of the fight (live check D2).
 constexpr float fastball_watchdog=10.f;
+constexpr float reply_watchdog=5.f;
 // Buttons (both output words, unchanged bit values on PC): 0x100 action/guard, 0x80 power, 0x10 attack.
 constexpr std::uint32_t throw_buttons=0x100, power_attack_buttons=0x90;
 constexpr int guard_slot=3, power_attack_slot=5;
@@ -30,6 +31,8 @@ struct shared {
     int wolverine=0,colossus=0,jean=0,cyclops=0;
     float rearm_at=0,hazard_at=0,last_tick=0,fastball_started=0;
     bool ticked=false;
+    int observed_jean=0,observed_cyclops=0;
+    float jean_started=0,cyclops_started=0;
 };
 
 // What the adapter must do for one update. Movement and facing use the partner's origin.
@@ -58,6 +61,7 @@ struct view {
 // The shared tick (0x110470): runs once per distinct game time, before the handler of whichever dopple updates.
 // Returns true when a fastball starts; the adapter then clears Wolverine's movement target and navigation.
 inline bool tick(shared& s,float now,bool both_alive,float pair_distance){
+    if(s.ticked&&now<s.last_tick)s={}; // same-handle reload must not retain future deadlines
     if(s.ticked&&now==s.last_tick)return false;
     s.ticked=true;s.last_tick=now;
     if(!(s.rearm_at<now)||s.colossus!=0||s.wolverine!=0||!both_alive||!(pair_distance<pair_range))return false;
@@ -71,7 +75,7 @@ inline actions update(shared& s,who w,const view& v){
     if(w==who::wolverine||w==who::colossus){
         int& flag=w==who::wolverine?s.wolverine:s.colossus;
         if(!v.partner_valid){flag=0;return a;}
-        if((s.wolverine!=0||s.colossus!=0)&&v.now-s.fastball_started>fastball_watchdog){s.wolverine=s.colossus=0;return a;}
+        if((s.wolverine!=0||s.colossus!=0)&&v.now-s.fastball_started>fastball_watchdog){s.wolverine=s.colossus=0;s.rearm_at=v.now+rearm;return a;}
         if(flag==1){
             a.handled=true;a.move_to_partner=true;
             if(v.partner_distance<handoff){a.stop=true;flag=2;a.face_partner=true;a.face_immediate=w==who::wolverine;}
@@ -88,12 +92,14 @@ inline actions update(shared& s,who w,const view& v){
     }
     if(w==who::jean){
         if(!v.partner_valid){s.jean=0;return a;}
+        if(s.observed_jean!=s.jean){s.observed_jean=s.jean;s.jean_started=v.now;}
+        if((s.jean==2||s.jean==3)&&v.now-s.jean_started>reply_watchdog){s.jean=s.observed_jean=0;return a;}
         switch(s.jean){
         case 0:
             if(!(v.now>s.hazard_at))return a;
-            s.hazard_at=v.now+hazard_interval;s.jean=3;a.handled=true;return a;
+            s.hazard_at=v.now+hazard_interval;s.jean=s.observed_jean=3;s.jean_started=v.now;a.handled=true;return a;
         case 1:
-            s.cyclops=1;s.jean=0;a.handled=true;return a;
+            s.cyclops=s.observed_cyclops=1;s.cyclops_started=v.now;s.jean=0;a.handled=true;return a;
         case 2:
             a.handled=true;
             if(v.slot_available){s.jean=1;a.buttons=power_attack_buttons;a.wait=wait_long;}
@@ -106,6 +112,8 @@ inline actions update(shared& s,who w,const view& v){
         }
     }
     if(!v.partner_valid){s.cyclops=0;return a;}
+    if(s.observed_cyclops!=s.cyclops){s.observed_cyclops=s.cyclops;s.cyclops_started=v.now;}
+    if((s.cyclops==1||s.cyclops==2)&&v.now-s.cyclops_started>reply_watchdog){s.cyclops=s.observed_cyclops=0;return a;}
     if(s.cyclops==1){
         a.handled=true;
         if(v.slot_available){s.cyclops=0;a.buttons=power_attack_buttons;a.wait=wait_short;}
