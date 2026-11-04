@@ -59,6 +59,14 @@ namespace join_in_progress
 		bool clock_step = false; unsigned clock_step_lines = 0; // AR7 (fable-ar7): [Online] SymmetricClockStep, default OFF (b2c review: the stock step is already symmetric); `jip step:` line count
 		bool canonical_step = false; // AR7 belt (FINDINGS 2.2): [Online] CanonicalClockStep, default OFF; every peer must agree
 		bool input_epoch = false; std::uint16_t input_epoch_nonce_sent = 0; join_in_progress_core::input_epoch_memory input_epoch_last; unsigned input_epoch_lines = 0; // AR8 (fable-ar8): [Online] RestartInputEpoch (sender); receivers always honour a marker; the nonce memory is forgotten at every all-blocks reset and at the session's end
+		// b2d-fix-jip: the restart-release barrier (join_in_progress_core::input_epoch_barrier) - armed at this PC's own ring
+		// resets while it sends markers; a peer's records before its marker are copied here (the decoder's record, 0x24 bytes,
+		// and the store's kind) and dropped at its marker or stored at the cap. `input_epoch_replaying` lets the replayed
+		// records through the store hook (the replay calls the hooked store entry).
+		struct input_epoch_held_record { std::uint8_t bytes[join_in_progress_core::input_epoch_record_bytes]; std::uint32_t kind; };
+		join_in_progress_core::input_epoch_barrier input_epoch_hold;
+		input_epoch_held_record input_epoch_held[4][join_in_progress_core::input_epoch_hold_records]{};
+		bool input_epoch_replaying = false; unsigned input_epoch_hold_lines = 0;
 		std::uint32_t layer2_zero_record[16] = {}; // AR6 Layer 2: the "previous" for an unresolvable delta (>= 0x28 bytes, 0x558c00 reads prev+0x27)
 		using execution_boundary = join_in_progress_diagnostics::boundary;
 		void execution_snapshot(execution_boundary, const std::uint32_t* saved = nullptr);
@@ -903,7 +911,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { execution_end("session end"); admission.clear(); input_epoch_last.forget(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { execution_end("session end"); admission.clear(); input_epoch_last.forget(); input_epoch_hold.disarm(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -2060,6 +2068,7 @@ namespace join_in_progress
 			// Every one of this PC's all-blocks ring resets zeroes the four received-record counters, so no marker seen before
 			// it can be a repeat of one seen after it: forget the nonces (b2c review finding 4). Runs whatever the key says.
 			input_epoch_last.forget();
+			input_epoch_hold.disarm(); // b2d-fix-jip: the blocks are empty again; whatever was held belonged to the epoch before
 			if (!input_epoch) return;
 			__try
 			{
@@ -2069,6 +2078,7 @@ namespace join_in_progress
 				if (!session_object) return;
 				const int index = fn<int(__thiscall*)(void*)>(local_participant_index)(session_object);
 				if (index < 0 || index > 3) return;
+				input_epoch_hold.arm(index, GetTickCount()); // b2d-fix-jip: every other participant's records are held until its marker (or the cap)
 				void* synchronizer = fn<getter_t>(gns_transport_rules::input_sync)();
 				if (!synchronizer) return;
 				input_epoch_nonce_sent = join_in_progress_core::next_input_epoch_nonce(GetTickCount() ^ std::uint32_t(reinterpret_cast<std::uintptr_t>(&index) * 2654435761u), input_epoch_nonce_sent);
@@ -2125,25 +2135,66 @@ namespace join_in_progress
 		// (b2c review finding 2), so those records go straight to the native store. A marker resets that participant's block
 		// (stale records dropped, counter 0) and is not stored; a repeated nonce is dropped and gives the decoder's counter
 		// increment back. Returns 1 to skip the native store.
+		// b2d-fix-jip: while the barrier expects a participant's marker (from this PC's own ring reset, cap
+		// input_epoch_hold_cap_ms), every record of that participant that is not a marker - whatever its kind - is copied
+		// into input_epoch_held and skipped; its marker then drops the copies with the block reset, or the cap stores them in
+		// order through the store itself (input_epoch_replay). The decoder's label travels with the copy (single records:
+		// the block counter, which keeps counting while records are held; resent batch records: the wire label).
+		constexpr std::uintptr_t input_synchronizer = 0x79fbb0u; // the lockstep input manager (gns_transport_rules::input_sync returns it)
+		void input_epoch_replay(std::uint32_t index, const char* why, std::uint32_t age_ms)
+		{
+			const auto n = input_epoch_hold.take(index);
+			if (index > 3) return;
+			unsigned stored = 0;
+			input_epoch_replaying = true;
+			__try
+			{
+				for (unsigned i = 0; i < n && i < join_in_progress_core::input_epoch_hold_records; ++i, ++stored)
+					fn<void(__thiscall*)(void*, const void*, std::uint32_t, std::uint32_t)>(input_epoch_store_site)(reinterpret_cast<void*>(input_synchronizer), input_epoch_held[index][i].bytes, index, input_epoch_held[index][i].kind);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:epoch-replay-fault", "jip input epoch: storing the held records faulted - the rest of them are dropped"); }
+			input_epoch_replaying = false;
+			if (input_epoch_hold_lines < 64) { ++input_epoch_hold_lines; logger::write("jip input epoch: participant index %u sent no epoch marker %s (%u ms after this PC's ring reset) - its %u held record(s) stored in the order they came (the stock labelling for this epoch; a marker from it now would be late)",
+				index, why, age_ms, stored); }
+		}
 		int __cdecl input_epoch_store_filter(std::uint32_t* args)
 		{
 			__try
 			{
+				if (input_epoch_replaying) return 0;
 				const auto* record = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(args[1]));
 				if (!record) return 0;
-				const auto kind = args[3];
-				if (!join_in_progress_core::input_epoch_store_kind_has_mask(kind)) return 0;
-				const auto mask = at<std::uint32_t>(record, 4);
-				if (!join_in_progress_core::input_epoch_mark(mask)) return 0;
-				const auto index = args[2];
+				const auto kind = args[3], index = args[2];
+				const bool has_mask = join_in_progress_core::input_epoch_store_kind_has_mask(kind);
+				const auto mask = has_mask ? at<std::uint32_t>(record, 4) : 0u;
+				if (!has_mask || !join_in_progress_core::input_epoch_mark(mask))
+				{
+					// b2d-fix-jip: not a marker - held while this participant's marker is expected.
+					if (index > 3 || !input_epoch_hold.expecting[index]) return 0;
+					const auto now = GetTickCount();
+					const auto h = input_epoch_hold.record(index, now);
+					if (h == join_in_progress_core::input_epoch_hold::hold)
+					{
+						auto& slot = input_epoch_held[index][input_epoch_hold.held[index] - 1];
+						std::memcpy(slot.bytes, record, sizeof slot.bytes);
+						slot.kind = kind;
+						if (input_epoch_hold.held[index] == 1 && input_epoch_hold_lines < 64) { ++input_epoch_hold_lines; logger::write("jip input epoch: participant index %u's record(s) arrive before its epoch marker (store kind %u, decoder label %u, %u ms after this PC's ring reset) - held, not stored: dropped at its marker, stored as they came at the cap (%u ms)",
+							index, unsigned(kind), unsigned(at<std::uint16_t>(record, 0)), now - input_epoch_hold.armed_at, join_in_progress_core::input_epoch_hold_cap_ms); }
+						return 1;
+					}
+					if (h == join_in_progress_core::input_epoch_hold::flush)
+						input_epoch_replay(index, now - input_epoch_hold.armed_at >= join_in_progress_core::input_epoch_hold_cap_ms ? "within the cap" : "before the hold filled", now - input_epoch_hold.armed_at);
+					return 0;
+				}
 				if (index > 3) return 1;
-				auto* block = reinterpret_cast<std::uint8_t*>(0x79fbb0u + index * gns_transport_rules::input_block_size);
+				auto* block = reinterpret_cast<std::uint8_t*>(input_synchronizer + index * gns_transport_rules::input_block_size);
 				auto* counter = reinterpret_cast<std::uint16_t*>(block + input_block_counter);
 				const auto read = at<std::uint32_t>(block, gns_transport_rules::input_read), write = at<std::uint32_t>(block, gns_transport_rules::input_write);
 				const auto next = at<std::uint16_t>(block, gns_transport_rules::input_next), counted = *counter;
 				const auto action = join_in_progress_core::input_epoch_store_action(kind, mask, input_epoch_last.last[index], read);
 				if (action == join_in_progress_core::input_epoch_action::ignore) { *counter = join_in_progress_core::input_epoch_counter_after_ignore(*counter); return 1; }
 				input_epoch_last.last[index] = join_in_progress_core::input_epoch_nonce(mask);
+				const auto dropped = input_epoch_hold.marker(index); // b2d-fix-jip: the expectation ends either way; held copies go
 				if (action == join_in_progress_core::input_epoch_action::late)
 				{
 					// b2c-fix-crash (live-b2c X-2c): this PC already consumed record(s) of this block in this epoch; a reset now
@@ -2154,8 +2205,8 @@ namespace join_in_progress
 					return 1;
 				}
 				fn<void(__thiscall*)(void*)>(input_block_reset)(block);
-				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u begins input epoch %04x (store kind %u) - its block reset here (read %u write %u next %u counter %u: %u stale record(s) dropped); its records are counted from 0 again",
-					index, unsigned(input_epoch_last.last[index]), unsigned(kind), read, write, unsigned(next), unsigned(counted), join_in_progress_core::input_ring_pending(read, write)); }
+				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u begins input epoch %04x (store kind %u) - its block reset here (read %u write %u next %u counter %u: %u stale record(s) dropped); its records are counted from 0 again (%u held pre-marker record(s) dropped)",
+					index, unsigned(input_epoch_last.last[index]), unsigned(kind), read, write, unsigned(next), unsigned(counted), join_in_progress_core::input_ring_pending(read, write), dropped); }
 				return 1;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
@@ -2463,6 +2514,7 @@ namespace join_in_progress
 			logger::write("join in progress: AS 0x23 mesh-pair guard at 0x%06X - a mesh report that names a seat without a participant record (removed before the restart) no longer reads null+0x60 (live-b2c X-4p host crash); the pair's bits are cleared on the record(s) left and the manager's wait for that pair ends as stock would", unsigned(mesh_pair_site));
 			if (input_epoch) logger::write("join in progress: AR8 input epoch marker ON ([Online] RestartInputEpoch=1) - after each ring reset of a cohort restart (the release 0x613f68 and the start 0x6140b3) this PC posts %u marker record(s) (mask 0xfffa|nonce) ahead of its first real record, so every peer counts its records from 0 at the marker instead of from a stale pre-reset record (the one-label-late guest stream of fable-ar7 X7-2a); markers are honoured by every peer of this build", join_in_progress_core::input_epoch_copies);
 			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));
+			if (input_epoch) logger::write("join in progress: restart-release barrier ON (with RestartInputEpoch) - after each of this PC's ring resets a peer's records are held until its epoch marker (dropped there: pre-restart records) or for %u ms (then stored as they came); every peer counts a peer's records from the same record (live-b2d N-LATE4 / N-2c-LATE)", join_in_progress_core::input_epoch_hold_cap_ms);
 			if (clock_step) logger::write("join in progress: AR7 clock step patch ON ([Online] SymmetricClockStep=1, an opt-in experiment) at 0x%06X - a placeholder record counts its measured frame time (up to 1.0 s) instead of the stock 0.025 s on every peer, so game time runs ahead through a load stall; every peer of a session must use the same setting (the clock step is part of the lockstep)", unsigned(clock_step_site));
 			else logger::write("join in progress: AR7 clock step patch OFF (default; [Online] SymmetricClockStep=0) - the stock rule is already the same on every peer (the step word travels with its placeholder bit), a placeholder record counts 0.025 s everywhere");
 			if (execution_observer) logger::write("join in progress: AR7 `jip step:` observer at 0x%06X for frames 0..%u of every epoch (JoinDiagnostics=1)", unsigned(clock_step_observe_site), join_in_progress_core::step_observe_frames - 1);

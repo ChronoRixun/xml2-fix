@@ -1192,6 +1192,13 @@ namespace gns_transport
 					if (last_chance) logger::write_once("ar-carry-later", "online: participant %d - the host's removal decision cannot be carried out yet at %s (no running zone); this PC's restart waits for it", index, where);
 					continue;
 				}
+				if (gns_transport_core::newcomer_decision_waits_for_record(r == carry::absent, last_chance))
+				{
+					// b2d-fix-jip (live-b2d N-STALL4): no record yet - the host's native add of it is still in the parser queue
+					// (it was sent before the decision). The decision stays open; the record is removed the tick it exists.
+					logger::write_capped("ar-carry-absent", "online: participant %d - the host's removal decision arrived before this PC's native add of it (no record yet at %s); the decision stays open and the record is removed as soon as it exists, at the latest at this PC's restart entry", index, where);
+					continue;
+				}
 				newcomers_here.removed(index);
 				if (link* l = peer ? by_peer(peer) : nullptr) { l->vanished = true; if (!l->gone_at) l->gone_at = GetTickCount() | 1; l->lost_index = index; }
 				if (r == carry::fault) logger::write("online: participant %d - a FAULT inside the native removal carrying out the host's decision at %s; not retried", index, where);

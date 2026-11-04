@@ -614,6 +614,58 @@ if the consumed record was stale the one-label offset of fable-ar7 is back for t
 re-labelling after consumption. The restart-release barrier (holding a peer's pre-marker records until its marker or a
 cap, so the gate cannot pass on a stale record) is designed in the b2c-fix-crash report and not part of this change.
 
+### The restart-release barrier (b2d-fix-jip, live-b2d N-LATE4 / N-2c-LATE)
+
+Live b2d showed the late marker is not a load artefact and that IGNORE alone splits the cohort: X-4p-a (host IGNORED the
+slow guest's start marker, both guests reset -> frame-30 checksums differ -> both guests arbitrated out), X-2cL, X-2cR and
+X-2cR2 (the guest IGNORED the host's marker with no extra load -> the guest dropped at frame 30/60) - 3 of 3 lost-newcomer
+restarts. The mechanism: the marker is one unreliable single record and a receiver labels single records by arrival, so a
+record P sent BEFORE its restart and still in flight across the ~1 s reset skew is stored after the receiver's own ring
+reset as P's label 0; the gate passes on it (a record from every participant), and P's marker is then late there, while
+the peers whose parsers saw the marker first reset. The same real record is label 0 on them and label 1 on the late peer.
+
+The barrier: from this PC's own all-blocks ring reset (the release 0x613f68 and the start 0x6140b3, the sites that post
+the markers) every other participant's records - whatever their store kind - are copied aside with the decoder's label
+(`input_epoch_held`, 96 per participant) and not stored, until that participant's marker, which drops the copies together
+with its block reset (they were pre-restart records; its real records are counted from 0 on every peer alike), or until a
+cap of 5 s after the reset, when the copies are stored in the order they came through the store itself (the stock
+labelling, as before the barrier; a marker after that is late and ignored, as before). Observed start-reset-to-marker skew
+in every live-b2d restart, passed or failed: 1.0-2.4 s. A real record can precede P's marker only through the native
+reliable resend (`0x5c` -> `0x5d` batches, whose records carry their label on the wire - live-b2d P-LJ3, the newcomer's
+marker 16.6 s behind its resent frame 0): dropped at a marker inside the cap it is requested again and resent by label;
+past the cap it is stored as it came and the late marker is ignored, on every peer alike. The hold is armed only while
+this PC itself sends markers (`[Online] RestartInputEpoch`, default on), never for its own index, and disarmed at the
+session's end. Logged: `... record(s) arrive before its epoch marker ... held, not stored`, the reset line's `(N held
+pre-marker record(s) dropped)`, and `... sent no epoch marker within the cap ... held record(s) stored in the order they
+came`. Residual: a marker LOST (not late) on one peer that holds a stale record gives that peer the stock labelling at the
+cap - the b2d outcome, never worse. No wire change: rule 26 stays at revision 7.
+
+Tests: `xml2_join_in_progress_test` (the barrier's rules; a label model of 2/3/4-player cohorts: on-time marker, the
+X-4p-a split with the b2d build as a control, the X-2cR shape, late on every peer, marker lost on every peer / on one
+peer, P-LJ3's resent frame 0 past the cap, a resent record inside the cap, per-participant holds);
+`xml2_join_in_progress_boundary_test <retail> input-epoch` (the production store hook against the retail store 0x559560 of
+the mapped image: hold, drop at the marker, label 0 afterwards, the cap's in-order replay through the retail store and the
+late marker after it, a full hold, own records, disarmed = stock).
+
+### A removal decision ahead of the native add (b2d-fix-jip, live-b2d N-STALL4)
+
+In X-4p-b, X-4p-late and X-4p-late2 the guarded 0x23 no longer crashed the host, but the restart stalled ~1 minute and the
+slow guest was lost. On that guest the host's decision ("participant 3 lost before the restart", a transport control
+message handled in the receive pump) was carried out at the next transport tick while the host's native add of seat 3
+(0x1f, sent 1.3 s BEFORE the decision on the same reliable link) still waited in the parser queue: the tick found no record
+("already gone"), closed the ledger, and 4 ms later the parser ran the 0x1f - mesh completion, 0x25 reply, a record for
+seat 3 (`GNS discovery ... 4 participants`) that nothing removed before the restart. The guest's lockstep then waited for
+seat 3's inputs at frame 1 (`jip ring: 5 s after frame 0 frame=1`), host and other guest at frame 4 for the slow guest,
+until the slow guest's own watchdog gave seat 3 up (its 0x09 -> the host's `native drop notice caller=0x006116A1
+index=3`) ~60 s later and it was itself dropped 10 s after. X-4p-c / X-4p-c2 passed with the opposite order (the 0x1f
+parsed first, the decision removed the record 29 ms after the mesh completion).
+
+Now an absent record settles a decision only at the restart entry (by then every message queued before the decision,
+the native add included, has been parsed): at a tick it stays open (`... the host's removal decision arrived before this
+PC's native add of it (no record yet ...); the decision stays open and the record is removed as soon as it exists`) and
+the next tick after the parser created the record removes it as before (`removed by the host's decision at its next
+transport tick`). Tests: `xml2_join_in_progress_test` (the rule and the X-4p-b / X-4p-c / native-0x2b orders on the ledger).
+
 ## Canonical cohort restart (0.6.0, p060fix/AE)
 
 The late admission already reloads EVERY peer from one campaign image: the host
