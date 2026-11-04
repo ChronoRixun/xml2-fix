@@ -3,8 +3,9 @@ namespace text_fixture {
 std::array<unsigned char,0x1e20> editor{};
 unsigned closed=0;
 unsigned sounds=0;
+void* cancel_return=nullptr;
 void __fastcall sound(void*,void*,int) { ++sounds; }
-int __fastcall close_editor(void*,void*) { ++closed;return 2; }
+int __fastcall close_editor(void*,void*) { ++closed;if(cancel_return) set_current(cancel_return);return 2; }
 void __fastcall activate_base(void*,void*,int) {}
 void __cdecl cookie(unsigned) {}
 const char* __cdecl find_character(const char* text,int c) { return std::strchr(text,c); }
@@ -108,6 +109,35 @@ void run(const script_functions_rules::func_entry* entry) {
         for(unsigned i=0;i<value.size();++i) tick(editor.data(),nullptr);
     };
     const auto physical=[&](unsigned scan,unsigned character) { press(scan);chars(std::u16string(1,char16_t(character))); };
+    // Regression: the IP caller seeds an empty buffer. Cancellation must not
+    // enter Done's non-whitespace validator or publish a searchable address.
+    // Exercise the actual installed input routes and the retail return handler.
+    for(int route=0;route<5;++route) for(const char* seed:{"","203.0.113.8"}) for(const auto* draft:{u"",u"12.3"}) {
+        if(mode.starts_with("r31-cancel-") && route!=std::stoi(mode.substr(11))) continue;
+        std::cout<<"IP Cancel route "<<route<<" seed "<<(seed[0]?"nonempty":"empty")<<"\n";
+        begin(3,15,seed);chars(draft);
+        std::strcpy(reinterpret_cast<char*>(0xa3bc1c),"198.51.100.7");
+        cancel_return=child.data();const auto before_close=closed;
+        if(route==0) press(1); // physical Escape
+        if(route==1) { mask=0x200000;tick(editor.data(),nullptr);mask=0; } // pad B
+        if(route==2) { // focused Cancel + physical Enter
+            std::array<unsigned char,256> state{};online_menus::keyboard(state.data());
+            auto* cancel=item_stub(editor.data(),nullptr,"lc_text_cancel");
+            put(editor.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(cancel)));
+            press(0x1c);
+        }
+        if(route==3) key(40); // the exact mouse usecmd lcOnlineIntent(140)
+        if(route==4) typed(27); // native character lane
+        assert(closed==before_close+1 && current_menu(nullptr,nullptr)==cancel_return);
+        assert(text()==seed && *reinterpret_cast<unsigned char*>(0xa3e168+0x300)==0);
+        assert(*reinterpret_cast<int*>(0xa3e168+0x304)==4);
+        redirect(0x5ad080,tick_stub);
+        reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5cf040)(child.data(),nullptr);
+        assert(std::string(reinterpret_cast<char*>(0xa3bc1c))=="198.51.100.7");
+        cancel_return=nullptr;
+        std::cout<<"PASS IP Cancel route "<<route<<" seed "<<(seed[0]?"nonempty":"empty")<<": one close, no result, saved address unchanged\n";
+    }
+    if(mode.starts_with("r31-cancel-")) return;
     // Simulated TranslateMessage WM_CHAR streams: same physical keys, active
     // US (0409), French AZERTY (040c), German QWERTZ (0407) output.
     for(const auto& layout:{std::pair{0x0409,u"aqwzym"},std::pair{0x040c,u"qazwym"},std::pair{0x0407,u"aqwyzm"}}) {
