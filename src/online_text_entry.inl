@@ -2,7 +2,7 @@
 // Pad/mouse feed that same lane: native tags, charset, limits and results win.
 namespace text_entry_ui {
 constexpr int first=100,last=140;
-struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0;const char* notice=nullptr;DWORD notice_at=0;int attempted_length=-1; } edit;
+struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0;const char* notice=nullptr;DWORD notice_at=0;int attempted_length=-1;bool closing=false; } edit;
 online_text_entry_rules::inbox input;
 void reset_input() { input.clear();edit.pending=-1;edit.held=0;edit.notice=nullptr; }
 bool live(void* menu) {
@@ -134,9 +134,25 @@ bool inject(unsigned char character) {
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return true; }
 }
+void cancel(void* menu) {
+    // Retail Escape restores the seed and calls Done (0x5e6f30). An empty IP
+    // seed then fails Done's non-whitespace check and never closes. Cancellation
+    // has no accepted result: retire the request before returning to its caller.
+    auto* buffer=static_cast<char*>(menu)+0x1c10;
+    std::memcpy(buffer,static_cast<char*>(menu)+0x1d14,256);buffer[255]=0;
+    at<const char*(__thiscall*)(void*)>(0x60c780)(at<getter>(0x60c7e0)());
+    *at<unsigned char*>(0xa0a061)=0;reset_input();edit.closing=true;
+    at<int(__thiscall*)(void*)>((*static_cast<unsigned**>(menu))[0x2c/4])(menu);
+}
 void __fastcall tick(void* menu,void*) {
     if(!live(menu)) { at<tick_fn>(0x5e72f0)(menu);return; }
     if(!input_thread("text entry",false)) return;
+    if(edit.owner==menu && edit.closing) {
+        // The manager may animate the queued close before deactivation. Keep
+        // the base lifecycle ticking, without accepting a second terminal key.
+        *at<unsigned char*>(0xa0a061)=0;
+        text_entry_ticking=true;at<tick_fn>(0x5aaeb0)(menu);text_entry_ticking=false;return;
+    }
     bool native_called=false;
     try {
         if(edit.owner!=menu) { edit={menu,0,-1,request_tag()};input.clear(); }
@@ -169,6 +185,7 @@ void __fastcall tick(void* menu,void*) {
                 if(!character || inject(character)) edit.pending=-1;
             }
         }
+        if(*at<unsigned char*>(0xa0a061)==27) { cancel(menu);return; }
         bind(menu);
         if(!online_text_entry_rules::enabled(edit.focus,int(std::strlen(characters())),edit.tag==3)) focus(menu,0);
         // Retail rejects length==limit only. Guard >= as well, including the

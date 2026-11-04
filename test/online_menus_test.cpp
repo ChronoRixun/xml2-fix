@@ -31,6 +31,7 @@
 #include <deque>
 #include <stdexcept>
 #include <new>
+#include <memory>
 #include <intrin.h>
 
 namespace lc_fonts { extern bool body_ready; }
@@ -193,7 +194,7 @@ bool model_scene(std::string_view name) {
 }
 void* __fastcall item_stub(void*,void*,const char* name) {
     if(absent_items.count(name)) return nullptr;
-    if(mode=="r27-text" && (std::string_view(name).starts_with("text_inputkeys") || std::string_view(name)=="lc_text_cancel")) {
+    if((mode=="r27-text" || mode.starts_with("r31-cancel-")) && (std::string_view(name).starts_with("text_inputkeys") || std::string_view(name)=="lc_text_cancel")) {
         static std::map<std::string,std::array<unsigned char,0xb0>> keys;
         auto& key=keys[name];if(!*reinterpret_cast<unsigned*>(key.data())) key=text_item;return key.data();
     }
@@ -529,6 +530,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
 #include "online_ready_fixture.inl"
+#include "online_ready_submission_fixture.inl"
 #include "online_text_fixture.inl"
 #include "online_other_fixture.inl"
 #include "online_network_fixture.inl"
@@ -635,7 +637,6 @@ int main(int argc,char** argv) {
     auto& overflow=script_function_overflow::table();overflow.reset(704);
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
-    install_hooks.visual_context=&ready_fixture::visual_context;
     if(mode=="r21-data-churn") { data_text_fixture::prepare();install_hooks.broker=&data_text_fixture::api; }
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
@@ -728,10 +729,11 @@ int main(int argc,char** argv) {
         std::cout<<"PASS retail Back-to-Main item dispatch with no online usecmd hook\n";
         std::cout<<"PASS no GameSpy entry/variant/conditional fallbacks; unrelated menu unchanged\n";return 0;
     }
-    if(mode=="r27-text") { text_fixture::run(entry);return 0; }
+    if(mode=="r27-text" || mode.starts_with("r31-cancel-")) { text_fixture::run(entry);return 0; }
     if(mode=="r27-other") { other_fixture::run(entry);return 0; }
     if(mode=="r27-network") { network_fixture::run();return 0; }
-    if(mode=="r26-ready") { ready_fixture::run();ready_fixture::deferred();return 0; }
+    if(mode=="r31-ready-submit") { ready_submission_fixture::run();return 0; }
+    if(mode=="r26-ready") { ready_fixture::run();return 0; }
     if(mode=="r21-data-churn") { data_text_fixture::run(entry);return 0; }
     if(mode=="r20-code-open-close") { frontend_strings_fixture::open_close();return 0; }
     if(mode=="r20-retry-code" || mode=="r20-retry-browse") { frontend_strings_fixture::retry();return 0; }

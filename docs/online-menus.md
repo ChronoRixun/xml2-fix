@@ -2022,27 +2022,32 @@ and navy panel adapters. Its localized names, statuses, hero/slow suffixes and
 readiness decisions remain native. Missing private body metrics/atlas retain
 native arguments. This uses the existing Menus switch and font family.
 
-Native text commands defer drawing and do not store their font index. Roster
-commands are therefore marked by stream identity and full generation-bearing
-token, then grouped by font at the real `0x6a362c` render callback. Every group
-uses native `0x5ef2e0` with the actual traversal arguments and native cleanup,
-consuming each token once. The `0x5ef1a0` reset adapter carries color scopes
-between groups before cleanup resets their depth, and retires bookkeeping on
-normal reset/destruction. Unmarked streams retain one native render call. The
-large stream snapshot is allocated only in the marked slow path. Each group also
-binds its matching font atlas to the viewport material, using the borrowed
-texture getter and material setter used by `0x5f1049..0x5f105c`. The viewport
-initializer only binds its original atlas once: changing deferred font metrics
-alone samples the wrong texture and produces sliced glyphs. The original atlas
-is restored after the split. The material setter changes the scene attribute
-only: it does not bind the already-active graphics context. Each batch therefore
-uses the guarded material binding accessor `0x571c80`, then calls
-`igTextureBindAttr::apply` (vtable +0x54) with the context selected by the engine
-export `igDxVisualContext::_pCurrentContext`. This also prepares a texture that
-has not yet been uploaded. No current context retains native font arguments.
-The fixture separates stored and active atlases, exercises native viewport 0
-at the failed resolutions, and rejects the prior setter-only implementation.
-Actual Direct3D pixels and clipping still need live acceptance on host and guest.
+The draw sites `0x5d9a78` / `0x5d9b17` use font channel 0, whose scene material
+normally holds the medium atlas. That argument is a font channel, not a viewport.
+The callback `0x5ef2e0` only emits vertices: `0x5ee780` reads glyph metrics/UVs,
+`0x5ee400` emits the quad and the writer `0x584600` appends geometry attributes.
+The procedural visitor calls the callback at `0x6025c6` and only afterwards
+submits geometry/state through `igCommonTraverseGeometry` at `0x6025e3`.
+Changing and restoring a material or active texture inside the callback therefore
+leaves private glyph UVs paired with the native atlas at submission.
+
+Roster commands now use a separate native text renderer and procedural scene,
+with font slot 6 and its `lc_online_body` atlas bound permanently. It shares the
+source renderer's parent and depth, and therefore its viewport/clip state. Native
+commands retain their own streams/materials. The original UV emitter, pixel
+scaling, nested color scopes, command ownership and cleanup remain unchanged.
+Renderer attachment (`0x5f1230`), detachment (`0x5f0f90`), whole-queue reset
+(`0x5f0f60`) and destruction (`0x59b520`) also manage the private scene. Late
+creation after parent attachment works; an empty parent handle preserves the
+previous attachment for teardown. The scene consumes no menu/focus item and
+requires no companion asset regeneration or increase to the 175-item cap.
+
+`r31-ready-submit` executes the retail procedural visitor, glyph UV emitter and
+vertex writer, then captures submission after the callback returns. It checks
+atlas/UV agreement, nested colors, unchanged viewport state, native neighbors,
+exact command retirement and scene lifetimes at 800x600, 1280x960, 1280x720 and
+1920x1080. The preceding adapter fails with font 6 and atlas 0. Actual Direct3D
+pixels and host/guest pause behavior still require live acceptance.
 
 ### Optional native online scenes and text entry
 
@@ -2101,6 +2106,14 @@ menu mask is suppressed only during the wrapped editor tick, so its old
 Enter/Start terminal shortcut cannot also close the grid. Mouse commands retain
 the same 100..140 lane. Owner activation/deactivation and input loss retire queued
 input; page changes repair focus if a cell becomes unavailable.
+Cancellation restores the original buffer, retires the native result request
+with `0x60c780`, and invokes the existing close slot at `0x69f098`. It does not
+call Done's `0x5e6f30` validator: retail Escape does that after restoring the
+seed, so an empty IP seed cannot close. No accepted tag-3 result reaches
+`0x5cf040`, which leaves the previous address and search state unchanged. Escape,
+pad B, focused Cancel/Enter, mouse Cancel's command and the native character
+lane have fixtures for empty/nonempty seeds and empty/edited buffers. During a
+queued close only the base lifecycle ticks; no second terminal action is taken.
 The native tag 3 IP editor exposes digits and period only. Hub and Game Options
 names retain their 31-byte limit. An inherited seed is truncated on activation
 to the request byte limit without splitting UTF-8, and the native display is

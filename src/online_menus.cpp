@@ -29,6 +29,8 @@
 #include <fstream>
 #include <ctime>
 #include <map>
+#include <memory>
+#include <new>
 #include <cstdio>
 #include <intrin.h>
 #include <atomic>
@@ -3812,7 +3814,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         if(hooks->wall_clock) wall_source=hooks->wall_clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
         lobby_fields=hooks->lobby_fields;
-        ready_roster::visual_context_slot=hooks->visual_context;
     }
     { // The agent-only mouse diagnostic (fix K): [Test] InputPipe, read as the fix reads every switch (ini_rules::flag).
         const auto pipe=ini::text(L"Test",L"InputPipe");

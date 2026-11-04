@@ -1,119 +1,111 @@
-// A37: the engine draws this roster independently of the PDA player list.
-// Keep its complete walk, readiness decisions, localized row formatter, hero
-// suffix, viewport selection and temporary render flags. Only its font/scale
-// arguments and background RGBA are adapted, at roster-local call sites.
-// A missing/not-yet-loaded private body atlas leaves every argument native.
+// The PDA roster uses procedural text geometry, not CText's private material.
+// Its callback writes vertices; igCommonTraverseGeometry submits them later.
+// Give LC rows a separate native stream and scene node whose atlas stays fixed
+// through both traversals. Native streams, their colors and tokens stay native.
 namespace ready_roster {
 constexpr int body_font=6;
-void** visual_context_slot=nullptr;
-void* visual_context() {
-    if(!visual_context_slot) {
-        const auto module=GetModuleHandleW(L"libIGGfx.dll");
-        if(module) visual_context_slot=reinterpret_cast<void**>(GetProcAddress(module,
-            "?_pCurrentContext@igDxVisualContext@Gfx@Gap@@1PAV123@A"));
-    }
-    return visual_context_slot ? *visual_context_slot : nullptr;
-}
-constexpr float body_view_scale=10.0f/64.0f; // LC body: 12.5 on the 640 canvas
-constexpr unsigned stream_bytes=0x21634, queue_at=0x2142c, count_at=0x21630, font_at=0x2140c;
-constexpr unsigned queue_capacity=(count_at-queue_at)/sizeof(unsigned), colors_at=0x21410, colors_bytes=24;
-struct marks { void* stream=nullptr;void* renderer=nullptr;int viewport=0;unsigned count=0;std::array<unsigned,queue_capacity> tokens{}; };
-std::array<marks,16> streams{}; // renderer thread; keyed by stream AND full generation-bearing command id
-marks* marked(void* stream,bool create=false) {
-    for(auto& m:streams) if(m.stream==stream) return &m;
-    if(create) for(auto& m:streams) if(!m.stream) { m.stream=stream;return &m; }
+constexpr float body_view_scale=10.0f/64.0f;
+constexpr unsigned stream_bytes=0x21634,renderer_bytes=0x858ec;
+constexpr unsigned font_at=0x2140c,nodes_at=0x858d4,flags_at=0x858e8;
+template<class T> T& field(void* object,unsigned offset) { return *reinterpret_cast<T*>(static_cast<char*>(object)+offset); }
+struct private_scene {
+    void* source=nullptr;
+    void* parent=nullptr;
+    float depth=0;
+    std::unique_ptr<unsigned char[]> renderer;
+};
+std::array<private_scene,16> scenes{};
+private_scene* scene(void* source,bool create=false) {
+    for(auto& s:scenes) if(s.source==source) return &s;
+    if(create) for(auto& s:scenes) if(!s.source) { s.source=source;return &s; }
     return nullptr;
 }
-void forget(void* stream) { if(auto* m=marked(stream)) *m={}; }
-template<class T> T& field(void* stream,unsigned offset) { return *reinterpret_cast<T*>(static_cast<char*>(stream)+offset); }
-struct split_state {
-    void* stream;
-    std::array<unsigned char,colors_bytes> colors{};
-    bool captured=false;
-};
-thread_local split_state* splitting=nullptr;
-const unsigned reset_resume=0x5ef1aa;
+const unsigned present_resume=0x5f1235,detach_resume=0x5f0f95,reset_resume=0x5f0f69,destroy_resume=0x59b525;
+__declspec(naked) void __fastcall native_present(void*,void*,void**,float) {
+    __asm push ebx
+    __asm mov ebx,[esp+8]
+    __asm jmp dword ptr [present_resume]
+}
+__declspec(naked) void __fastcall native_detach(void*,void*,void**) {
+    __asm push ebx
+    __asm mov ebx,[esp+8]
+    __asm jmp dword ptr [detach_resume]
+}
 __declspec(naked) void __fastcall native_reset(void*,void*) {
-    __asm { push ebp
-        push edi
-        mov edi,ecx
-        mov eax,[edi+21404h]
-        jmp dword ptr [reset_resume] }
+    __asm push esi
+    __asm push edi
+    __asm mov esi,ecx
+    __asm mov edi,4
+    __asm jmp dword ptr [reset_resume]
 }
-void __fastcall reset(void* stream,void*) {
-    // Native color scopes can span commands. Capture before the native reset
-    // clears their depth, so splitting a batch never changes ~NN/~~ semantics.
-    if(splitting && splitting->stream==stream) {
-        std::memcpy(splitting->colors.data(),static_cast<char*>(stream)+colors_at,colors_bytes);
-        splitting->captured=true;
-    }
-    forget(stream); // also covers native reset/destruction outside a draw pass
-    native_reset(stream,nullptr);
+__declspec(naked) void __fastcall native_destroy(void*,void*) {
+    __asm push 5ef890h
+    __asm jmp dword ptr [destroy_resume]
 }
-// Native viewport initialization binds a texture ONCE to its render material.
-// Selecting another font in the command stream changes UV metrics, not that
-// material. Also, changing a scene attribute does not apply it to the ALREADY
-// active visual context. The callback must apply the changed texture binding.
-void atlas(const marks& selected,int font) {
-    auto* node=*reinterpret_cast<void**>(static_cast<char*>(selected.renderer)+0x858d4+selected.viewport*4);
+void attach(private_scene& s) {
+    if(!s.parent || !s.renderer) return;
+    auto* node=field<void*>(s.renderer.get(),nodes_at);
     if(!node) return;
-    auto* material=at<void*(__thiscall*)(void*)>((*static_cast<unsigned**>(node))[0xc/4])(node);
-    auto* fonts=at<getter>(0x597c20)();void* texture=nullptr;
-    auto* result=at<void**(__thiscall*)(void*,void**,int)>((*static_cast<unsigned**>(fonts))[0x1c/4])(fonts,&texture,font);
-    at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(material))[0x1c/4])(material,*result);
-    auto* binding=at<void*(__thiscall*)(void*)>(0x571c80)(material);
-    // igTextureBindAttr::apply, not merely setTexture: this initializes an
-    // unloaded texture for the context and updates the engine's texture cache.
-    at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(binding))[0x54/4])(binding,visual_context());
+    at<void(__thiscall*)(void*,float)>(0x5f1090)(s.renderer.get(),s.depth);
+    at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(s.parent))[0x2c/4])(s.parent,node);
 }
-using render_fn=void(__thiscall*)(void*,void*,unsigned,void*);
-// A separate slow path keeps the large snapshot off every ordinary text-stream
-// callback's stack. Validate and partition completely BEFORE consuming tokens.
-__declspec(noinline) void render_marked(void* stream,void* context,unsigned time,void* viewport,const marks& selected) {
-    const auto render=at<render_fn>(0x5ef2e0);
-    const auto count=field<int>(stream,count_at), original_font=field<int>(stream,font_at);
-    // A disabled font stream does not consume its native queue. Retain its
-    // generation-bound marks until it renders or is reset/destroyed.
-    if(original_font<0) { render(stream,context,time,viewport);return; }
-    if(count<1 || count>int(queue_capacity)) { forget(stream);render(stream,context,time,viewport);return; }
-    std::array<int,queue_capacity> fonts{};
-    const auto* tokens=&field<unsigned>(stream,queue_at);
-    bool any=false;
-    for(int i=0;i<count;++i) {
-        const bool ours=std::find(selected.tokens.begin(),selected.tokens.begin()+selected.count,tokens[i])!=selected.tokens.begin()+selected.count;
-        fonts[i]=ours ? body_font : original_font;any|=ours;
+void retire(private_scene& s) {
+    if(s.renderer) {
+        // Detach/release the scene handle before releasing its callback storage.
+        auto* parent=s.parent;
+        native_detach(s.renderer.get(),nullptr,&parent);
+        if(!parent) for(unsigned i=0;i<4;++i) {
+            auto& node=field<void*>(s.renderer.get(),nodes_at+i*4);
+            if(node) at<void(__cdecl*)(void**)>(0x575980)(&node);
+        }
+        native_destroy(s.renderer.get(),nullptr);
     }
-    forget(stream);
-    if(!any) { render(stream,context,time,viewport);return; }
-    std::array<unsigned char,stream_bytes> saved{};
-    std::memcpy(saved.data(),stream,stream_bytes);
-    split_state state{stream};
-    struct render_scope {
-        void* stream;int original_font;split_state* previous;const marks& selected;
-        ~render_scope() { field<int>(stream,font_at)=original_font;atlas(selected,original_font);splitting=previous; }
-    } scope{stream,original_font,splitting,selected};
-    splitting=&state;
-    for(int begin=0;begin<count;) {
-        int end=begin+1;while(end<count && fonts[end]==fonts[begin]) ++end;
-        std::memcpy(stream,saved.data(),stream_bytes);
-        if(state.captured) std::memcpy(static_cast<char*>(stream)+colors_at,state.colors.data(),colors_bytes);
-        std::memcpy(static_cast<char*>(stream)+queue_at,saved.data()+queue_at+begin*4,(end-begin)*4);
-        field<int>(stream,count_at)=end-begin;field<int>(stream,font_at)=fonts[begin];
-        // Use the actual traversal's context/time/viewport. Each disjoint group
-        // uses native draw+cleanup once. Remaining global command references
-        // keep shared strings alive until the final group is consumed.
-        atlas(selected,fonts[begin]);
-        render(stream,context,time,viewport);
-        begin=end;
+    s={};
+}
+void __fastcall present(void* source,void*,void** parent,float depth) {
+    native_present(source,nullptr,parent,depth);
+    // Native presentation does nothing for an empty parent handle. Preserve
+    // the previous attachment so later teardown can still remove its child.
+    if(!parent || !*parent) return;
+    if(auto* s=scene(source,true)) {
+        s->parent=parent ? *parent : nullptr;s->depth=depth;
+        attach(*s);
     }
 }
-void __fastcall render(void* stream,void*,void* context,unsigned time,void* viewport) {
-    if(const auto* selected=marked(stream);selected && selected->count) {
-        const auto copy=*selected;render_marked(stream,context,time,viewport,copy);return;
-    }
-    at<render_fn>(0x5ef2e0)(stream,context,time,viewport);
+void __fastcall detach(void* source,void*,void** parent) {
+    if(auto* s=scene(source)) retire(*s);
+    native_detach(source,nullptr,parent);
 }
-bool styled() { return ready && lc_fonts::online_body_ready() && visual_context(); }
+void __fastcall reset(void* source,void*) {
+    if(auto* s=scene(source);s && s->renderer) native_reset(s->renderer.get(),nullptr);
+    native_reset(source,nullptr);
+}
+void __fastcall destroy(void* source,void*) {
+    if(auto* s=scene(source)) retire(*s);
+    native_destroy(source,nullptr);
+}
+void* private_renderer(void* source) {
+    auto* s=scene(source,true);if(!s) return nullptr;
+    if(!s->renderer) {
+        auto memory=std::unique_ptr<unsigned char[]>(new(std::nothrow) unsigned char[renderer_bytes]{});
+        if(!memory) return nullptr;
+        for(unsigned i=0;i<4;++i) at<void*(__thiscall*)(void*)>(0x5eec20)(memory.get()+i*stream_bytes);
+        s->renderer=std::move(memory);
+    }
+    auto* renderer=s->renderer.get();
+    if(!field<void*>(renderer,nodes_at)) {
+        at<bool(__thiscall*)(void*,int)>(0x5f0fd0)(renderer,0);
+        auto* node=field<void*>(renderer,nodes_at);if(!node) return nullptr;
+        auto* material=at<void*(__thiscall*)(void*)>((*static_cast<unsigned**>(node))[0xc/4])(node);
+        auto* fonts=at<getter>(0x597c20)();void* texture=nullptr;
+        auto* result=at<void**(__thiscall*)(void*,void**,int)>((*static_cast<unsigned**>(fonts))[0x1c/4])(fonts,&texture,body_font);
+        at<void(__thiscall*)(void*,void*)>((*static_cast<unsigned**>(material))[0x1c/4])(material,*result);
+        field<int>(renderer,font_at)=body_font;
+        attach(*s); // covers a roster first drawn AFTER native scene attachment
+    }
+    return renderer;
+}
+bool styled() { return ready && lc_fonts::online_body_ready(); }
 float body_scale() {
     const int h=*at<const int*>(0xa0a000);
     return body_view_scale*(h>=240 && h<=16384 ? float(h)/384.0f : 1.0f);
@@ -128,55 +120,48 @@ float __fastcall height(void* font,void*,int length,const char* text,float scale
     if(styled()) { scale=body_scale();index=body_font; }
     return at<height_fn>((*at<unsigned**>(reinterpret_cast<std::uintptr_t>(font)))[0x38/4])(font,length,text,scale,index,flags);
 }
-__declspec(naked) void width_eax() { __asm { mov ecx,eax
-    jmp width } }
-__declspec(naked) void height_eax() { __asm { mov ecx,eax
-    jmp height } }
-__declspec(naked) void height_edi() { __asm { mov ecx,edi
-    jmp height } }
+__declspec(naked) void width_eax() {
+    __asm mov ecx,eax
+    __asm jmp width
+}
+__declspec(naked) void height_eax() {
+    __asm mov ecx,eax
+    __asm jmp height
+}
+__declspec(naked) void height_edi() {
+    __asm mov ecx,edi
+    __asm jmp height
+}
 using color_fn=void*(__thiscall*)(void*,float,float,float,float);
 void* __fastcall panel(void* out,void*,float r,float g,float b,float a) {
-    if(styled()) { r=17.0f/255;g=40.0f/255;b=74.0f/255;a=.92f; } // LC panel, PALETTE[1]
+    if(styled()) { r=17.0f/255;g=40.0f/255;b=74.0f/255;a=.92f; }
     return at<color_fn>(*at<unsigned*>(0x67f9ac))(out,r,g,b,a);
 }
 using draw_fn=void(__thiscall*)(void*,int,int,int,int,int,float,int,const void*,const char*);
-void __fastcall text(void* renderer,void*,int viewport,int x,int y,int w,int h,float scale,int flags,const void* color,const char* value) {
+void __fastcall text(void* source,void*,int channel,int x,int y,int w,int h,float scale,int flags,const void* color,const char* value) {
     const auto draw=at<draw_fn>(0x5f11b0);
-    // This is the exact native font selector used by the text command stream.
-    // Initializing the viewport precedes the temporary selector (retail does
-    // the same check inside draw); restore it before another UI draws.
-    if(!styled() || viewport<0 || viewport>3 || !at<bool(__thiscall*)(void*,int)>(0x5f0fd0)(renderer,viewport)) {
-        draw(renderer,viewport,x,y,w,h,scale,flags,color,value);return;
+    if(styled() && channel>=0 && channel<4) if(auto* renderer=private_renderer(source)) {
+        field<unsigned char>(renderer,flags_at)=field<unsigned char>(source,flags_at);
+        draw(renderer,0,x,y,w,h,body_scale(),flags,color,value);return;
     }
-    auto* stream=static_cast<char*>(renderer)+viewport*stream_bytes;
-    auto& font=field<int>(stream,font_at);
-    const int before=field<int>(stream,count_at);
-    if(font<0 || before<0 || before>=int(queue_capacity)) { draw(renderer,viewport,x,y,w,h,scale,flags,color,value);return; }
-    if(before==0) forget(stream); // a fresh queue cannot inherit marks from an earlier stream generation
-    auto* selected=marked(stream,true);
-    if(!selected || selected->count==queue_capacity) { draw(renderer,viewport,x,y,w,h,scale,flags,color,value);return; }
-    selected->renderer=renderer;selected->viewport=viewport;
-    const auto original=font;font=body_font;
-    draw(renderer,viewport,x,y,w,h,body_scale(),flags,color,value);
-    font=original;
-    const int after=field<int>(stream,count_at);
-    if(after>before && after<=int(queue_capacity))
-        for(int i=before;i<after && selected->count<queue_capacity;++i) selected->tokens[selected->count++]=field<unsigned>(stream,queue_at+i*4);
+    draw(source,channel,x,y,w,h,scale,flags,color,value);
 }
 void contribute(patch_transaction::contribution& c) {
     const auto call=[&](unsigned site,const auto target,unsigned pad,const char* why) {
         c.writes.push_back(patch_transaction::relocation(site,"e8",true,static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(target)),pad,why));
     };
-    c.writes.push_back(patch_transaction::relocation(0x6a362c,"",false,
-        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&render)),0,"ready roster deferred font batches"));
-    c.writes.push_back(patch_transaction::relocation(0x5ef1a0,"e9",true,
-        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&reset)),5,"text stream reset retires roster font marks"));
+    const auto hook=[&](unsigned site,const auto target,unsigned pad,const char* why) {
+        c.writes.push_back(patch_transaction::relocation(site,"e9",true,static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(target)),pad,why));
+    };
+    hook(0x5f1230,&present,0,"ready roster private scene follows native attachment");
+    hook(0x5f0f90,&detach,0,"ready roster private scene follows native detachment");
+    hook(0x5f0f60,&reset,4,"ready roster private queue follows source reset");
+    hook(0x59b520,&destroy,0,"ready roster private storage follows source destruction");
     call(0x5d941d,&height_eax,0,"ready roster LC line height");
     call(0x5d958b,&width_eax,0,"ready roster LC hero width");
     call(0x5d9644,&width_eax,0,"ready roster LC row width");
     call(0x5d9673,&height_edi,0,"ready roster LC row height");
-    for(const auto site:{0x5d9742u,0x5d97d7u,0x5d9c40u,0x5d9d14u})
-        call(site,&panel,1,"ready roster LC navy panel");
-    for(const auto site:{0x5d9a78u,0x5d9b17u}) call(site,&text,0,"ready roster scoped LC body font");
+    for(const auto site:{0x5d9742u,0x5d97d7u,0x5d9c40u,0x5d9d14u}) call(site,&panel,1,"ready roster LC navy panel");
+    for(const auto site:{0x5d9a78u,0x5d9b17u}) call(site,&text,0,"ready roster isolated LC body scene");
 }
 }
