@@ -5,6 +5,7 @@
 #include "lc_fonts.hpp"
 #include "frame_rate.hpp"
 #include "online_text_entry_rules.hpp"
+#include "online_status_core.hpp"
 #include "gameplay_agreement.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
@@ -49,6 +50,7 @@ using name_fn=void(__thiscall*)(void*,const char*);
 using command_fn=bool(__thiscall*)(void*,const char*);
 using set_text_fn=void(__cdecl*)(void*,const char*,const char*,...);
 using hide_fn=void(__thiscall*)(void*,const char*,bool);
+bool authored_text(void* menu,const char* name,char (&out)[128]);
 bool ready=false;
 constexpr const char* failure_menu="lc_online_unavailable";
 bool legacy_online_name(const char* name) {
@@ -1980,9 +1982,19 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     bind_text(menu,"lc_ready_count",row_busy ? "" : std::to_string(valid ? view.ready_count : 0).c_str());
     bind_text(menu,"lc_member_count",row_busy ? "" : std::to_string(valid ? view.count : 0).c_str());
     unsigned waiting=0;while(waiting<view.count && view.ready[waiting]) ++waiting;
-    bind_text(menu,"lc_waiting_name",valid && !row_busy && waiting<view.count ? display(view.names[waiting],31).c_str() : "");
+    std::string waiting_text;
+    if(valid && !row_busy && waiting<view.count) {
+        char translated[128]{};
+        std::string format=authored_text(menu,"lc_ready_waiting",translated) ? translated : "Waiting for %s to get ready.";
+        if(format.find("%s")==std::string::npos) format="Waiting for %s to get ready.";
+        const auto slot=format.find("%s");
+        if(slot!=std::string::npos) {
+            format.replace(slot,2,display(view.names[waiting],31));waiting_text=std::move(format);
+        }
+    }
+    bind_text(menu,"lc_waiting_name",waiting_text.c_str());
     hide(menu,"lc_ready_summary",row_busy);
-    hide(menu,"lc_ready_waiting",row_busy || !valid || waiting==view.count);
+    hide(menu,"lc_ready_waiting",true); // localized template; the full sentence is one DATA field
     hide(menu,"lc_ready_all",row_busy || !valid || waiting!=view.count || view.count<2);
     hide(menu,"lc_ready_solo",row_busy || !valid || view.count!=1 || waiting!=view.count);
     hide(menu,"lc_leave_confirm",!lobby_state.confirm);
@@ -3189,7 +3201,7 @@ const char* prompt_key(void* menu,const char* name) {
         if(!std::strcmp(name,"desctext1") || !std::strncmp(name,"lc_hub_select_",14)) return pad ? "A" : "Enter";
         if(!std::strcmp(name,"desctext2")) return pad ? "B" : "Esc";
         if(!std::strcmp(name,"desctext3")) return pad ? "X" : "Del";
-        if(!std::strcmp(name,"desctext4")) return pad ? "Y" : "F4";
+        if(!std::strcmp(name,"desctext4") || !std::strcmp(name,"rejoin")) return pad ? "Y" : "F4";
     }
     if(which(menu)==screen::host) {
         if(!std::strcmp(name,"desctext1")) return pad ? "A" : "Enter";
@@ -3260,6 +3272,7 @@ void screen_device_prompts(void* menu,screen s) {
         device_prompt(menu,"desctext2",pad ? "B Back" : "Esc Back",hover==1 ? "lc_hub_select_hover" : "lc_hub_select_normal");
         device_prompt(menu,"desctext3",pad ? "X Change name" : "Del Change name");
         device_prompt(menu,"desctext4",pad ? "Y Rejoin" : "F4 Rejoin");
+        device_prompt(menu,"rejoin",pad ? "Y Rejoin" : "F4 Rejoin");
     } else if(s==screen::host) {
         const int row=host_controls::row(menu);
         const int selected=row>=0 ? row : host_controls::last_row;
@@ -3349,7 +3362,6 @@ void tick_impl(void* menu,bool& native_called) {
     case intent::other: if(s==screen::hub && !modal) destination="online"; break;
     case intent::back:
         if(s==screen::hub && host_left_state.active) host_left_state.dismiss();
-        else if(s==screen::code && !code.text.empty()) { code.erase(); error_visible=false; }
         else destination=s==screen::hub ? "main" : "lc_online";
         break;
     case intent::edit_name:
@@ -3450,6 +3462,9 @@ void tick_impl(void* menu,bool& native_called) {
         const bool pad=pad_probe && pad_probe(menu_player);
         bind_text(menu,"desctext3",pad ? "Y Paste" : "Ctrl+V Paste");
         bind_text(menu,"desctext4",pad ? "X Clear" : "Shift+Del Clear");
+        bind_text(menu,"desctext5",pad ? "" : "Del Delete");
+        enable(menu,"desctext5",!pad);hide(menu,"desctext5",pad);
+        if(pad && focus_of(menu)==item_try(menu,"desctext5")) lobby_focus(menu,"key_31");
     }
     if(s==screen::hub && removed_notice) {
         // The kicked guest's Hub: a plain notice (lc_notice_removed), no host-left panel; the Hub stays fully usable.
@@ -3796,6 +3811,7 @@ void install(HMODULE game,const install_hooks* hooks) {
         if(hooks->wall_clock) wall_source=hooks->wall_clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
         lobby_fields=hooks->lobby_fields;
+        ready_roster::visual_context_slot=hooks->visual_context;
     }
     { // The agent-only mouse diagnostic (fix K): [Test] InputPipe, read as the fix reads every switch (ini_rules::flag).
         const auto pipe=ini::text(L"Test",L"InputPipe");

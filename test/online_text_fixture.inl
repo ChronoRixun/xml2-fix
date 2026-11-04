@@ -180,6 +180,20 @@ void run(const script_functions_rules::func_entry* entry) {
     begin(0,31);tick(editor.data(),nullptr);assert(text().empty());
     begin(0,31);chars(u"0123456789012345678901234567890");assert(text().size()==31);
     chars(u"a");assert(text().size()==31 && texts["desctext4"]=="Text limit");
+    // Other ways inherits the Hub's longer name, but its editor owns 15 bytes.
+    begin(0,15,"abcdefghijklmnopqrstuvwx");assert(text()=="abcdefghijklmno");
+    chars(u"z");assert(text()=="abcdefghijklmno" && texts["desctext4"]=="Text limit");
+    typed('z');assert(text().size()==15);key(0);assert(text().size()==15);
+    press(0x0e);chars(u"z");assert(text()=="abcdefghijklmnz");
+    // A boundary may bisect a UTF-8 sequence in the inherited seed.
+    begin(0,15,"abcdefghijklm\xc3\xa9XYZ");assert(text()=="abcdefghijklm\xc3\xa9");
+    begin(0,14,"abcdefghijklm\xc3\xa9XYZ");assert(text()=="abcdefghijklm");
+    begin(0,15,"abcdefghijkl\xe2\x82\xacXYZ");assert(text()=="abcdefghijkl\xe2\x82\xac");
+    begin(0,14,"abcdefghijkl\xe2\x82\xacXYZ");assert(text()=="abcdefghijkl");
+    begin(0,15,"abcdefghijk\xf0\x9f\x98\x80XYZ");assert(text()=="abcdefghijk\xf0\x9f\x98\x80");
+    begin(0,14,"abcdefghijk\xf0\x9f\x98\x80XYZ");assert(text()=="abcdefghijk");
+    begin(0,15,"abcdefghijklmnopqrstuvwx");key(40);
+    assert(text()=="abcdefghijklmnopqrstuvwx"); // Cancel retains the caller's seed.
     begin(0,31);assert(online_menus::text_entry_character('a'));online_menus::keyboard(nullptr);tick(editor.data(),nullptr);assert(text().empty());
     begin(0,31);for(int i=0;i<70;++i) assert(online_menus::text_entry_character('a'));
     tick(editor.data(),nullptr);assert(text()=="a" && texts["desctext4"]=="Input full");
@@ -201,6 +215,10 @@ void run(const script_functions_rules::func_entry* entry) {
     begin(1,31);const auto empty_closed=closed;key(39);assert(closed==empty_closed);key(37);key(39);assert(closed==empty_closed);
     typed('N');key(39);assert(closed==empty_closed+1 && *reinterpret_cast<int*>(0xa3e168+0x304)==1);
     begin(3,15);assert(texts["text_inputkeys01"]=="1" && !enabled_items["text_inputkeys12"] && !enabled_items["text_inputkeys38"]);
+    for(int i=1;i<=40;++i) {
+        char name[32]{};std::snprintf(name,sizeof(name),"lc_text_key_bg%02d",i);
+        assert(visibility[name]==!(i<=11 || i==37 || i==40));
+    }
     typed('A');assert(text().empty());key(0);key(10);key(1);assert(text()=="1.2");key(38);assert(texts["text_inputkeys01"]=="1");
     for(int i=0;i<20;++i) key(0);assert(text().size()==15);key(39);assert(*reinterpret_cast<int*>(0xa3e168+0x304)==3);
     begin(0,31,"Seed");key(0);typed(27);assert(text()=="Seed");

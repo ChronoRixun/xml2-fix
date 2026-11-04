@@ -115,6 +115,7 @@ struct install_hooks {
     void (*before_tick)()=nullptr;
     bool (*lobby_fields)(lobby_fixture&)=nullptr;
     const broker_api* broker=nullptr;
+    void** visual_context=nullptr; // synthetic active graphics context slot; production resolves the engine export
 };
 void install(HMODULE game,const install_hooks* hooks=nullptr);
 // Shared with the host fixture for actual rollback/readback fault injection.
