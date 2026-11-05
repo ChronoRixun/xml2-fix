@@ -198,6 +198,8 @@ bool model_scene(std::string_view name) {
 }
 void* __fastcall item_stub(void*,void*,const char* name) {
     if(absent_items.count(name)) return nullptr;
+    if((mode=="r27-text" || mode.starts_with("r31-cancel-")) && std::string_view(name).starts_with("lc_text_keys_"))
+        return model_item.data();
     if((mode=="r27-text" || mode.starts_with("r31-cancel-")) && (std::string_view(name).starts_with("text_inputkeys") || std::string_view(name)=="lc_text_cancel")) {
         static std::map<std::string,std::array<unsigned char,0xb0>> keys;
         auto& key=keys[name];if(!*reinterpret_cast<unsigned*>(key.data())) key=text_item;return key.data();

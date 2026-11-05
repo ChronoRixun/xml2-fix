@@ -379,8 +379,11 @@ void run(const script_functions_rules::func_entry* entry) {
     tick(editor.data(),nullptr);assert(text().empty());
     std::cout<<"PASS WM_CHAR US 0409 / AZERTY 040c / QWERTZ 0407, AltGr, dead key, IME refusal, controls, repeat, no DI duplicates, numpad/main-row IP, visible refusal, queue bounds and 31-byte limit\n";
     begin(0,31);assert(texts["text_inputkeys01"]=="a");key(0);assert(text()=="a");
+    assert(!visibility.at("lc_text_keys_6_11") && !visibility.at("lc_text_keys_12_36") && !visibility.at("lc_text_keys_name_tools"));
     key(38);assert(texts["text_inputkeys01"]=="A");key(0);assert(text()=="aA");
-    key(38);assert(texts["text_inputkeys01"]=="<" && !enabled_items["text_inputkeys06"]);key(0);key(37);assert(text()=="aA< ");
+    key(38);assert(texts["text_inputkeys01"]=="<" && !enabled_items["text_inputkeys06"]);
+    assert(visibility.at("lc_text_keys_6_11") && visibility.at("lc_text_keys_12_36") && !visibility.at("lc_text_keys_name_tools"));
+    key(0);key(37);assert(text()=="aA< ");
     key(36);assert(text()=="aA<");typed('!');assert(text()=="aA<");
     key(38);for(int i=0;i<40;++i) key(1);assert(text().size()==31);
     const auto before=closed;key(39);assert(closed==before+1);
@@ -389,13 +392,12 @@ void run(const script_functions_rules::func_entry* entry) {
     begin(1,31);const auto empty_closed=closed;key(39);assert(closed==empty_closed);key(37);key(39);assert(closed==empty_closed);
     typed('N');key(39);assert(closed==empty_closed+1 && *reinterpret_cast<int*>(0xa3e168+0x304)==1);
     begin(3,15);assert(texts["text_inputkeys01"]=="1" && !enabled_items["text_inputkeys12"] && !enabled_items["text_inputkeys38"]);
-    for(int i=1;i<=40;++i) {
-        char name[32]{};std::snprintf(name,sizeof(name),"lc_text_key_bg%02d",i);
-        assert(visibility[name]==!(i<=11 || i==37 || i==40));
-    }
+    assert(!visibility.at("lc_text_keys_6_11") && visibility.at("lc_text_keys_12_36") && visibility.at("lc_text_keys_name_tools"));
     typed('A');assert(text().empty());key(0);key(10);key(1);assert(text()=="1.2");key(38);assert(texts["text_inputkeys01"]=="1");
     for(int i=0;i<20;++i) key(0);assert(text().size()==15);key(39);assert(*reinterpret_cast<int*>(0xa3e168+0x304)==3);
-    begin(0,31,"Seed");key(0);typed(27);assert(text()=="Seed");
+    begin(0,31,"Seed");
+    assert(!visibility.at("lc_text_keys_6_11") && !visibility.at("lc_text_keys_12_36") && !visibility.at("lc_text_keys_name_tools"));
+    key(0);typed(27);assert(text()=="Seed");
     begin(0,31,"Seed");key(0);key(40);assert(text()=="Seed");
     begin(0,31,"Back");key(0);mask=0x200000;tick(editor.data(),nullptr);mask=0;assert(text()=="Back");
     begin(0,31);command(0);typed('Z');assert(text()=="Z");tick(editor.data(),nullptr);assert(text()=="Za");

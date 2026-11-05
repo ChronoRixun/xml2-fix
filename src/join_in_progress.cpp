@@ -2078,7 +2078,17 @@ namespace join_in_progress
 				if (!session_object) return;
 				const int index = fn<int(__thiscall*)(void*)>(local_participant_index)(session_object);
 				if (index < 0 || index > 3) return;
-				input_epoch_hold.arm(index, GetTickCount()); // b2d-fix-jip: every other participant's records are held until its marker (or the cap)
+				// Snapshot the listed native participant indices at BOTH reset sites. Count is not an index range: a removed
+				// seat leaves a hole, and its old record memory is no longer occupied. A later newcomer must not inherit an
+				// expectation from an empty seat at lobby START (and log a cap with 0 held records long after the reset).
+				std::uint32_t occupied = 0;
+				for (void* n = first(session_object); n; n = at<void*>(n, node_next))
+					if (void* record = at<void*>(n, node_record))
+					{
+						const int participant = index_of(record);
+						if (participant >= 0 && participant < 4) occupied |= 1u << participant;
+					}
+				input_epoch_hold.arm(index, occupied, GetTickCount());
 				void* synchronizer = fn<getter_t>(gns_transport_rules::input_sync)();
 				if (!synchronizer) return;
 				input_epoch_nonce_sent = join_in_progress_core::next_input_epoch_nonce(GetTickCount() ^ std::uint32_t(reinterpret_cast<std::uintptr_t>(&index) * 2654435761u), input_epoch_nonce_sent);

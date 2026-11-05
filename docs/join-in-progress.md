@@ -635,17 +635,24 @@ reliable resend (`0x5c` -> `0x5d` batches, whose records carry their label on th
 marker 16.6 s behind its resent frame 0): dropped at a marker inside the cap it is requested again and resent by label;
 past the cap it is stored as it came and the late marker is ignored, on every peer alike. The hold is armed only while
 this PC itself sends markers (`[Online] RestartInputEpoch`, default on), never for its own index, and disarmed at the
-session's end. Logged: `... record(s) arrive before its epoch marker ... held, not stored`, the reset line's `(N held
+session's end. Each reset snapshots the occupied native indices from the session's participant list, including sparse
+rosters; empty seats and removed records outside that list are not expected. The start reset replaces the release
+snapshot and clears its old held records. This prevents a seat empty at lobby START from retaining an expectation
+until a later newcomer's first input logs a false cap (for example, 62 s later with 0 held records).
+Logged: `... record(s) arrive before its epoch marker ... held, not stored`, the reset line's `(N held
 pre-marker record(s) dropped)`, and `... sent no epoch marker within the cap ... held record(s) stored in the order they
 came`. Residual: a marker LOST (not late) on one peer that holds a stale record gives that peer the stock labelling at the
 cap - the b2d outcome, never worse. No wire change: rule 26 stays at revision 7.
 
 Tests: `xml2_join_in_progress_test` (the barrier's rules; a label model of 2/3/4-player cohorts: on-time marker, the
 X-4p-a split with the b2d build as a control, the X-2cR shape, late on every peer, marker lost on every peer / on one
-peer, P-LJ3's resent frame 0 past the cap, a resent record inside the cap, per-participant holds);
+peer, P-LJ3's resent frame 0 past the cap, a resent record inside the cap, per-participant holds, sparse/empty/own-only
+rosters and replacement of a departed participant's hold);
 `xml2_join_in_progress_boundary_test <retail> input-epoch` (the production store hook against the retail store 0x559560 of
 the mapped image: hold, drop at the marker, label 0 afterwards, the cap's in-order replay through the retail store and the
-late marker after it, a full hold, own records, disarmed = stock).
+late marker after it, a full hold, own records, disarmed = stock; both production marker-reset callbacks with sparse
+and changed native lists, removed stale objects, an empty seat's first record 62 s later without a false cap log,
+own-only/empty lists and the disabled control).
 
 ### A removal decision ahead of the native add (b2d-fix-jip, live-b2d N-STALL4)
 

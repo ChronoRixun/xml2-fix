@@ -134,10 +134,71 @@ void as_menus_composition() {
     assert(join_in_progress::mismatch()==nullptr && !join_in_progress::composed_display_name);
     std::cout<<"PASS AS/online menus: the 0x6141e0 accessor guard takes retail bytes or exactly the menus' JMP to display_name_getter; a wrong target, opcode or other AS byte refuses\n";
 }
+// Exercise the two production marker-reset callbacks with a native-shaped participant list. The synchronizer getter
+// returns the already mapped blocks (avoids the retail CRT's singleton initialization); marker production needs live
+// controllers/transport and is stubbed. Neither service decides which participants the reset expects markers from.
+unsigned epoch_fixture_posts=0;
+void* __cdecl epoch_fixture_sync() { return reinterpret_cast<void*>(0x79fbb0u); }
+void __fastcall epoch_fixture_post(void*,void*,std::uint32_t index,std::uint32_t mask) {
+    assert(index==0 && join_in_progress_core::input_epoch_mark(mask));++epoch_fixture_posts;
+}
+void input_epoch_occupancy_fixture() {
+    using namespace join_in_progress;
+    using namespace join_in_progress_rules;
+    auto* native_session=reinterpret_cast<unsigned char*>(gns_transport_rules::session_static);
+    put(native_session,0,gns_transport_rules::session_vtable);
+    put(native_session,gns_transport_rules::session_set_up,std::uint8_t(1));
+    put(native_session,gns_transport_rules::session_count,2u);
+    std::memset(s,0,sizeof s);std::memset(nodes,0,sizeof nodes);
+    std::memset(local,0,sizeof local);std::memset(remote,0,sizeof remote);std::memset(existing,0,sizeof existing);
+    put(local,record_flags,flag_local);put(local,record_index_at,0);
+    put(remote,record_index_at,2);put(existing,record_index_at,3);
+    put(s,0x26c,nodes[0]);put(s,0x278,2u);
+    put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);
+    // Index 3's old object and unlinked node still contain valid-looking fields after removal; neither is occupied.
+    put(nodes[2],node_record,existing);
+    unsigned char getter_original[5],post_original[5],sync_original[5];
+    std::memcpy(getter_original,reinterpret_cast<const void*>(session_getter),5);
+    std::memcpy(post_original,reinterpret_cast<const void*>(input_post_event),5);
+    std::memcpy(sync_original,reinterpret_cast<const void*>(gns_transport_rules::input_sync),5);
+    redirect(session_getter,session);redirect(input_post_event,epoch_fixture_post);redirect(gns_transport_rules::input_sync,epoch_fixture_sync);
+    input_epoch=true;
+    // Release sees indices {0,2}: a hole at 1, and the removed index 3. Native local-index lookup still runs.
+    input_epoch_post_release();
+    assert(epoch_fixture_posts==2 && !input_epoch_hold.expecting[0] && !input_epoch_hold.expecting[1] && input_epoch_hold.expecting[2] && !input_epoch_hold.expecting[3]);
+    // The first record of that formerly empty seat can arrive long after START: pass through with no false cap log.
+    alignas(4) unsigned char later_record[0x24]{};
+    std::uint32_t later_args[4]{0,static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(later_record)),3,0};
+    const auto reset_at=input_epoch_hold.armed_at;input_epoch_hold.armed_at-=62000;
+    observed_jip_logs.clear();
+    assert(input_epoch_store_filter(later_args)==0 && input_epoch_hold.held[3]==0 && observed_jip_logs.empty());
+    input_epoch_hold.armed_at=reset_at;
+    assert(input_epoch_hold.record(2,GetTickCount())==join_in_progress_core::input_epoch_hold::hold);
+    // START takes a fresh snapshot after index 2 leaves. A new seat at 1 must be expected, with no old held copies.
+    put(remote,record_index_at,1);
+    input_epoch_post_start();
+    assert(epoch_fixture_posts==4 && !input_epoch_hold.expecting[0] && input_epoch_hold.expecting[1] && !input_epoch_hold.expecting[2] && !input_epoch_hold.expecting[3] && input_epoch_hold.held[2]==0);
+    // Own-only session, then an empty list whose old head still points at the former participants: no expectation.
+    put(nodes[0],node_next,static_cast<void*>(nullptr));put(s,0x278,1u);
+    input_epoch_post_release();assert(epoch_fixture_posts==6 && !input_epoch_hold.any());
+    put(s,0x278,0u);
+    input_epoch_post_start();assert(!input_epoch_hold.any());
+    // Disabled remains a complete control, including clearing the previous epoch's hold and nonce memory.
+    put(s,0x278,2u);put(nodes[0],node_next,nodes[1]);input_epoch_post_release();
+    assert(input_epoch_hold.expecting[1]);input_epoch_last.last[1]=0x1234;
+    const auto posts_before=epoch_fixture_posts;
+    input_epoch=false;input_epoch_post_start();
+    assert(epoch_fixture_posts==posts_before && !input_epoch_hold.any() && input_epoch_last.empty());
+    std::memcpy(reinterpret_cast<void*>(session_getter),getter_original,5);
+    std::memcpy(reinterpret_cast<void*>(input_post_event),post_original,5);
+    std::memcpy(reinterpret_cast<void*>(gns_transport_rules::input_sync),sync_original,5);
+    std::cout<<"PASS barrier occupancy: both reset callbacks snapshot listed indices, exclude holes/removed objects/own, clear old holds, and retain the disabled path\n";
+}
 // b2d-fix-jip: the restart-release barrier through the production store hook (input_epoch_store_filter) against the retail
 // store 0x559560 of the mapped image (unhooked here: a filter result 0 means the fixture calls the retail store as the bridge
 // would; the replay at the cap calls it itself). The blocks live at 0x79fbb0 inside the mapped .data.
 void input_epoch_fixture() {
+    std::cout<<std::unitbuf;
     using namespace join_in_progress;
     using namespace gns_transport_rules;
     auto* sync=reinterpret_cast<unsigned char*>(0x79fbb0);
@@ -170,7 +231,7 @@ void input_epoch_fixture() {
     // 2. Armed at this PC's ring reset (index 0): P (index 2)'s records before its marker are held, not stored - a full
     //    record and a delta kind alike; the decoder's counter keeps counting (labels 0, 1 travel with the copies).
     observed_jip_logs.clear();
-    input_epoch_hold.arm(0,GetTickCount());
+    input_epoch_hold.arm(0,0x0f,GetTickCount());
     assert(deliver(2,real,0)==1 && deliver(2,0,2)==1);
     assert(u32(2,input_write)==0 && u16(2,input_next)==0 && u16(2,join_in_progress_rules::input_block_counter)==2 && input_epoch_hold.held[2]==2);
     { std::uint16_t l0,l1;std::memcpy(&l0,input_epoch_held[2][0].bytes,2);std::memcpy(&l1,input_epoch_held[2][1].bytes,2);assert(l0==0 && l1==1 && input_epoch_held[2][0].kind==0 && input_epoch_held[2][1].kind==2); }
@@ -201,7 +262,7 @@ void input_epoch_fixture() {
     // 7. A full hold (96 records) flushes before the cap; the flush stores all 96 then the 97th (labels 0..96).
     observed_jip_logs.clear();
     std::memset(block(1),0,input_block_size);
-    input_epoch_hold.arm(0,GetTickCount());
+    input_epoch_hold.arm(0,0x0f,GetTickCount());
     for(unsigned i=0;i<join_in_progress_core::input_epoch_hold_records;++i) assert(deliver(1,real,0)==1);
     assert(input_epoch_hold.held[1]==join_in_progress_core::input_epoch_hold_records && u32(1,input_write)==0);
     assert(deliver(1,real,0)==0 && u32(1,input_write)==97 && u16(1,input_next)==97 && slot_label(1,96)==96 && logged("sent no epoch marker before the hold filled"));
@@ -214,6 +275,8 @@ void input_epoch_fixture() {
     assert(join_in_progress::mismatch()==nullptr);
     std::memset(sync,0,0xc700);
     std::cout<<"PASS b2d barrier: a full hold flushes in order; holds are per participant; replayed records pass; disarmed = stock\n";
+    input_epoch_occupancy_fixture();
+    assert(join_in_progress::mismatch()==nullptr);
 }
 void e4_guard_composition() {
     as_menus_composition();
