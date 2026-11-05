@@ -168,7 +168,7 @@ namespace
 			unsigned counter[4]{}; std::uint32_t read[4]{}; bool armed = true;
 			std::vector<entry> stored[4], held[4]; // per participant block: what the native store holds, what the barrier holds aside
 			unsigned dropped_at_marker = 0, flushed = 0, resets = 0, lates = 0;
-			void reset_all(int own, std::uint32_t now) { memory.forget(); barrier.disarm(); if (armed) barrier.arm(own, now); for (unsigned i = 0; i < 4; ++i) { counter[i] = 0; read[i] = 0; stored[i].clear(); held[i].clear(); } }
+			void reset_all(int own, std::uint32_t now, std::uint32_t occupied = 0x0f) { memory.forget(); barrier.disarm(); if (armed) barrier.arm(own, occupied, now); for (unsigned i = 0; i < 4; ++i) { counter[i] = 0; read[i] = 0; stored[i].clear(); held[i].clear(); } }
 			// The store hook's decision for one record of `index` arriving at `now`.
 			void receive(unsigned index, ev e, std::uint32_t now, std::uint16_t nonce = 0, int wire_label = 0)
 			{
@@ -206,8 +206,8 @@ namespace
 		{
 			input_epoch_barrier b;
 			check(!b.any() && b.record(1, 100) == input_epoch_hold::store && b.marker(1) == 0, "barrier: never armed - every record is stored, a marker drops nothing");
-			b.arm(0, 1000);
-			check(b.any() && !b.expecting[0] && b.expecting[1] && b.expecting[2] && b.expecting[3] && b.armed_at == 1000, "barrier: armed at this PC's ring reset for every index but its own");
+			b.arm(0, 0x0f, 1000);
+			check(b.any() && !b.expecting[0] && b.expecting[1] && b.expecting[2] && b.expecting[3] && b.armed_at == 1000, "barrier: a full roster arms every occupied index but this PC's own at its ring reset");
 			check(b.record(0, 1001) == input_epoch_hold::store && b.held[0] == 0, "barrier: this PC's own records (the own-record store) are never held");
 			check(b.record(2, 1001) == input_epoch_hold::hold && b.record(2, 1500) == input_epoch_hold::hold && b.held[2] == 2 && b.expecting[2], "barrier: a peer's records before its marker are held and counted");
 			check(b.marker(2) == 2 && !b.expecting[2] && b.held[2] == 0 && b.marker(2) == 0, "barrier: its marker ends the expectation and drops the held records (a second marker drops nothing)");
@@ -215,19 +215,47 @@ namespace
 			check(b.record(3, 1000 + input_epoch_hold_cap_ms - 1) == input_epoch_hold::hold && b.record(3, 1000 + input_epoch_hold_cap_ms) == input_epoch_hold::flush && !b.expecting[3] && b.held[3] == 1,
 			      "barrier: at the cap (5000 ms after the reset) the next record flushes - the held one(s) are stored first, then it");
 			check(b.take(3) == 1 && b.held[3] == 0 && b.record(3, 9000) == input_epoch_hold::store, "barrier: take() hands the held count to the replay; after the flush nothing is held");
-			input_epoch_barrier full; full.arm(0, 0);
+			input_epoch_barrier full; full.arm(0, 0x0f, 0);
 			for (unsigned i = 0; i < input_epoch_hold_records; ++i) full.record(1, 10);
 			check(full.held[1] == input_epoch_hold_records && full.record(1, 11) == input_epoch_hold::flush && !full.expecting[1], "barrier: a full hold (96 records) flushes before the cap");
-			full.arm(2, 50); check(!full.expecting[2] && full.expecting[1] && full.held[1] == 0 && full.armed_at == 50, "barrier: re-arming (the start's reset after the release's) clears the counts and the clock");
+			full.arm(2, 0x0f, 50); check(!full.expecting[2] && full.expecting[1] && full.held[1] == 0 && full.armed_at == 50, "barrier: re-arming (the start's reset after the release's) clears the counts and the clock");
 			full.disarm(); check(!full.any() && full.record(1, 60) == input_epoch_hold::store, "barrier: disarmed (session end, RestartInputEpoch=0) - stored as stock");
 			check(input_epoch_hold_cap_ms == 5000 && input_epoch_hold_records == 96 && input_epoch_record_bytes == 0x24, "barrier: cap 5 s (observed marker skew 1.0-2.4 s), 96 records, the store's 0x24-byte record");
-			input_epoch_barrier wrap; wrap.arm(0, 0xfffffff0u);
+			input_epoch_barrier wrap; wrap.arm(0, 0x03, 0xfffffff0u);
 			check(wrap.record(1, 0x00000010u) == input_epoch_hold::hold && wrap.record(1, 0xfffffff0u + input_epoch_hold_cap_ms) == input_epoch_hold::flush, "barrier: the cap survives a GetTickCount wrap");
+		}
+		{ // Only listed participants at this reset can be expected, including rosters with holes and a nonzero own index.
+			struct roster_case { int own; std::uint32_t occupied; bool expected[4]; bool any; };
+			const roster_case cases[] = {
+				{0, 0x00, {false, false, false, false}, false},
+				{2, 0x04, {false, false, false, false}, false},
+				{0, 0x05, {false, false, true, false}, true},
+				{2, 0x0d, {true, false, false, true}, true},
+				{3, 0x0f, {true, true, true, false}, true},
+			};
+			for (const auto& c : cases)
+			{
+				input_epoch_barrier b; b.arm(c.own, c.occupied, 1000);
+				bool correct = b.any() == c.any;
+				for (unsigned i = 0; i < 4; ++i)
+				{
+					correct = correct && b.record(i, 1001) == (c.expected[i] ? input_epoch_hold::hold : input_epoch_hold::store);
+					correct = correct && b.record(i, 63000) == (c.expected[i] ? input_epoch_hold::flush : input_epoch_hold::store);
+				}
+				check(correct && !b.any(), "barrier occupancy: only occupied remote indices hold/flush; holes, empty and own-only rosters store without a false 62-second cap");
+			}
+			input_epoch_barrier changed; changed.arm(0, 0x05, 1000); changed.record(2, 1001);
+			changed.arm(0, 0x03, 2000);
+			check(changed.held[2] == 0 && changed.record(2, 2001) == input_epoch_hold::store && changed.record(1, 2001) == input_epoch_hold::hold,
+			      "barrier occupancy: the next reset replaces the roster and drops a departed participant's held records");
+			changed.arm(0, 0x01, 3000);
+			check(!changed.any() && changed.held[1] == 0 && changed.record(1, 63000) == input_epoch_hold::store,
+			      "barrier occupancy: re-arming own-only clears the last remote expectation and held records");
 		}
 		// The label model. P = index 2 restarts; the receivers (host 0, guest 1[, guest 3]) each reset at t0 and see P's
 		// records in their own order. `stale` = a record P sent before its restart (in flight); `real` = P's frame 0 after
 		// its marker (a single record); `resent` = P's frame 0 through the reliable 0x5c/0x5d resend (wire label).
-		auto cohort = [](std::size_t n, bool barrier) { std::vector<receiver> peers(n); for (std::size_t i = 0; i < n; ++i) { peers[i].armed = barrier; peers[i].reset_all(int(i == 0 ? 0 : i == 1 ? 1 : 3), 1000); } return peers; };
+		auto cohort = [](std::size_t n, bool barrier) { std::vector<receiver> peers(n); for (std::size_t i = 0; i < n; ++i) { peers[i].armed = barrier; peers[i].reset_all(int(i == 0 ? 0 : i == 1 ? 1 : 3), 1000, n == 1 ? 0x05u : n == 2 ? 0x07u : 0x0fu); } return peers; };
 		for (const std::size_t players : {2u, 3u, 4u}) // 2, 3 and 4 players: 1, 2 and 3 receivers of P's stream
 		{
 			const std::size_t n = players - 1;
@@ -631,6 +659,17 @@ int main(int argc, char** argv)
                 const auto* bad_ready = join_in_progress_rules::first_mismatch(changed.data());
                 check(bad_ready && bad_ready->va == ready_calls[i], "changed Team readiness CALL refuses the JIP transaction");
             }
+			// b3: the two 4057 notice CALLs and the lone-host release counts are retail bytes, each under a guard that refuses a change.
+			for (std::size_t i = 0; i < lost_sync_message_calls.size(); ++i) {
+				check(same(lost_sync_message_calls[i], lost_sync_message_originals[i]) && same(solo_release_counts[i], solo_release_original),
+				      "b3: the 4057 notice CALL and the lone-host participant-count imm8 are the retail bytes");
+				for (const auto va : {lost_sync_message_calls[i], solo_release_counts[i]}) {
+					auto changed = mapped;
+					changed[va - limits_rules::image_base] ^= 1;
+					const auto* bad = join_in_progress_rules::first_mismatch(changed.data());
+					check(bad && bad->va <= va && va < bad->va + bad->hex.size() / 2, "b3: a changed 4057 notice CALL or release count refuses the JIP transaction");
+				}
+			}
 			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(gamespy_think, gamespy_think_original) && same(add_entry, add_original) &&
 			      same(record_seats, record_seats_original) &&
 			      same(area_barrier_call, area_barrier_original) &&

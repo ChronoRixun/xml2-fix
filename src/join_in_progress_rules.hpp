@@ -200,6 +200,19 @@ namespace join_in_progress_rules
 		campaign_begin_original{0x56,0xe8,0xba,0xa0,0xe7,0xff};
 	inline constexpr std::array<unsigned char, 5> checksum_compare_original{0x83,0xec,0x20,0x53,0x55},
 		campaign_receive_original{0x83,0xec,0x14,0x53,0x55};
+	// b3: 4057 "Online play has lost synchronization." (0xfd9): the frame gate 0x606c97 (5 s) and the checksum compare
+	// 0x614e62 (8 s), both priority 0x23, each queued BEFORE the arbitration 0x614810 that checksum_hold() already skips.
+	// Both CALLs are replaced; the bridge drops the notice while the hold is on and queues it once otherwise.
+	inline constexpr std::array<std::uint32_t, 2> lost_sync_message_calls{0x606c97, 0x614e62};
+	inline constexpr std::array<std::array<unsigned char, 5>, 2> lost_sync_message_originals{{
+		{0xe8,0x64,0x39,0x00,0x00}, {0xe8,0x99,0x57,0xff,0xff}}};
+	// b3: a lone online host (start_alone) - the PDA pause update 0x5ce7f0 and the Team Management update take their
+	// close-on-release branch (the applied 0xfff33fe0 / 0xfff11fe0 event closes the menu) only for MORE than one
+	// participant (`cmp eax,1; jle`); with one the menu stays open after Ready while the world runs behind it. Both
+	// sites sit behind the online-pause byte (0x60b420, pause+0x64), so only an online session reaches them; the
+	// imm8 becomes 0 so one participant takes the exact branch two do (0 participants still skips it).
+	inline constexpr std::array<std::uint32_t, 2> solo_release_counts{0x5ce829, 0x5e6728};
+	inline constexpr std::array<unsigned char, 1> solo_release_original{0x01}, solo_release_patched{0x00};
 	inline constexpr std::array<unsigned char, 9> broadcast_entry_original{0x55,0x8b,0xe9,0x8b,0x85,0x1c,0x04,0x00,0x00};
 	inline constexpr std::array<unsigned char, 6> campaign_load_original{0xff,0x92,0x0c,0x02,0x00,0x00};
 	inline constexpr std::array<unsigned char, 5> watchdog_peer_original{0xe8,0xd6,0x5a,0xe5,0xff};
@@ -418,7 +431,7 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t entity_flags_at = 4, entity_flag_bytes = 16, entity_registered_at = 0x6c, entity_registered_bit = 1,
 		world_flag_update_slot = 0x3c, world_flag_members_slot = 0x40, world_flag_record_slot = 0x44, entity_active_flag = 16;
 	constexpr std::uint32_t visibility_cache_clear_slot = 0x38;
-	inline constexpr std::array<guard, 158> guards{{
+	inline constexpr std::array<guard, 166> guards{{
 		{0x402345,"e8c69215008b108bc8ff5220e88ab90600", "AQ3: main-loop simulation clock unpause before the game update"},
 		{0x4029f0,"e8db7b200085c07510e8024320008a480684c90f8447010000", "AQ3: native stall renders only with a network message or its forced-draw byte"},
 		{0x46f0a0,"520c8b088b01ff5020f68628070000020f8457050000e885ed0100", "AQ: game update: the world section's gate (bit 1 of game+0x728 tested at 0x46f0a9), its je, the second gate's getter call"},
@@ -513,6 +526,14 @@ namespace join_in_progress_rules
 		{0x6096c0,"53568bf18a0633db3ac30f84d7000000","native campaign manager active byte gates sender cleanup"},
 		{0x614a40,"83ec6c538bd9895c2404e891e1ffff","checksum sender entry; held only during a shared campaign restart"},
 		{0x614810,"83ec20535533ed56578bf9896c2420","checksum comparison entry; held only during a shared campaign restart"},
+		{0x606c77,"e8b46eebff8b10680000a0406a2368d90f00008bc8ff520850e87b4500008bc8e864390000","b3: frame gate: lost synchronization (0xfd9, 0x23, 5 s) queued, then 0x614810"},
+		{0x606c9c,"e87fe400005f5e5d8bc85b83c40ce961db0000","b3: frame gate: after the notice ecx is re-set (0x615120) before the tail jump to 0x614810"},
+		{0x614e42,"e8e98ceaff8b1068000000416a2368d90f00008bc8ff520850e8b063ffff8bc8e89957ffff8bcfe8a2f9ffff","b3: checksum compare: lost synchronization (0xfd9, 0x23, 8 s) queued, then ecx = edi and 0x614810"},
+		{0x5ce80e,"e80dcc030084c00f8479030000e8c04304008bc8e88928040083f8010f8e22030000","b3: PDA pause update: online pause (0x60b420), then participants (0x6110b0) > 1 takes the close-on-release branch"},
+		{0x5ce886,"81ffe03ff3ff0f85a1000000","b3: PDA pause update: the applied 0xfff33fe0 event closes the menu"},
+		{0x5e670d,"e80e4d020084c00f84bd020000e8c1c402008bc8e88aa9020083f8010f8ea8020000","b3: Team Management update: online pause (0x60b420), then participants (0x6110b0) > 1 takes the close-on-release branch"},
+		{0x5e675b,"81ffe01ff1ff0f85a6000000","b3: Team Management update: the applied 0xfff11fe0 event closes the menu"},
+		{0x6110b0,"8b8178020000c3","b3: session participant count (+0x278)"},
 		{0x608630,"83ec1453558b6c24208a4500","campaign G/H/I/J receiver entry"},
 		{0x5f3c20,"56e8baa0e7ff8b106a006a01","actual native campaign start entry"},
 		{0x6051b1,"e85a060100558d542410c644242025c644241e01528bcee80341e6ff","natneg completion: reliable empty 0x25 to the completed peer"},

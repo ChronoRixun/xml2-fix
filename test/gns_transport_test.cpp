@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -577,6 +578,24 @@ int main(int argc, char** argv)
 		}
 		check(notice_guarded && lost_guarded && gns_transport_rules::notice_resume == gns_transport_rules::native_drop_notice + 6 && gns_transport_rules::lost_resume == gns_transport_rules::native_lost + 6,
 		      "the removal filters' six entry bytes are the guarded retail bytes; each bridge resumes right after them");
+	}
+	{
+		// b3: the host's own removal text. A newcomer lost during its admission hold (removed by the host before the
+		// cohort restart) reads "<name> has left the game." (0x1107) as on every other peer; an ordinary abrupt loss in
+		// play keeps the watchdog's own 0x10cd "Player(s) have been dropped from the game.".
+		static_assert(gns_transport_rules::host_removal_reason(true) == 0x1107 && gns_transport_rules::host_removal_reason(false) == 0x10cd);
+		check(gns_transport_rules::host_removal_reason(true) == gns_transport_rules::removal_left && gns_transport_rules::host_removal_reason(false) == gns_transport_rules::removal_dropped,
+		      "b3: the host removes a lost newcomer with 0x1107 (has left the game) and an abrupt loss in play with 0x10cd (dropped)");
+		// The production call sites: the lost-newcomer branch passes the 'left' reason, every other hand_over the default.
+		std::string root(__FILE__); // a test executable keeps its full source path (/d1trimfile applies to libraries only)
+		root.erase(root.find_last_of("/\\") + 1); // .../test/
+		std::ifstream source(root + "../src/gns_transport.cpp", std::ios::binary);
+		const std::string text((std::istreambuf_iterator<char>(source)), {});
+		std::size_t left = 0, plain = 0;
+		for (std::size_t at = text.find("hand_over(l, index, as_host"); at != std::string::npos; at = text.find("hand_over(l, index, as_host", at + 1))
+			(text.compare(at, 55, "hand_over(l, index, as_host, host_removal_reason(true))") == 0 ? left : plain) += 1;
+		check(!text.empty() && left == 1 && plain == 2 && text.find("native_lost)(s, r, removal_reason, 0)") != std::string::npos && text.find("native_lost)(s, r, 0x10cd") == std::string::npos,
+		      "b3: one hand_over (the host's lost-newcomer decision) passes 0x1107; the abrupt-loss and cut-frame hand_overs keep 0x10cd; the host removal uses the passed reason");
 	}
     {
         const std::uint32_t frame[]{0x6133ce,0,0x10cc,0x1106,1,0,0,0x6149a7};
