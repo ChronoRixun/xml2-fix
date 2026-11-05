@@ -23,6 +23,7 @@ from check_online_menus_guards import anchor_writes
 HOOKS.update({0x6A02C0: 4, 0x6A1148: 4, 0x69F2BC: 4, 0x69F384: 4})
 HOOKS.update({0x41A460: 5, 0x60220E: 4, 0x5AF5A0: 6})
 HOOKS.update({0x609AD9: 6})
+HOOKS.update({0x69F07C:4,0x69F080:4,0x69F0A4:4,0x6A2564:4})
 HOOKS.update(anchor_writes(Path(__file__).resolve().parent.parent))
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
 # The online menus install only over a committed LegendsClassicFonts transaction (060p fix B): every mode that sets
@@ -45,7 +46,7 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("data-resource-close-guard", "data-getter-guard", "data-base-getter-guard", "data-host-close-guard", "data-join-close-guard", "data-fallback-guard", "data-setter-guard", "frontend-intern-guard", "frontend-allocation-guard", "off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy", "pda-mouse-guard", "advanced-back-guard", "advanced-slot-guard", "advanced-close-guard", "advanced-teardown-guard"):
+    for mode in ("navigation-slot-guard", "navigation-entry-guard", "data-resource-close-guard", "data-getter-guard", "data-base-getter-guard", "data-host-close-guard", "data-join-close-guard", "data-fallback-guard", "data-setter-guard", "frontend-intern-guard", "frontend-allocation-guard", "off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy", "pda-mouse-guard", "advanced-back-guard", "advanced-slot-guard", "advanced-close-guard", "advanced-teardown-guard"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -75,6 +76,8 @@ def main():
             env.pop(name, None)
         if mode == "lookup-refused":
             env["UNION_MUTATE_VA"] = "0x4d696a"
+        elif mode in ("navigation-slot-guard", "navigation-entry-guard"):
+            env["UNION_MUTATE_VA"] = "0x6a2564" if mode=="navigation-slot-guard" else "0x5da1a0"
         elif mode == "ui-guard":
             env["UNION_MUTATE_VA"] = "0x5d8570"
         if mode in ("native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard"):
@@ -108,7 +111,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert "dispatcher lcOnlineIntent n(i) registered; 73 patch writes and menu-anchors/512 committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 74 patch writes and menu-anchors/512 committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":

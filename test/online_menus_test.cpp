@@ -114,6 +114,10 @@ void __fastcall enable_stub(void*,void*,const char* name,bool value) {
 }
 unsigned mask=0;
 unsigned __fastcall mask_stub(void*,void*) { lobby_fault_at(1);return mask; }
+float stick_x=0,stick_y=0;
+unsigned held_mask=0;bool separate_held_mask=false;
+unsigned __fastcall held_mask_stub(void*,void*) { return separate_held_mask ? held_mask : mask; }
+float __fastcall axis_stub(void*,void*,int code,bool all) { assert(!all && (code==0 || code==1));return code==0 ? stick_x : stick_y; }
 std::vector<unsigned char> mgr(0xb0000),input(0x100);
 std::array<unsigned char,0x1a00> main_menu{},hub{},child{};
 std::array<unsigned char,0xb0> text_item{};
@@ -322,7 +326,8 @@ void fake_services() {
     redirect(0x60c7e0,name_request_stub);redirect(0x60b960,ready_stub);redirect(0x60b9a0,tag_stub);
     redirect(0x60b990,set_tag_stub);redirect(0x60b970,max_stub);redirect(0x60c6e0,seed_stub);
     redirect(0x60c710,title_stub);redirect(0x60c780,consume_stub);
-    redirect(0x5d4b00,mask_stub);redirect(0x5d8920,manager_stub);redirect(0x48de40,seats_stub);redirect(0x60b210,network_stub);
+    redirect(0x5d4b00,mask_stub);redirect(0x5d4830,held_mask_stub);redirect(0x5d4690,axis_stub);
+    redirect(0x5d8920,manager_stub);redirect(0x48de40,seats_stub);redirect(0x60b210,network_stub);
     redirect(0x612be0,session_stub);redirect(0x6097b0,campaign_stub);redirect(0x48fed0,profile_stub);
     redirect(0x55c890,console_stub);redirect(0x551ed0,input_stub);
     redirect(0x48d5e0,bind_stub);redirect(0x615dc0,network_init);redirect(0x610d80,name_stub);
@@ -334,6 +339,8 @@ void fake_services() {
     put(start_item.data(),0,0x6a0244);
     redirect(0x55c410,queue_stub);
     put(mgr.data(),0,0x6a236c);put(input.data(),0,0x69a134);
+    // Fixtures without a binding map exercise the guarded native-axis fallback.
+    std::memset(reinterpret_cast<void*>(0xa68f40),0,20*sizeof(void*));put(reinterpret_cast<void*>(0xa6ac04),0,1);
     put(reinterpret_cast<void*>(0x8aff18),0,unsigned(reinterpret_cast<std::uintptr_t>(mgr.data())));
     put(reinterpret_cast<void*>(0xa3e168),0,0x6a4730);
     put(reinterpret_cast<void*>(0x72c4f0),0,0x6898c4);

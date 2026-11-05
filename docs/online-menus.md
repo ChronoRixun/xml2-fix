@@ -1,5 +1,42 @@
 # Online menus: round 5 broker lifecycle
 
+## Stick navigation in the LC text editor and Host setup
+
+The LC editor (Enter Game Name, Enter IP and Change name) and the custom Host
+rows share signed stick navigation. Retail `0x61a810` combines left/right into
+UI code 0 and forward/back into code 1; their mask bits mean that an axis is
+active. Codes 30/31 in the prompt lookup table are not separate stick edges.
+`0x5d4b00` already returns rising edges, so it must not be edge-filtered again.
+
+Navigation reads the pad slots already polled into the accepted controller's
+current binding map. This preserves pad remapping and reads before retail
+`0x61a4c0` discards magnitudes at or below 0.75. A magnitude above 0.5 engages
+an axis; it releases at or below 0.35. A diagonal selects one cardinal direction
+and keeps that axis through small changes in dominance. D-pad contacts take
+precedence over the stick. Both repeat after 300 ms, then every 100 ms, matching
+the ordinary native menu timing in `0x5da1a0`; a delayed frame produces one move.
+Native lists additionally accelerate after 1.4 seconds; neither the text grid
+nor the Host rows is a native list. Activation/deactivation retires held input.
+Keyboard translation, mouse selection, native editor results and grid geometry
+retain their existing paths.
+
+During those two custom ticks, the guarded manager navigation slot returns
+neutral movement. The native base tick still runs; its independent stick
+navigation and held D-pad repeat cannot apply a second focus move. Outside
+those scopes the slot delegates to the original native function.
+
+Hub, Code, Browse, Party, the native lobby/Not Ready screens, LAN lists and pause
+roster retain native focus navigation and repeat. Their raw-mask reads dispatch
+buttons or remap X/Y prompts; they do not interpret axis bits as directions.
+The launcher has no consumer of this input lane.
+
+`xml2_online_menu_navigation_test` checks signed directions, hysteresis,
+diagonals, repeat and all-to-all grid reachability. The `r27-text` mapped-retail
+fixture executes the retail axis producer and the installed editor tick for
+every enabled cell/page/direction and both input devices. `r29-host-input`
+checks Host stick rows and held repeat. These tests do not replace live-pad
+and visual acceptance.
+
 This is a guarded presentation bridge, pending Claude review and real-game
 acceptance. Host fixtures do not establish fresh-boot stability, rendering or
 input parity. Round 3 adds owned native name polling, Code input/clipboard

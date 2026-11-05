@@ -52,6 +52,7 @@ def main():
                    0x5D9742:6,0x5D97D7:6,0x5D9C40:6,0x5D9D14:6,0x5D9A78:5,0x5D9B17:5})
     writes.update({0x5F1230:5,0x5F0F90:5,0x5F0F60:9,0x59B520:5})
     writes.update({0x69F07C:4,0x69F080:4,0x69F0A4:4})
+    writes.update({0x6A2564:4})
     writes.update(anchor_writes(root))
     spans = sorted((va, va+size) for va,size in writes.items())
     assert all(a[1]<=b[0] for a,b in zip(spans,spans[1:])), "overlapping writes"

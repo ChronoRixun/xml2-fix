@@ -34,15 +34,11 @@ inline int character(unsigned value,unsigned scan=0,bool address=false) {
     if(value<32 || value==127) return 0;
     return value<127 ? int(value) : unsupported;
 }
-// Retail UI codes: MOVE_Y=1, MOVE_X=0, MOVE_RIGHT=30, MOVE_DOWN=31;
-// NextHero/PreviousHero and Increase/DecreaseHeroAggr are the bound D-pad.
+// Edge-only buttons. Navigation uses signed axes + held D-pad state through
+// online_menu_navigation_rules; MOVE_X/Y bits are axis-active, not directions.
 inline int pad(unsigned edge) {
     if(edge&(1u<<21)) return 27;
     if(edge&(1u<<4)) return accept;
-    if(edge&((1u<<1)|(1u<<11))) return up;
-    if(edge&((1u<<31)|(1u<<12))) return down;
-    if(edge&((1u<<0)|(1u<<17))) return left;
-    if(edge&((1u<<30)|(1u<<16))) return right;
     return 0;
 }
 inline bool enabled(int i,int count,bool address) {

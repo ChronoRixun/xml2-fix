@@ -4,6 +4,19 @@
 // ABI/site guards, independently checked by scripts/check_online_menus_guards.py.
 namespace online_menus_guards {
 inline constexpr script_functions_rules::guard guards[]{
+    {0x006a2564, "a0a15d00", "manager navigation thiscall ret8 virtual slot"},
+    {0x005da1a0, "81ec840000008b842488000000", "native navigation entry and frame"},
+    {0x00551110, "8b44240483f8ff7e0c83f8047d078b448104c2040083c8ffc20400", "physical controller to binding-map column thiscall ret4"},
+    {0x0061a4c0, "51e80a7af3ff8b4c24188b098b10518bc8ff523c8b5424148b0d04aca600528d14888b0c95408fa60083c118e83ff10000d91c24812424ff", "retail binding row map and 0x18 layout before axis cutoff"},
+    {0x00629630, "518b4424083b01720ad9053000680059c20400d905300068008d1485000000008d0452568d34818b460485c057c7442410000000007423d9460cd9e1d9542408d81d30006800dfe0f6c441750d8b442408ddd8d9460c894424108b461085c074278d445206d904818d3c81d9e1d9542408d85c2410dfe0f6c441750c8b442408ddd8d907894424108b461c85c074278d445209d904818d3c81d9e1d9542408d85c2410dfe0f6c441750c8b442408ddd8d907894424108b462885c05f5e741b8d54520cd904918d0c91d9e1d85c2408dfe0f6c4417504ddd8d90159c20400", "polled four-slot binding record layout and values"},
+    {0x005d4690, "51535657c744240c00000000e82fd8f7ff8bf0e89897ebff8bf88b068b1f8bceff5060508bcfff531084c08a5c2418743484db7530e806d8f7ff8bf0e8ffd7f7ff8b168bf88b1f8bceff5260508bcfff534c8b4c24148b10518bc8ff52105f5e5b59c20800e8d6d7f7ff8b108bc8ff526083f8ff740484db744a8b7c241433f6e8bbd7f7ff8b108bc8ff52603bc67411e81b97ebff8b10568bc8ff522484c0741de89ad7f7ff8b10568bc8ff524c8b10578bc8ff5210d844240cd95c240c4683fe047cbcd944240c5f5e5b59c20800", "native signed UI axis getter thiscall ret8"},
+    {0x005d4830, "518b018d142452ff904c01000059c3", "native held UI mask getter wrapper"},
+    {0x005d4840, "5355565733dbe885d6f7ff8bf0e8ee95ebff8bf88b068b2f8bceff5060508bcfff551084c07459e864d6f7ff8bf0e85dd6f7ff8b168bf88b1f8bceff5260508bcfff534c8b108bc8ff520c8b7c24148bf0833fff8bc67521c1e814a801750a8bcec1e904f6c101740ee822d6f7ff8b108bc8ff526089078bc65f5e5d5bc20400e80bd6f7ff8b108bc8ff526083f8ff756833f6e8f8d5f7ff8b108bc8ff527085c07e568b7c2414e8e4d5f7ff8b10568bc8ff525484c07430e8d3d5f7ff8b10568bc8ff524c8b108bc8ff520c8b0f0bd883f9ff75138bc8c1e914f6c1017507c1e804a8017402893746e8a2d5f7ff8b108bc8ff52703bf07cae5f5e5d8bc35bc20400", "native held UI mask dispatch"},
+    {0x00550a90, "8b81f8020000c3", "controller held UI mask getter"},
+    {0x00550b10, "8b442404d98481fc020000c20400", "controller signed UI axis getter thiscall ret4"},
+    {0x0069a100, "900a5500100b5500", "controller held mask and signed axis virtual slots"},
+    {0x006a2494, "90465d00", "manager signed UI axis virtual slot"},
+    {0x006a24b4, "30485d0040485d00", "manager held UI mask virtual slots"},
     {0x0060a5d0, "8b81f8010000c1e0048b8c08c801000085c9750333c0c351e8f38500008bc8e8fc670000c3", "native active network message getter and formatter"},
     {0x00610df0, "8b4424045750688c84680068fb00000068582fa500e8e6f6f4ff", "native network notice bounded formatter"},
     {0x0061c35a, "bfd0fd69008bf0b90b00000033d2f3a6750d", "initial input context text-entry name comparison"},

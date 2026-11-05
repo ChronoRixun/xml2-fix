@@ -1,5 +1,26 @@
 // Native PC text-entry code in the reserved PE fixture. No game/window/input.
 namespace text_fixture {
+float binding_values[4]{};
+float __fastcall binding_value(void*,void*,int action) {assert(action>=0 && action<4);return binding_values[action];}
+unsigned neutral_native_frames=0,navigation_delegations=0;
+void __fastcall selected_tick(void*,void*) {
+    const auto navigation=*reinterpret_cast<bool(__thiscall**)(void*,signed char*,void*)>(0x6a2564);
+    signed char movement[]{1,1,0x64,0};
+    assert(navigation(mgr.data(),movement,reinterpret_cast<void*>(0x1234)));
+    assert(movement[0]==0 && movement[1]==0 && movement[2]==0x67);
+    assert(!navigation(mgr.data(),nullptr,nullptr));++neutral_native_frames;
+}
+bool __fastcall navigation_delegate(void* m,void*,signed char* movement,void* settings) {
+    assert(m==mgr.data() && settings==reinterpret_cast<void*>(0x1234));
+    movement[0]=-1;movement[1]=1;++navigation_delegations;return true;
+}
+void real_base_tick() {
+    // Keep the actual 0x5aaeb0 call to manager +0x1f8. Only the selected
+    // item's later button/lifecycle work is a probe, so double focus movement
+    // cannot be hidden behind the old fixture's whole-base-tick stub.
+    restore_retail(0x5aaeb0,5);
+    put(reinterpret_cast<void*>(0x6a026c),0,unsigned(reinterpret_cast<std::uintptr_t>(&selected_tick)));
+}
 std::array<unsigned char,0x1e20> editor{};
 unsigned closed=0;
 unsigned sounds=0;
@@ -72,7 +93,8 @@ void run(const script_functions_rules::func_entry* entry) {
         std::strcpy(reinterpret_cast<char*>(editor.data()+0x1d14),seed);
         std::strcpy(reinterpret_cast<char*>(0xa3e168+0x200),seed);
         *reinterpret_cast<unsigned char*>(0xa3e168+0x300)=0;put(reinterpret_cast<void*>(0xa3e168),0x304,tag);
-        *reinterpret_cast<unsigned char*>(0xa0a061)=0;mask=0;set_current(editor.data());activate(editor.data(),nullptr,0);
+        *reinterpret_cast<unsigned char*>(0xa0a061)=0;mask=held_mask=0;stick_x=stick_y=0;separate_held_mask=false;
+        set_current(editor.data());activate(editor.data(),nullptr,0);
     };
     const auto text=[&]() { return std::string(reinterpret_cast<char*>(editor.data()+0x1c10)); };
     const auto key=[&](int k) { command(k);tick(editor.data(),nullptr); };
@@ -98,6 +120,7 @@ void run(const script_functions_rules::func_entry* entry) {
     }
     // Give every key its own actual item pointer, just as the native menu does.
     redirect(0x5adf40,focus_stub);
+    real_base_tick();
     // Controls use production DI delivery; printable text uses the public WM_CHAR sink.
     const auto press=[&](unsigned scan) {
         std::array<unsigned char,256> state{};online_menus::keyboard(state.data());
@@ -191,13 +214,108 @@ void run(const script_functions_rules::func_entry* entry) {
         }
         return out;
     };
-    // The console layout binds D-pad to native actions 12..15, stick to 0..3.
-    for(const auto actions:{std::array<int,4>{15,14,13,12},std::array<int,4>{3,2,1,0}}) {
-        begin(3,15);pad(action_mask(actions[0]));assert(focused=="text_inputkeys02");
-        pad(action_mask(actions[1]));assert(focused=="text_inputkeys01");
-        pad(action_mask(actions[2]));assert(focused=="text_inputkeys10");
-        pad(action_mask(actions[3]));assert(focused=="text_inputkeys01");
+    // Execute the retail producer, rather than inventing stick masks from the
+    // unrelated UI prompt table. These are its original instructions in the
+    // reserved PE, with only the polled action value service stubbed.
+    redirect(0x629630,binding_value);
+    const auto produce=reinterpret_cast<float(__cdecl*)(unsigned*,float*,int,int,int*,float)>(0x61a4c0);
+    for(int action=0;action<4;++action) {
+        unsigned bits=0;float values[32]{};int controller=0;
+        std::fill(std::begin(binding_values),std::end(binding_values),0.f);binding_values[action]=1.f;
+        const int code=action<2 ? 1 : 0;const float sign=action==0 || action==3 ? 1.f : -1.f;
+        const auto value=produce(&bits,values,code,action,&controller,sign);
+        assert(bits==(1u<<code) && value==sign && values[code]==sign);
+        std::cout<<"PASS retail axis producer: action "<<action<<" bit "<<code<<" signed "<<value<<"\n";
+        bits=0;values[code]=0;binding_values[action]=.75f;
+        assert(produce(&bits,values,code,action,&controller,sign)==0 && bits==0);
     }
+    restore_retail(0x629630,5);
+    // The D-pad uses separate codes. Stick halves share the SAME code 0/1;
+    // deriving axis bits from UI_code_action_function (the old fixture) was
+    // wrong: retail 0x61a810 writes signed code 0/1, never code 30/31.
+    begin(3,15);pad(action_mask(15));assert(focused=="text_inputkeys02");
+    pad(action_mask(14));assert(focused=="text_inputkeys01");
+    pad(action_mask(13));assert(focused=="text_inputkeys10");
+    pad(action_mask(12));assert(focused=="text_inputkeys01");
+    const auto stick=[&](float x,float y) {
+        stick_x=x;stick_y=y;mask=(x ? 1u : 0u)|(y ? 2u : 0u);tick(editor.data(),nullptr);
+        mask=0;stick_x=stick_y=0;tick(editor.data(),nullptr);
+    };
+    begin(3,15);stick(1,0);assert(focused=="text_inputkeys02");
+    stick(-1,0);assert(focused=="text_inputkeys01");
+    stick(0,-1);assert(focused=="text_inputkeys10");
+    stick(0,1);assert(focused=="text_inputkeys01");
+    // Every enabled cell and page, every cardinal input, through the installed
+    // production tick (including the IP's sparse row and bottom buttons).
+    for(int tag:{0,1,3}) for(int page=0;page<(tag==3 ? 1 : 3);++page) {
+        begin(tag,31);for(int p=0;p<page;++p) key(38);
+        const int count=tag==3 ? 11 : page==2 ? 5 : 36;
+        for(int start=0;start<=40;++start) if(online_text_entry_rules::enabled(start,count,tag==3))
+            for(int d:{online_text_entry_rules::left,online_text_entry_rules::right,online_text_entry_rules::up,online_text_entry_rules::down}) {
+                const auto name=[](int i) { char key[32]{};if(i==40) return std::string("lc_text_cancel");
+                    std::snprintf(key,sizeof(key),"text_inputkeys%02d",i+1);return std::string(key); };
+                const int want=online_text_entry_rules::move(start,d,count,tag==3);
+                focus_stub(editor.data(),nullptr,name(start).c_str(),true);
+                stick(d==online_text_entry_rules::left ? -1.f : d==online_text_entry_rules::right ? 1.f : 0.f,
+                      d==online_text_entry_rules::up ? 1.f : d==online_text_entry_rules::down ? -1.f : 0.f);
+                assert(focused==name(want));
+                focus_stub(editor.data(),nullptr,name(start).c_str(),true);
+                pad(1u<<(d==online_text_entry_rules::up ? 11 : d==online_text_entry_rules::down ? 12 : d==online_text_entry_rules::left ? 17 : 16));
+                assert(focused==name(want));
+            }
+    }
+    // The native edge mask becomes zero while a stick/D-pad is held. Only the
+    // level sample may repeat, exactly at 300 ms then every 100 ms.
+    for(bool digital:{false,true}) {
+        begin(0,31);separate_held_mask=true;held_mask=digital ? 1u<<16 : 1u;
+        stick_x=digital ? 0.f : .8f;mask=held_mask;tick(editor.data(),nullptr);
+        assert(focused=="text_inputkeys02");mask=0;ticks+=299;tick(editor.data(),nullptr);
+        assert(focused=="text_inputkeys02");++ticks;tick(editor.data(),nullptr);assert(focused=="text_inputkeys03");
+        ticks+=100;tick(editor.data(),nullptr);assert(focused=="text_inputkeys04");
+        // Signed analog remains latched through threshold flutter, no extra edge.
+        if(!digital) {stick_x=.49f;tick(editor.data(),nullptr);stick_x=.51f;tick(editor.data(),nullptr);assert(focused=="text_inputkeys04");}
+    }
+    std::cout<<"PASS b2e stick: installed tick every enabled cell/page/cardinal, D-pad parity, signed axes, native 300/100 ms repeat, threshold flutter\n";
+    // Production pre-cutoff route: actual mapped configuration/record layout,
+    // second controller's remapped player column, non-default pad binding slot.
+    // Signed native UI axes are zero at <=.75. Sampling those alone cannot
+    // provide hysteresis at .5 or .75; the old implementation missed this.
+    begin(0,31);stick_x=stick_y=0;
+    std::array<unsigned char,0x100> configuration{};
+    put(configuration.data(),0x18,4);put(input.data(),4,2);
+    put(reinterpret_cast<void*>(0xa68f40),(1*4+2)*4,unsigned(reinterpret_cast<std::uintptr_t>(configuration.data())));
+    auto* record=configuration.data()+0x18+4+(3*4+2)*12;
+    put(record,0,3);put(record,4,1);
+    const auto raw_axis=[&](float value) {std::memcpy(record+8,&value,4);tick(editor.data(),nullptr);};
+    raw_axis(.51f);assert(focused=="text_inputkeys02");raw_axis(.49f);raw_axis(.76f);raw_axis(.74f);
+    assert(focused=="text_inputkeys02");ticks+=300;raw_axis(.4f);assert(focused=="text_inputkeys03");
+    raw_axis(.35f);raw_axis(.49f);assert(focused=="text_inputkeys03");raw_axis(.51f);assert(focused=="text_inputkeys04");
+    raw_axis(0);
+    for(unsigned action=0;action<4;++action) {
+        auto* binding=configuration.data()+0x18+4+(action*4+2)*12;
+        put(binding,0,3);put(binding,8,0);
+    }
+    for(unsigned action=0;action<4;++action) {
+        focus_stub(editor.data(),nullptr,"text_inputkeys14",true); // interior row/column
+        auto* binding=configuration.data()+0x18+4+(action*4+2)*12;
+        const float magnitude=.6f;std::memcpy(binding+8,&magnitude,4);tick(editor.data(),nullptr);
+        const char* expected[]{"text_inputkeys05","text_inputkeys23","text_inputkeys13","text_inputkeys15"};
+        assert(focused==expected[action]);
+        put(binding,8,0);tick(editor.data(),nullptr);
+    }
+    put(reinterpret_cast<void*>(0xa68f40),(1*4+2)*4,0);put(input.data(),4,0);
+    std::cout<<"PASS b2e pre-cutoff pad binding values, remapped controller column/slot, .75 flutter and .5/.35 hysteresis\n";
+    begin(0,31);mask=0x10;activate(editor.data(),nullptr,0);tick(editor.data(),nullptr);tick(editor.data(),nullptr);
+    assert(text().empty());mask=0;tick(editor.data(),nullptr);mask=0x10;tick(editor.data(),nullptr);assert(text()=="a");
+    std::cout<<"PASS b2e editor opening Accept retired, fresh Accept preserved\n";
+    assert(neutral_native_frames>0);
+    redirect(0x5da1a0,navigation_delegate);
+    signed char native_movement[4]{};
+    const auto navigation=*reinterpret_cast<bool(__thiscall**)(void*,signed char*,void*)>(0x6a2564);
+    assert(navigation(mgr.data(),native_movement,reinterpret_cast<void*>(0x1234)));
+    assert(navigation_delegations==1 && native_movement[0]==-1 && native_movement[1]==1);
+    restore_retail(0x5da1a0,5);
+    std::cout<<"PASS b2e real base tick: native navigation neutral only inside custom editor; outside scope delegates\n";
     begin(0,31);command(0);mask=0x10;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);assert(text()=="a");
     // Enter/A accept Done only while that actual item owns focus.
     focus_stub(editor.data(),nullptr,"text_inputkeys40",true);const auto enter_done=closed;

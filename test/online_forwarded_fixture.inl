@@ -21,6 +21,7 @@ void run() {
         std::cout<<"PASS service failure survives Back; fresh request connects; successful service survives cancel; raw ids hidden\n";return;
     }
     mode="r29-host-input";
+    text_fixture::real_base_tick();
     std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_host");child[4]=1;put(child.data(),0,0x69e41c);set_current(child.data());
     // Distinct real CText objects, so focus comparisons cannot alias.
     static std::map<std::string,std::array<unsigned char,0xb0>> controls;
@@ -49,7 +50,19 @@ void run() {
     pad(raw_menu_mask(pad_key::y));assert(menu_drop_changes==before+7);
     pad(raw_menu_mask(pad_key::a));assert(menu_drop_changes==before+8);
     pad(1u<<12);assert(focused=="open");pad(1u<<11);assert(focused=="drop_in");
-    menu_drop_locked=true;tick(child.data(),nullptr);pad(raw_menu_mask(pad_key::y));assert(menu_drop_changes==before+8);
+    const auto stick=[&](float x,float y) {
+        stick_x=x;stick_y=y;mask=(x ? 1u : 0u)|(y ? 2u : 0u);tick(child.data(),nullptr);
+        stick_x=stick_y=0;mask=0;tick(child.data(),nullptr);
+    };
+    stick(0,-1);assert(focused=="open");stick(0,1);assert(focused=="drop_in");
+    stick(1,0);stick(-1,0);assert(menu_drop_changes==before+10);
+    focus_stub(child.data(),nullptr,"visibility",true);tick(child.data(),nullptr);
+    separate_held_mask=true;held_mask=2;stick_y=-1;mask=2;tick(child.data(),nullptr);mask=0;
+    assert(focused=="room_name");ticks+=299;tick(child.data(),nullptr);assert(focused=="room_name");
+    ++ticks;tick(child.data(),nullptr);assert(focused=="campaign");ticks+=100;tick(child.data(),nullptr);assert(focused=="drop_in");
+    stick_y=0;held_mask=0;separate_held_mask=false;tick(child.data(),nullptr);
+    std::cout<<"PASS b2e Host signed stick directions and held 300/100 ms row repeat\n";
+    menu_drop_locked=true;tick(child.data(),nullptr);pad(raw_menu_mask(pad_key::y));assert(menu_drop_changes==before+10);
     online_menus::set_pad_probe(pad_probe_yes);tick(child.data(),nullptr);assert(texts["desctext1"]=="A Select");
     std::cout<<"PASS Host DI/pad rows, focused values, Enter/A, Del/Y, Open Up, locked policy and device prompts\n";
 }

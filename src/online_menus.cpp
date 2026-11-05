@@ -5,6 +5,7 @@
 #include "lc_fonts.hpp"
 #include "frame_rate.hpp"
 #include "online_text_entry_rules.hpp"
+#include "online_menu_navigation_rules.hpp"
 #include "online_status_core.hpp"
 #include "gameplay_agreement.hpp"
 #include "online_room.hpp"
@@ -1044,6 +1045,16 @@ void enable(void* menu,const char* item,bool enabled) {
 }
 namespace broker = online_browser_core;
 bool text_entry_ticking=false;
+bool __fastcall native_navigation(void* mgr,void*,signed char* movement,void* settings) {
+    // The base menu tick calls +0x1f8 before updating the selected item. Zero
+    // button edges alone do not stop its signed axes or held D-pad repeat:
+    // otherwise our focus move is followed by a second native focus move.
+    if(text_entry_ticking || host_input_ticking) {
+        if(!movement) return 0;
+        movement[0]=movement[1]=0;movement[2]|=3;return 1;
+    }
+    return at<bool(__thiscall*)(void*,signed char*,void*)>(0x5da1a0)(mgr,movement,settings);
+}
 bool lobby_focus(void* menu,const char* target);
 void* item(void* menu,const char* name);
 bool offline_fixture = false;
@@ -1111,6 +1122,41 @@ void broker_cancel(bool leave_room=false) {
 }
 #include "online_native_flow.inl"
 #include "online_ready_roster.inl"
+online_menu_navigation_rules::sample menu_navigation_sample() {
+    __try {
+        auto* mgr=manager();
+        const auto axis=at<float(__thiscall*)(void*,int,bool)>(0x5d4690);
+        online_menu_navigation_rules::sample out{axis(mgr,0,false),axis(mgr,1,false),at<unsigned(__thiscall*)(void*)>(0x5d4830)(mgr)};
+        // 0x61a4c0 drops values <=.75 BEFORE publishing the signed UI axes.
+        // Read the pad slots already polled into the same binding map, before
+        // that cutoff; otherwise .75 flutter looks like a complete release.
+        // Only pad slots override these axes. Keyboard/mouse keep their lanes.
+        auto* in=at<getter>(0x551ed0)();
+        const int player=at<int(__thiscall*)(void*,int)>(0x551110)(in,menu_player);
+        const auto row=*at<const unsigned*>(0xa6ac04);
+        if(player<0 || player>=4 || row>=5) return out;
+        const auto* config=at<const unsigned char* const*>(0xa68f40)[row*4+player];
+        if(!config) return out;
+        const auto* map=config+0x18;
+        if(*reinterpret_cast<const unsigned*>(map)<4) return out;
+        float values[4]{};bool bound=false;
+        for(unsigned action=0;action<4;++action) for(unsigned slot=0;slot<4;++slot) {
+            const auto* record=map+4+(action*4+slot)*12;
+            const auto device=*reinterpret_cast<const unsigned*>(record);
+            if(device<3 || device>12) continue;
+            bound=true;
+            const auto value=*reinterpret_cast<const float*>(record+8);
+            if(std::isfinite(value) && std::abs(value)>values[action]) values[action]=std::abs(value);
+        }
+        if(bound) {out.x=values[3]-values[2];out.y=values[0]-values[1];}
+        return out;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return {}; }
+}
+int text_navigation(online_menu_navigation_rules::direction value) {
+    using namespace online_menu_navigation_rules;
+    return value==left ? online_text_entry_rules::left : value==right ? online_text_entry_rules::right :
+        value==up ? online_text_entry_rules::up : value==down ? online_text_entry_rules::down : 0;
+}
 #include "online_text_entry.inl"
 #include "online_network_status.inl"
 void broker_scope(screen s) {
@@ -3131,8 +3177,9 @@ void native_history_trim(void* menu) {
 namespace host_controls {
 enum event { up=1,down,left,right,accept,change,back,open };
 constexpr const char* rows[]{"visibility","room_name","campaign","drop_in","open"};
-void* owner=nullptr;unsigned held=0;int last_row=0;
-void reset() {owner=nullptr;held=0;last_row=0;host_keys.clear();}
+void* owner=nullptr;unsigned opening=0;int last_row=0;
+online_menu_navigation_rules::navigation navigation;
+void reset() {owner=nullptr;navigation.reset();opening=0;last_row=0;host_keys.clear();}
 bool enabled(void* menu,const char* name) {
     __try {
         auto* p=static_cast<unsigned char*>(item_try(menu,name));
@@ -3171,17 +3218,20 @@ void apply(void* menu,int e) {
     pending.post(int(action),id,screen::host);
 }
 void frame(void* menu,unsigned raw) {
-    if(owner!=menu) {owner=menu;held=raw;last_row=0;} // retire the opening button edge
+    const auto sample=menu_navigation_sample();const auto now=now_ms();
+    if(owner!=menu) {owner=menu;navigation.reset(sample,now);opening=raw;last_row=0;}
     const int selected=row(menu);if(selected>=0) last_row=selected;
     if(host_keys.source==reinterpret_cast<std::uintptr_t>(menu))
         for(unsigned i=0;i<host_keys.count;++i) apply(menu,host_keys.values[i]);
     host_keys.clear();
-    const auto edge=raw&~held;held=raw;
+    const auto edge=raw&~opening;opening&=raw; // retire only the opening edge; the native mask is already rising edges
+    const int move=text_navigation(navigation.update(sample,now));
     if(edge&0x200000) apply(menu,back);
     else if(edge&0x100000) apply(menu,open);
     else if(edge&0x1000000) apply(menu,change); // raw Y, before custom-menu X/Y remapping
     else {
-        const auto action=online_text_entry_rules::pad(edge);
+        const auto button=online_text_entry_rules::pad(edge);
+        const auto action=button ? button : move;
         if(action==online_text_entry_rules::accept) apply(menu,accept);
         else if(action==online_text_entry_rules::up) apply(menu,up);
         else if(action==online_text_entry_rules::down) apply(menu,down);
@@ -3526,8 +3576,10 @@ void __fastcall tick(void* menu,void*) {
         feedback.clear();error_visible=true;
         logger::write("online menus: UI update threw; frame contained");
         if(!native_called) {
+            host_input_ticking=ready && live(menu) && which(menu)==screen::host;
             try { at<tick_fn>(0x5aaeb0)(menu); }
             catch(...) { logger::write("online menus: native tick threw; frame contained"); }
+            host_input_ticking=false;
         }
     }
 }
@@ -3706,6 +3758,8 @@ patch_transaction::contribution contribution() {
         static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(lan_row_format)),0,"LAN game name and difficulty spacing"));
     ready_roster::contribute(c);
     text_entry_ui::contribute(c);
+    c.writes.push_back(patch_transaction::relocation(0x6a2564,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&native_navigation)),0,"custom grid and Host own navigation"));
     c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_refusal_bridge)),1,"started-session refusal from the proven host"));
     for(const auto& g:online_menus_guards::guards)

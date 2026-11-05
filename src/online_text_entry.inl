@@ -2,9 +2,9 @@
 // Pad/mouse feed that same lane: native tags, charset, limits and results win.
 namespace text_entry_ui {
 constexpr int first=100,last=140;
-struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;unsigned held=0;const char* notice=nullptr;DWORD notice_at=0;int attempted_length=-1;bool closing=false; } edit;
+struct state { void* owner=nullptr;int page=0,pending=-1,tag=4,focus=0;online_menu_navigation_rules::navigation navigation;unsigned opening=0;const char* notice=nullptr;DWORD notice_at=0;int attempted_length=-1;bool closing=false; } edit;
 online_text_entry_rules::inbox input;
-void reset_input() { input.clear();edit.pending=-1;edit.held=0;edit.notice=nullptr; }
+void reset_input() { input.clear();edit.pending=-1;edit.navigation.reset();edit.opening=0;edit.notice=nullptr; }
 bool live(void* menu) {
     __try {
         return ready && menu && *static_cast<unsigned*>(menu)==0x69f06c &&
@@ -160,8 +160,10 @@ void __fastcall tick(void* menu,void*) {
         edit.attempted_length=-1;
         sync_focus(menu);
         const auto raw=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());
-        const auto edge=raw&~edit.held;edit.held=raw;
-        const int pad_action=online_text_entry_rules::pad(edge);
+        const int movement=text_navigation(edit.navigation.update(menu_navigation_sample(),now_ms()));
+        const int button=online_text_entry_rules::pad(raw&~edit.opening); // native mask is already edge-only
+        edit.opening&=raw; // retire only the edge that opened this activation
+        const int pad_action=button ? button : movement;
         if(pad_action==27) { input.clear();edit.pending=40; }
         else if(pad_action && (pad_action!=online_text_entry_rules::accept || edit.pending<0)) input.push_back(pad_action);
         if(edit.pending<0 && !input.empty()) {
@@ -208,7 +210,10 @@ void __fastcall tick(void* menu,void*) {
                 bind_text(menu,key.c_str(),prompts[i]);
             }
         }
-    } catch(...) { text_entry_ticking=false;edit={};input.clear();if(!native_called) native_tick(menu); }
+    } catch(...) {
+        text_entry_ticking=false;edit={};input.clear();
+        if(!native_called) {text_entry_ticking=true;native_tick(menu);text_entry_ticking=false;}
+    }
 }
 void __fastcall activate(void* menu,void*,int argument) {
     input_thread("text entry activation",false);
@@ -216,7 +221,8 @@ void __fastcall activate(void* menu,void*,int argument) {
     at<void(__thiscall*)(void*,int)>(0x5e6ec0)(menu,argument);
     if(live(menu)) {
         try { edit={menu,0,-1,request_tag()};truncate_seed(menu);bind(menu);
-            edit.held=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());focus(menu,0); }
+            edit.navigation.reset(menu_navigation_sample(),now_ms());
+            edit.opening=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());focus(menu,0); }
         catch(...) { edit={}; } // native keyboard/result service remains available
     }
 }

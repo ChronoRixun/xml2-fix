@@ -108,6 +108,9 @@ jobs:
       - name: Test the save library
         run: build/bin/Release/lcsave_test.exe
 
+      - name: Test menu navigation
+        run: build/bin/Release/xml2_online_menu_navigation_test.exe
+
       # Fails the job unless this is the online DLL: GNS + protobuf + the CA pin linked in, version = project(... VERSION),
       # nothing imported that the game's PC does not have, no local build path embedded (scripts/check_build_paths.py).
       # Checked again below on the DLL taken out of the finished zip.
