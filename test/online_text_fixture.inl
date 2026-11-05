@@ -2,12 +2,17 @@
 namespace text_fixture {
 float binding_values[4]{};
 float __fastcall binding_value(void*,void*,int action) {assert(action>=0 && action<4);return binding_values[action];}
-unsigned neutral_native_frames=0,navigation_delegations=0;
+unsigned neutral_native_frames=0,navigation_delegations=0,native_scratch_calls=0;
+// b2g: inside the custom scope the native navigator still runs (on a scratch
+// result) so its latches/timers stay current; its output must be discarded.
+bool __fastcall native_scratch(void* m,void*,signed char* movement,void*) {
+    assert(m==mgr.data() && movement);++native_scratch_calls;movement[0]=1;movement[1]=-1;movement[2]=0;return true;
+}
 void __fastcall selected_tick(void*,void*) {
     const auto navigation=*reinterpret_cast<bool(__thiscall**)(void*,signed char*,void*)>(0x6a2564);
-    signed char movement[]{1,1,0x64,0};
+    signed char movement[]{1,1,0x64,0};const auto scratch_before=native_scratch_calls;
     assert(navigation(mgr.data(),movement,reinterpret_cast<void*>(0x1234)));
-    assert(movement[0]==0 && movement[1]==0 && movement[2]==0x67);
+    assert(movement[0]==0 && movement[1]==0 && movement[2]==0x67 && native_scratch_calls==scratch_before+1);
     assert(!navigation(mgr.data(),nullptr,nullptr));++neutral_native_frames;
 }
 bool __fastcall navigation_delegate(void* m,void*,signed char* movement,void* settings) {
@@ -20,6 +25,7 @@ void real_base_tick() {
     // cannot be hidden behind the old fixture's whole-base-tick stub.
     restore_retail(0x5aaeb0,5);
     put(reinterpret_cast<void*>(0x6a026c),0,unsigned(reinterpret_cast<std::uintptr_t>(&selected_tick)));
+    redirect(0x5da1a0,native_scratch);
 }
 std::array<unsigned char,0x1e20> editor{};
 unsigned closed=0;
@@ -303,6 +309,26 @@ void run(const script_functions_rules::func_entry* entry) {
         assert(focused==expected[action]);
         put(binding,8,0);tick(editor.data(),nullptr);
     }
+    {
+        // b2g: the stick reads the manager's active controller (0x5d8570, as the
+        // D-pad/buttons and lobby_player()), not menu_player's column. Here the
+        // Hub's controller 0 maps to an unconfigured column; controller 1 is live.
+        const short active=1,neutral=0;std::memcpy(mgr.data()+0x85d2e,&active,2);
+        put(input.data(),4,0);put(input.data(),8,2);
+        auto* right_binding=configuration.data()+0x18+4+(3*4+2)*12;
+        auto* left_binding=configuration.data()+0x18+4+(2*4+2)*12;
+        focus_stub(editor.data(),nullptr,"text_inputkeys14",true);
+        const float magnitude=.6f;std::memcpy(right_binding+8,&magnitude,4);tick(editor.data(),nullptr);
+        assert(focused=="text_inputkeys15");put(right_binding,8,0);tick(editor.data(),nullptr);
+        // Keyboard-bound movement (native signed axis) still moves while the
+        // column has idle pad slots, and pad drift does not mask it.
+        focus_stub(editor.data(),nullptr,"text_inputkeys14",true);
+        stick_x=1;tick(editor.data(),nullptr);assert(focused=="text_inputkeys15");stick_x=0;tick(editor.data(),nullptr);
+        const float drift=.05f;std::memcpy(left_binding+8,&drift,4);
+        stick_x=-1;tick(editor.data(),nullptr);assert(focused=="text_inputkeys14");stick_x=0;tick(editor.data(),nullptr);
+        put(left_binding,8,0);std::memcpy(mgr.data()+0x85d2e,&neutral,2);put(input.data(),8,0);tick(editor.data(),nullptr);
+        std::cout<<"PASS b2g stick follows the active controller (menu_player differs), native axis fallback for keyboard-bound movement\n";
+    }
     put(reinterpret_cast<void*>(0xa68f40),(1*4+2)*4,0);put(input.data(),4,0);
     std::cout<<"PASS b2e pre-cutoff pad binding values, remapped controller column/slot, .75 flutter and .5/.35 hysteresis\n";
     begin(0,31);mask=0x10;activate(editor.data(),nullptr,0);tick(editor.data(),nullptr);tick(editor.data(),nullptr);
@@ -314,7 +340,7 @@ void run(const script_functions_rules::func_entry* entry) {
     const auto navigation=*reinterpret_cast<bool(__thiscall**)(void*,signed char*,void*)>(0x6a2564);
     assert(navigation(mgr.data(),native_movement,reinterpret_cast<void*>(0x1234)));
     assert(navigation_delegations==1 && native_movement[0]==-1 && native_movement[1]==1);
-    restore_retail(0x5da1a0,5);
+    assert(native_scratch_calls>0);redirect(0x5da1a0,native_scratch);
     std::cout<<"PASS b2e real base tick: native navigation neutral only inside custom editor; outside scope delegates\n";
     begin(0,31);command(0);mask=0x10;tick(editor.data(),nullptr);mask=0;tick(editor.data(),nullptr);assert(text()=="a");
     // Enter/A accept Done only while that actual item owns focus.

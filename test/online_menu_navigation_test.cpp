@@ -27,7 +27,28 @@ int main() {
         assert(n.update({.36f*sign,0},300)==none);assert(n.update({.36f*sign,0},301)==expected);
         assert(n.update({.35f*sign,0},302)==none);assert(n.update({.49f*sign,0},303)==none);
         assert(n.update({.51f*sign,0},304)==expected);
-        assert(n.update({-.8f*sign,0},305)==(sign>0 ? left : right));
+        // b2g: no reversal without neutral, unless the opposite side is held 80 ms.
+        assert(n.update({-.8f*sign,0},305)==none);assert(n.update({-.8f*sign,0},384)==none);
+        assert(n.update({-.8f*sign,0},385)==(sign>0 ? left : right));
+        // Snap-back overshoot on release: one frame past -.5, then rest.
+        n.reset();assert(n.update({sign,0},400)==expected);
+        assert(n.update({-.6f*sign,0},433)==none);assert(n.update({-.1f*sign,0},466)==none);
+        assert(n.update({.2f*sign,0},500)==none);assert(n.update({0,0},533)==none);
+        // A true neutral re-arms the opposite side at once.
+        assert(n.update({sign,0},566)==expected);assert(n.update({0,0},599)==none);
+        assert(n.update({-sign,0},632)==(sign>0 ? left : right));
+        // Same on the vertical axis.
+        n.reset();assert(n.update({0,sign},700)==(sign>0 ? up : down));
+        assert(n.update({0,-.7f*sign},733)==none);assert(n.update({0,0},766)==none);
+        assert(n.update({0,-sign},799)==(sign>0 ? down : up));
+    }
+    // repeat flag: fresh pushes/changes false, held repeats true (Host uses it).
+    for(const auto s:{sample{1,0},sample{0,0,1u<<16}}) {
+        navigation n;assert(n.update(s,0)==right && !n.repeat);
+        assert(n.update(s,299)==none && !n.repeat);
+        assert(n.update(s,300)==right && n.repeat);assert(n.update(s,400)==right && n.repeat);
+        assert(n.update({},401)==none && !n.repeat);assert(n.update(s,500)==right && !n.repeat);
+        assert(n.update({0,1},501)==up && !n.repeat);
     }
     // Stable diagonal, all quadrants; one cardinal event, no alternating axes.
     for(float x:{-1.f,1.f}) for(float y:{-1.f,1.f}) {
@@ -62,5 +83,6 @@ int main() {
             for(int i=0;i<=40;++i) if(online_text_entry_rules::enabled(i,count,address)) assert(reached[i]);
         }
     }
+    std::cout<<"PASS b2g snap-back/reversal-needs-neutral (80 ms override) and fresh/repeat flag\n";
     std::cout<<"PASS signed stick/D-pad directions, diagonal stability, hysteresis, native repeat, reset, clock wrap; all-to-all grid reachability from "<<cells<<" cells\n";
 }

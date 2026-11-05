@@ -62,7 +62,43 @@ void run() {
     ++ticks;tick(child.data(),nullptr);assert(focused=="campaign");ticks+=100;tick(child.data(),nullptr);assert(focused=="drop_in");
     stick_y=0;held_mask=0;separate_held_mask=false;tick(child.data(),nullptr);
     std::cout<<"PASS b2e Host signed stick directions and held 300/100 ms row repeat\n";
-    menu_drop_locked=true;tick(child.data(),nullptr);pad(raw_menu_mask(pad_key::y));assert(menu_drop_changes==before+10);
+    // b2g: a held left/right changes Visibility/Drop-in ONCE (stick and D-pad);
+    // up/down keep the repeat.
+    focus_stub(child.data(),nullptr,"drop_in",true);tick(child.data(),nullptr);
+    auto changes=menu_drop_changes;
+    stick_x=1;mask=1;tick(child.data(),nullptr);mask=0;assert(menu_drop_changes==changes+1);
+    for(int i=0;i<12;++i) {ticks+=100;tick(child.data(),nullptr);}
+    assert(menu_drop_changes==changes+1 && focused=="drop_in");stick_x=0;tick(child.data(),nullptr);
+    separate_held_mask=true;held_mask=1u<<17;mask=held_mask;tick(child.data(),nullptr);mask=0;assert(menu_drop_changes==changes+2);
+    for(int i=0;i<12;++i) {ticks+=100;tick(child.data(),nullptr);}
+    assert(menu_drop_changes==changes+2 && focused=="drop_in");held_mask=0;tick(child.data(),nullptr);
+    focus_stub(child.data(),nullptr,"visibility",true);tick(child.data(),nullptr);
+    held_mask=1u<<12;mask=held_mask;tick(child.data(),nullptr);mask=0;assert(focused=="room_name");
+    ticks+=300;tick(child.data(),nullptr);assert(focused=="campaign");ticks+=100;tick(child.data(),nullptr);assert(focused=="drop_in");
+    held_mask=0;tick(child.data(),nullptr);held_mask=1u<<11;mask=held_mask;tick(child.data(),nullptr);mask=0;assert(focused=="campaign");
+    ticks+=300;tick(child.data(),nullptr);assert(focused=="room_name");held_mask=0;separate_held_mask=false;tick(child.data(),nullptr);
+    std::cout<<"PASS b2g Host hold: left/right one change per push (stick + D-pad), up/down repeat\n";
+    {
+        // Keyboard WASD-style movement reaches Host through the native signed
+        // axes while the column also holds idle pad slots; a pad on another
+        // controller than menu_player drives Host through the active controller.
+        std::array<unsigned char,0x100> configuration{};put(configuration.data(),0x18,4);put(input.data(),4,2);
+        put(reinterpret_cast<void*>(0xa68f40),(1*4+2)*4,unsigned(reinterpret_cast<std::uintptr_t>(configuration.data())));
+        for(unsigned action=0;action<4;++action) put(configuration.data()+0x18+4+(action*4+2)*12,0,3);
+        focus_stub(child.data(),nullptr,"visibility",true);tick(child.data(),nullptr);
+        stick(0,-1);assert(focused=="room_name");stick(0,-1);assert(focused=="campaign");stick(0,-1);assert(focused=="drop_in");
+        changes=menu_drop_changes;stick(1,0);assert(menu_drop_changes==changes+1);stick(-1,0);assert(menu_drop_changes==changes+2);
+        stick(0,1);assert(focused=="campaign");
+        const short active=1,neutral=0;std::memcpy(mgr.data()+0x85d2e,&active,2);put(input.data(),4,0);put(input.data(),8,2);
+        auto* down=configuration.data()+0x18+4+(1*4+2)*12;const float magnitude=.6f;
+        std::memcpy(down+8,&magnitude,4);tick(child.data(),nullptr);assert(focused=="drop_in");
+        put(down,8,0);tick(child.data(),nullptr);
+        std::memcpy(mgr.data()+0x85d2e,&neutral,2);put(input.data(),8,0);put(input.data(),4,0);
+        put(reinterpret_cast<void*>(0xa68f40),(1*4+2)*4,0);tick(child.data(),nullptr);
+        std::cout<<"PASS b2g Host keyboard-bound (WASD-style) native-axis movement with idle pad slots; pad on the active controller != menu_player\n";
+    }
+    const auto settled=menu_drop_changes;
+    menu_drop_locked=true;tick(child.data(),nullptr);pad(raw_menu_mask(pad_key::y));assert(menu_drop_changes==settled);
     online_menus::set_pad_probe(pad_probe_yes);tick(child.data(),nullptr);assert(texts["desctext1"]=="A Select");
     std::cout<<"PASS Host DI/pad rows, focused values, Enter/A, Del/Y, Open Up, locked policy and device prompts\n";
 }

@@ -151,7 +151,7 @@ void __fastcall tick(void* menu,void*) {
         // The manager may animate the queued close before deactivation. Keep
         // the base lifecycle ticking, without accepting a second terminal key.
         *at<unsigned char*>(0xa0a061)=0;
-        text_entry_ticking=true;at<tick_fn>(0x5aaeb0)(menu);text_entry_ticking=false;return;
+        ticking_scope scope(text_entry_ticking);at<tick_fn>(0x5aaeb0)(menu);return;
     }
     bool native_called=false;
     try {
@@ -194,8 +194,8 @@ void __fastcall tick(void* menu,void*) {
         // native character lane used by tests/other input producers.
         auto& character=*at<unsigned char*>(0xa0a061);
         if(character>=32 && native_length(menu)>=native_limit(menu)) { character=0;notify("Text limit"); }
-        text_entry_ticking=true;
-        native_called=true;const bool ok=native_tick(menu);text_entry_ticking=false;
+        bool ok=false;
+        {ticking_scope scope(text_entry_ticking);native_called=true;ok=native_tick(menu);}
         if(!ok) {edit={};input.clear();}
         else if(current()==menu) {
             if(edit.attempted_length>=0) {
@@ -212,7 +212,7 @@ void __fastcall tick(void* menu,void*) {
         }
     } catch(...) {
         text_entry_ticking=false;edit={};input.clear();
-        if(!native_called) {text_entry_ticking=true;native_tick(menu);text_entry_ticking=false;}
+        if(!native_called) {ticking_scope scope(text_entry_ticking);native_tick(menu);}
     }
 }
 void __fastcall activate(void* menu,void*,int argument) {

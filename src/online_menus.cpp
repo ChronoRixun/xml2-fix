@@ -1045,15 +1045,29 @@ void enable(void* menu,const char* item,bool enabled) {
 }
 namespace broker = online_browser_core;
 bool text_entry_ticking=false;
+// Sets a ticking flag for one call; cleared on every exit, including a C++
+// exception unwinding out of the base tick.
+struct ticking_scope {
+    bool& flag;
+    ticking_scope(bool& value,bool on=true) : flag(value) { flag=on; }
+    ~ticking_scope() { flag=false; }
+    ticking_scope(const ticking_scope&)=delete;ticking_scope& operator=(const ticking_scope&)=delete;
+};
 bool __fastcall native_navigation(void* mgr,void*,signed char* movement,void* settings) {
     // The base menu tick calls +0x1f8 before updating the selected item. Zero
     // button edges alone do not stop its signed axes or held D-pad repeat:
     // otherwise our focus move is followed by a second native focus move.
+    const auto original=at<bool(__thiscall*)(void*,signed char*,void*)>(0x5da1a0);
     if(text_entry_ticking || host_input_ticking) {
         if(!movement) return 0;
+        // Still run the native navigator on a scratch result (it writes bytes
+        // 0..2 only), so its per-direction stick latches and repeat timers stay
+        // current: leaving our screen with the stick held, or opening it with
+        // the stick held, then behaves like retail on the next native menu.
+        signed char scratch[4]{0,0,movement[2],0};original(mgr,scratch,settings);
         movement[0]=movement[1]=0;movement[2]|=3;return 1;
     }
-    return at<bool(__thiscall*)(void*,signed char*,void*)>(0x5da1a0)(mgr,movement,settings);
+    return original(mgr,movement,settings);
 }
 bool lobby_focus(void* menu,const char* target);
 void* item(void* menu,const char* name);
@@ -1122,6 +1136,7 @@ void broker_cancel(bool leave_room=false) {
 }
 #include "online_native_flow.inl"
 #include "online_ready_roster.inl"
+int lobby_player();
 online_menu_navigation_rules::sample menu_navigation_sample() {
     __try {
         auto* mgr=manager();
@@ -1130,25 +1145,29 @@ online_menu_navigation_rules::sample menu_navigation_sample() {
         // 0x61a4c0 drops values <=.75 BEFORE publishing the signed UI axes.
         // Read the pad slots already polled into the same binding map, before
         // that cutoff; otherwise .75 flutter looks like a complete release.
-        // Only pad slots override these axes. Keyboard/mouse keep their lanes.
+        // Read the SAME controller as the D-pad/button masks (the manager's
+        // active controller, as lobby_player()), not a possibly stale Hub one.
+        // A pad value replaces the native axis only when it is larger, so the
+        // native value (keyboard-bound movement, another device) still works.
         auto* in=at<getter>(0x551ed0)();
-        const int player=at<int(__thiscall*)(void*,int)>(0x551110)(in,menu_player);
+        const int player=at<int(__thiscall*)(void*,int)>(0x551110)(in,lobby_player());
         const auto row=*at<const unsigned*>(0xa6ac04);
         if(player<0 || player>=4 || row>=5) return out;
         const auto* config=at<const unsigned char* const*>(0xa68f40)[row*4+player];
         if(!config) return out;
         const auto* map=config+0x18;
         if(*reinterpret_cast<const unsigned*>(map)<4) return out;
-        float values[4]{};bool bound=false;
+        float values[4]{};
         for(unsigned action=0;action<4;++action) for(unsigned slot=0;slot<4;++slot) {
             const auto* record=map+4+(action*4+slot)*12;
             const auto device=*reinterpret_cast<const unsigned*>(record);
             if(device<3 || device>12) continue;
-            bound=true;
             const auto value=*reinterpret_cast<const float*>(record+8);
             if(std::isfinite(value) && std::abs(value)>values[action]) values[action]=std::abs(value);
         }
-        if(bound) {out.x=values[3]-values[2];out.y=values[0]-values[1];}
+        const float x=values[3]-values[2],y=values[0]-values[1];
+        if(!std::isfinite(out.x) || std::abs(x)>std::abs(out.x)) out.x=x;
+        if(!std::isfinite(out.y) || std::abs(y)>std::abs(out.y)) out.y=y;
         return out;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return {}; }
 }
@@ -3225,7 +3244,12 @@ void frame(void* menu,unsigned raw) {
         for(unsigned i=0;i<host_keys.count;++i) apply(menu,host_keys.values[i]);
     host_keys.clear();
     const auto edge=raw&~opening;opening&=raw; // retire only the opening edge; the native mask is already rising edges
-    const int move=text_navigation(navigation.update(sample,now));
+    auto direction=navigation.update(sample,now);
+    // Rows repeat while held; Visibility/Drop-in change once per push (a held
+    // repeat would flip the value at 10 Hz and spam broker set_drop_in).
+    if(navigation.repeat && (direction==online_menu_navigation_rules::left || direction==online_menu_navigation_rules::right))
+        direction=online_menu_navigation_rules::none;
+    const int move=text_navigation(direction);
     if(edge&0x200000) apply(menu,back);
     else if(edge&0x100000) apply(menu,open);
     else if(edge&0x1000000) apply(menu,change); // raw Y, before custom-menu X/Y remapping
@@ -3368,9 +3392,7 @@ void tick_impl(void* menu,bool& native_called) {
         }
     }
     native_called=true;
-    host_input_ticking=ready && live(menu) && which(menu)==screen::host;
-    at<tick_fn>(0x5aaeb0)(menu);
-    host_input_ticking=false;
+    {ticking_scope scope(host_input_ticking,ready && live(menu) && which(menu)==screen::host);at<tick_fn>(0x5aaeb0)(menu);}
     if(tick_fault) tick_fault();
     if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();host_keys.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
@@ -3576,10 +3598,9 @@ void __fastcall tick(void* menu,void*) {
         feedback.clear();error_visible=true;
         logger::write("online menus: UI update threw; frame contained");
         if(!native_called) {
-            host_input_ticking=ready && live(menu) && which(menu)==screen::host;
+            ticking_scope scope(host_input_ticking,ready && live(menu) && which(menu)==screen::host);
             try { at<tick_fn>(0x5aaeb0)(menu); }
             catch(...) { logger::write("online menus: native tick threw; frame contained"); }
-            host_input_ticking=false;
         }
     }
 }

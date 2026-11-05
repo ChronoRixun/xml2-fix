@@ -8,21 +8,33 @@ UI code 0 and forward/back into code 1; their mask bits mean that an axis is
 active. Codes 30/31 in the prompt lookup table are not separate stick edges.
 `0x5d4b00` already returns rising edges, so it must not be edge-filtered again.
 
-Navigation reads the pad slots already polled into the accepted controller's
-current binding map. This preserves pad remapping and reads before retail
-`0x61a4c0` discards magnitudes at or below 0.75. A magnitude above 0.5 engages
-an axis; it releases at or below 0.35. A diagonal selects one cardinal direction
+Navigation reads the pad slots already polled into the binding map of the
+controller the menu manager follows (`0x5d8570`, as `lobby_player()`, the same
+controller as the D-pad and button masks; the Hub's `menu_player` only when it is
+invalid). This preserves pad remapping and reads before retail `0x61a4c0`
+discards magnitudes at or below 0.75. Per axis the pad value replaces the native
+signed axis only when it is larger, so keyboard-bound movement (for example WASD)
+and other devices still move. A magnitude above 0.5 engages an axis (more
+sensitive than retail's effective 0.75, deliberately); it releases at or below
+0.35. The opposite side of an axis engages only after a neutral sample
+(|v| < 0.35) or after it has been held for 80 ms, so a sprung stick's release
+overshoot does not move back. A diagonal selects one cardinal direction
 and keeps that axis through small changes in dominance. D-pad contacts take
 precedence over the stick. Both repeat after 300 ms, then every 100 ms, matching
 the ordinary native menu timing in `0x5da1a0`; a delayed frame produces one move.
 Native lists additionally accelerate after 1.4 seconds; neither the text grid
-nor the Host rows is a native list. Activation/deactivation retires held input.
+nor the Host rows is a native list. On Host only up/down repeat: a held
+left/right changes Visibility or Drop-in once per push (stick and D-pad).
+Activation/deactivation retires held input.
 Keyboard translation, mouse selection, native editor results and grid geometry
 retain their existing paths.
 
 During those two custom ticks, the guarded manager navigation slot returns
 neutral movement. The native base tick still runs; its independent stick
-navigation and held D-pad repeat cannot apply a second focus move. Outside
+navigation and held D-pad repeat cannot apply a second focus move. The slot
+still calls the native navigator on a scratch result (it writes bytes 0..2
+only), so its stick latches and repeat timers stay current for the next native
+menu. The scope flags are set by a scope guard and clear on every exit path. Outside
 those scopes the slot delegates to the original native function.
 
 Hub, Code, Browse, Party, the native lobby/Not Ready screens, LAN lists and pause
