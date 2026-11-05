@@ -1,6 +1,118 @@
 # Changelog
 
-## 1.11.0 - beta (Legends Classic 0.6.0-beta.1)
+## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2)
+
+### 1.11.0-beta.2
+
+XML2 Fix 1.11.0-beta.2 is the engine half of Legends Classic 0.6.0-beta.2 (content 31 / catalogue 8 /
+LC41). Windows file details still show 1.11.0 for the DLL; the package and the release tag carry the beta suffix.
+It is a beta: co-op was tested on one PC with up to four copies of the game and on two PCs at home, and still needs
+wider testing.
+
+**Install.** Use Ultimate Legends' Beta channel, or copy `dinput.dll` into the Legends Classic game folder (the one
+with `XMen2.exe`). For a standalone 0.6.0-beta.2 build, the DLL must be in the output folder **before** Build or
+Rebuild: the builder checks it and refuses an older DLL. A 1.11.0-beta.1 game and a 1.11.0-beta.2 game refuse each
+other at join.
+
+**For other X-Men Legends II setups.** The classic online screens are written by the Legends Classic builder. Without
+its settings the game keeps X-Men Legends II's own online menus. The frame-rate, joining and boss changes below apply
+to Legends Classic co-op.
+
+**Fixed since 1.11.0-beta.1**
+
+- **Blob no longer spins and stops attacking.** His first-game brain had no way out of the step where he walks to an
+  object to pick up or throw. When he never got there he circled around it and never attacked again, offline and
+  online alike, unless a hero kept hitting him. Those steps now end after 5 seconds of game time and his attack
+  pattern carries on, at 30 and 60 fps.
+- **The first game's other bosses can't get stuck waiting.** The dopples, Avalanche, Shadow King, Magneto and Master
+  Mold now give up on a move whose condition never comes true (facing, a power that isn't ready, a tile or waypoint
+  they can't reach) after 5 to 10 seconds of game time and choose another. Their successful moves, cooldowns and random
+  choices are unchanged. Pyro, Mystique and Marrow are unchanged. The changed bosses have new rule revisions, so
+  every player in a session needs this DLL.
+- **Host crash with four players fixed.** In 1.11.0-beta.1 a 4-player host could crash when a friend who was joining
+  dropped out just as the area reloaded: a late network report from another guest still named the removed player.
+  The host now clears that report safely and the other three players carry on.
+- **Losing the only friend who is joining no longer stops the game.** The players already in the game stay together
+  and keep playing, with no pause screen and no rejoin (tested with two and three players already in the game). At
+  the area restart each PC
+  now holds a player's input until that player's restart marker arrives (at most 5 seconds), so every PC counts the
+  same inputs; a slow guest that hears about the removal early waits for its own copy of that player before removing
+  it. Everyone may wait a few seconds at that area load. On by default; no setting is needed.
+
+**What's new**
+
+- **Guests follow the host's frame rate** in code, LAN and IP sessions. The rate is set when the host opens the room
+  and stays the same through area loads and late joins. A guest's own frame-rate setting, display and VSync
+  preferences stay as they are, in memory and in `xml2-fix.ini`, and the guest gets their own rate back on leaving or
+  if a join fails. Browsing rooms doesn't change it. To change the session's rate, leave and host again.
+- **The host's online limit still applies.** With the usual `[Online] TickRate=60`, a host set to 144 fps opens a
+  60 fps session; a host set to 30 opens a 30 fps session. A slow PC, a stalled connection or fullscreen VSync can
+  still run the session below its rate.
+- **Player cards show the rates** ("30 local / 60 online") and name a player whose PC can't keep up with the session
+  ("Cannot hold 60 fps"). Waiting for another player's input doesn't count as a slow PC, and nothing lowers the rate
+  automatically.
+- **The classic online screens** cover Game Options, the screen-name and IP keyboards, Other ways, LAN host or join,
+  the LAN games list, Connect by IP and the pause menu's player list. X-Men Legends II's own choices, ready states and
+  connection steps stay in charge underneath.
+- **The pause menu's player list** draws every name, hero and Ready / Not Ready in full, in the player colours, at
+  800x600, 1280x960, 1280x720 and 1920x1080 (it was cut into fragments in earlier previews).
+- **Keyboard and controller on the new keyboards.** Typed letters, digits and dots, Backspace, arrows / D-pad and
+  Enter / A on a key work on the IP and name keyboards. Printable text comes from Windows' own character messages, so
+  it follows the keyboard layout (AZERTY, QWERTZ, Shift, Caps Lock, AltGr, dead keys); text the game can't store,
+  such as accented letters, shows "Unsupported" instead of a wrong letter. Esc / B, the Cancel button and a mouse
+  click on Cancel close the keyboard without changing anything, also on Enter IP (whose field starts empty). Done
+  only finishes on Done. Mouse clicks still type once each. The Other ways name keeps its 15-character limit from the
+  first frame.
+- **Host a game with keyboard and controller.** Up / Down move between rows, Left / Right change the value in place,
+  Del / Y and Enter / A toggle DROP-IN, and a held Enter can't also post the game.
+- **The analog stick on the online keyboards and Host a game.** Using the analog stick on the online keyboard and Host
+  page now moves one key at a time, like the D-pad: one cell (or one Host row) per push, in the direction pushed, on the
+  game-name, IP and name keyboards. Holding it repeats like the D-pad (about 0.3 s, then every 0.1 s). On Host a game
+  only Up / Down repeat: a held Left / Right, stick or D-pad, changes Visibility or DROP-IN once per push. A push under
+  about half-way does nothing, a diagonal follows its stronger direction, and a stick springing back past centre
+  doesn't move back. The stick is read from the same controller as the menu's D-pad and buttons. Remapped controllers
+  keep their mapping, and movement bound to other keys still works; keyboard, mouse and the game's own menus are
+  unchanged.
+- **LAN fixes.** Only the host of a game answers LAN searches, so a started game with guests is listed once, and two
+  different hosts still show as two rows. Rows read "Player's game (Normal)". A LAN guest's lobby shows the host's game
+  name and "LAN" instead of room-code placeholders, and shows rates without inventing a local rate for remote players.
+- **Clearer service status.** After a failed request the Play Online screen keeps showing "Unavailable" until a new
+  request succeeds; Browse shows a plain message instead of an internal error code; key names are right from the first
+  frame; the last game's Rejoin reads F4 on the keyboard and Y on a controller, on the card and in the footer. Join by
+  code's footer names its real keys. The lobby's "Waiting for ..." line has normal spacing. The DROP-IN-off refusal
+  now says "This session has started. Ask the host to start a new session."
+- **If the online screens can't start**, a matching Legends Classic build shows a plain page with Back to the main
+  menu and advice to rebuild or update XML2 Fix. It no longer falls back to the GameSpy-era screens.
+- **New X-Men Legends artwork** for Discord Rich Presence.
+
+**Known limitations**
+
+- Pause release with four players is verified with test input only: in those runs one player's Ready press
+  sometimes didn't register and the pause stayed up until it was pressed again. Two- and three-player pauses
+  released every time (two-player pauses also with a real controller on two PCs).
+- Hosting alone online: after Ready the game resumes but the pause menu stays open - press B or Esc again (the game's
+  own rule for a one-player session).
+- Co-op was tested on one PC (up to four copies) and on two PCs at home. Not verified yet: the
+  relay (networks where a direct connection fails), players on different home networks, three or four separate PCs,
+  long sessions and joins over slow connections.
+- When a friend who is joining drops out during the admission, the host can show the game's own "lost online sync"
+  message a few times. It is cosmetic: the session carries on and nobody else is dropped.
+- If the host leaves, the session ends: no host migration or automatic reconnection yet (planned for 0.8).
+- Enter IP's keyboard still draws its unused cells and two empty bottom buttons as boxes (cosmetic).
+- With a working service the Play Online screen's status can read "Connecting..." for a long time; code joins work.
+- The new screens were checked with a real controller and keyboard on two PCs; more controllers and resolutions are
+  still to come. Save import is not switched on for players.
+
+**How to update**
+
+Back up `SaveLC`. Update Ultimate Legends, then in the **Beta** channel install **XML2 Fix 1.11.0-beta.2** and the
+**Legends Classic builder 0.6.0-beta.2**, **Rebuild**, then **Play**. Everyone needs the same pair and the same
+gameplay settings. Standalone builds: copy `dinput.dll` into the output folder before rebuilding.
+
+This is an unofficial, non-commercial fan project. The package contains the fix and its documentation; no game files,
+game art or modified game executable.
+
+### 1.11.0-beta.1
 
 XML2 Fix 1.11.0-beta.1 is the engine half of Legends Classic 0.6.0-beta.1 (content 30 / catalogue 8 / LC40).
 Windows file details show 1.11.0 for the DLL; the package and the release tag carry the beta suffix. It is a beta:
@@ -124,11 +236,6 @@ with Test mode off. A 0.5 game (content version 29) cannot join a 0.6 game. The 
 - If the only friend who is joining drops out partway through, one of the players already in the game can be left
   on the pause screen with every player shown as "Not Ready". That player has to leave and join again by code; the
   others play on. This is being fixed for the next beta.
-- (beta.2 candidate) When a friend who is joining drops out just as everyone reloads the area, the reload no longer
-  loses the other players: every PC now waits for each player's first input of the restarted game the same way
-  (the "restart-release barrier"), so one PC can no longer count a leftover input from before the reload and fall
-  out of step at the first checksum; and a four-player reload no longer freezes for a minute on the slowest PC when
-  the host's "that player dropped" notice reaches it before the game's own "that player joined" message.
 - The new screens still need more checks with mouse, keyboard and controllers at 720p, 1080p and 4:3, over long
   sessions (memory and graphics memory), and on the first opening of Party and the slower original screens. The
   Play Online Back selection, Party status labels and the original Kick button's lettering are still being reviewed.

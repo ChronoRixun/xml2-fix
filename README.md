@@ -38,11 +38,13 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.11.0-beta.1** (the launcher's Beta channel), paired with Legends Classic builder 0.6.0-beta.1
-(content 30 / catalogue 8 / LC40): online co-op from the game's own Play Online screens - Host, Join by code, Browse,
-a lobby and a Party screen - and friends can join a game in progress at the host's next area. The previous beta was
-XML2 Fix 1.10.0-beta.1 with builder 0.5.0-beta.1 (content 29 / catalogue 8 / LC38); a 1.11 game and a 1.10 game
-refuse each other at join. See the [1.11.0 release notes](packaging/release-notes/v1.11.0.md).
+**Beta: XML2 Fix 1.11.0-beta.2** (the launcher's Beta channel), paired with Legends Classic builder 0.6.0-beta.2
+(content 31 / catalogue 8 / LC41): online co-op from the game's own Play Online screens, with joining a game
+in progress at the host's next area. Beta.2 adds the host's frame rate for the whole session, keyboard and controller
+support on the classic online screens, and fixes for Blob and the other first-game bosses, the 4-player host crash
+and the lost-newcomer pause. The previous beta was XML2 Fix 1.11.0-beta.1 with builder 0.6.0-beta.1 (content 30 /
+catalogue 8 / LC40); a beta.1 game and a beta.2 game refuse each other at join. See the
+[1.11.0 release notes](packaging/release-notes/v1.11.0.md).
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
