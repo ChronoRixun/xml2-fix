@@ -110,6 +110,7 @@ void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_lo
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
 #include "join_in_progress_checksum.inl"
+#include "join_in_progress_lost_sync.inl" // b3
 #include "join_in_progress_execution_fixture.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
@@ -336,6 +337,7 @@ int main(int argc,char** argv) {
         if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();std::cout<<"PASS AR5 optional contracts compose with E4 guards\n";return 0; }
         if(std::string_view(argv[2])=="refusal-transport") { refusal_transport_fixture::run();return 0; }
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
+        if(std::string_view(argv[2])=="lost-sync") { lost_sync_fixture::run();return 0; } // b3
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
         if(std::string_view(argv[2])=="restart") { restart_fixture::run();return 0; }

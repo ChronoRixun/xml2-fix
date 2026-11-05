@@ -659,6 +659,17 @@ int main(int argc, char** argv)
                 const auto* bad_ready = join_in_progress_rules::first_mismatch(changed.data());
                 check(bad_ready && bad_ready->va == ready_calls[i], "changed Team readiness CALL refuses the JIP transaction");
             }
+			// b3: the two 4057 notice CALLs and the lone-host release counts are retail bytes, each under a guard that refuses a change.
+			for (std::size_t i = 0; i < lost_sync_message_calls.size(); ++i) {
+				check(same(lost_sync_message_calls[i], lost_sync_message_originals[i]) && same(solo_release_counts[i], solo_release_original),
+				      "b3: the 4057 notice CALL and the lone-host participant-count imm8 are the retail bytes");
+				for (const auto va : {lost_sync_message_calls[i], solo_release_counts[i]}) {
+					auto changed = mapped;
+					changed[va - limits_rules::image_base] ^= 1;
+					const auto* bad = join_in_progress_rules::first_mismatch(changed.data());
+					check(bad && bad->va <= va && va < bad->va + bad->hex.size() / 2, "b3: a changed 4057 notice CALL or release count refuses the JIP transaction");
+				}
+			}
 			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(gamespy_think, gamespy_think_original) && same(add_entry, add_original) &&
 			      same(record_seats, record_seats_original) &&
 			      same(area_barrier_call, area_barrier_original) &&
