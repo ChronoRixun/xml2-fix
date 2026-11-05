@@ -24,6 +24,18 @@
 #include <string>
 #include <vector>
 #include <cwchar>
+#include "frame_rate.hpp"
+#include "online_tick.hpp"
+
+namespace online_tick { bool link_fixture=false; bool linked() { return link_fixture; } }
+namespace frame_rate {
+ linked_frame_rate_core::session fixture_session;
+ unsigned host_setting=60;
+ unsigned session_rate() { return fixture_session.target(); }
+ unsigned host_rate() { return host_setting; }
+ bool adopt_session_rate(unsigned fps,bool room_owned) { return fixture_session.adopt(fps,room_owned); }
+ void clear_session_rate(bool room_only) { if(!room_only || fixture_session.room_owned()) fixture_session.clear(); }
+}
 
 namespace ini {
  std::optional<std::string> impact;
@@ -390,7 +402,7 @@ void records(){
    check(a.compare(c.bytes(),&d)==result::value && d.buckets==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(rules)) && !d.local_only && !d.peer_only,"the last rule's value differs: refused, and only its summary bucket differs");}
  }
  record overflow;for(std::uint16_t id=2;id<=256;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(257,1,{0,0,0,0},true) && !overflow.finalize(),"the 257th rule entry fails closed");
- static_assert(gameplay_agreement_rules::largest_queued_body==188 && gameplay_capabilities::record_size==108,"protocol 3 sizes");
+ static_assert(gameplay_agreement_rules::largest_queued_body==196 && gameplay_capabilities::record_size==108,"bounded record plus session settings");
  // Naming: which rule differs, for the log and the dialog.
  {
   auto wave=[](std::uint32_t death,bool solo){record r;for(std::uint16_t id=2;id<=15;++id)if(id!=8 || solo)r.add(id,1,{id==9 ? death : 0u,0,0,0},true);r.finalize();return r;};
@@ -474,7 +486,8 @@ void* descriptor_get(){return selected_descriptor;}void* session_get(){return se
 int __fastcall no_peer(void*,void*){return 0;}void __fastcall noop(void*,void*){}
 void __cdecl free_buffer(void* p){++freed;last_freed=p;}void* __stdcall timer_get(void* p){return p;}
 void __fastcall timer_destroy(void* p,void*){++timers;last_timer=p;}void __fastcall unregister(void*,void*){++unregistered;}
-int admitted(void*){++forwarded;return 73;}
+unsigned admitted_session_rate=0;
+int admitted(void*){++forwarded;admitted_session_rate=frame_rate::session_rate();return 73;}
 int timeout_trap(){++failures;return 0;}
 void pending_context(){context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);context[0x2294]=1;for(auto n:{0x21f4,0x21f8,0x21fc,0x2200,0x2204,0x222c,0x2234,0x2230})put(n,1);put(0x22bc,0x33333333);put(0x2298,std::uint32_t(reinterpret_cast<std::uintptr_t>(&status)));descriptor[0]=1;}
 bool cleaned(){return get(0x2250)==0 && context[0x2294]==0 && get(0x21f4)==0 && get(0x21f8)==0 && get(0x21fc)==0 && get(0x2200)==0 && get(0x2204)==0 && get(0x222c)==0 && get(0x2234)==0 && get(0x2230)==0 && get(0x22bc)==0 && get(0x221c)==0xffffffff;}
@@ -740,7 +753,9 @@ void games_list_notice(){
        "both empty-row lookups call the notice thunk and the update slot is wrapped");
  // Before any refusal (and after the loop's refusal expired or cleared) the list is native.
  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
- auto local=runtime_peer(true);input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
+ auto local=runtime_peer(true);
+
+input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
  context.fill(0);put(4,0x12345678);sender[0x19]=1;event e{0x18,input.data(),std::uint16_t(request_size+local.bytes().size()),0,context.data(),sender.data()};
  forwarded=0;check(receiver(&e)==73 && forwarded==1,"a compatible host's 0x18 is filed natively");
  check(games_list_row(5)=="No Games Found" && games_list_row(0)=="Searching for games","with no refusal current the retail refresh adds its native rows (the thunk forwards the string lookup)");
@@ -864,6 +879,16 @@ void runtime(){
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73 && iat_hook::calls==1,"verified final record opens actual socket gate");
  check(begin(context.data(),sender.data(),123)==73,"verified pending join forwards native continuation with original ABI");
  auto local=runtime_peer(true);
+ { // Started guests inherited the query callback; only host authority advertises.
+  input.fill(0);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);
+  const std::uint16_t length=request_size;std::memcpy(header.data()+8,&length,2);header[0x10]=0x18;
+  entry=request_send;ret(entry+5);
+  for(bool active:{false,true}) for(bool host:{false,true}) {
+   context[0x420]=active;context[0x421]=host;send_count=0;invoke_direct();
+   check(send_count==(host ? 1 : 0),host ? "host alone advertises in lobby and started discovery" : "guest cannot advertise a duplicate session in lobby or play");
+  }
+  context[0x420]=0;context[0x421]=1; // host authority for the sender ABI matrix below
+ }
  for(const auto [site,opcode,base,mode]:std::array<std::array<std::uint32_t,4>,5>{{{request_send,0x18,request_size,0},{reply_broadcast,0x1f,reply_size,2},{reply_send,0x1f,reply_size,1},{info_send,0x1a,info_size,1},{ack_send,0x1b,ack_size,1}}}){
   input.fill(0x5a);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);const auto length=std::uint16_t(base);std::memcpy(header.data()+8,&length,2);header[0x10]=std::uint8_t(opcode);header[0x11]=1;entry=site;ret(site+5);send_count=0;
   if(mode==0)invoke_direct();else if(mode==1)invoke_single();else invoke_broadcast();
@@ -871,6 +896,75 @@ void runtime(){
   check(output_this==0x12345678 && (mode==2 ? output_arg==0xffffffffu && output_extra==2 : output_arg==0x23456789 && output_extra==(mode==0 ? 123 : 0)),"native sender adapter preserves this, stack arguments and cleanup");
   check(header[8]==base && *reinterpret_cast<const std::uint8_t*const*>(header.data())==input.data(),"native original header/body storage remains intact");
  }
+ // Versioned settings ride the real installed admission adapters. The callback
+ // records the pacer's state at its entry, before a native shared frame is possible.
+ online_tick::link_fixture=true;
+ for(unsigned host_rate : {30u,60u}) {
+  frame_rate::clear_session_rate();frame_rate::host_setting=host_rate;
+  context[0x421]=1;
+  for(const auto [site,opcode,base,mode]:std::array<std::array<std::uint32_t,4>,5>{{{request_send,0x18,request_size,0},{reply_broadcast,0x1f,reply_size,2},{reply_send,0x1f,reply_size,1},{info_send,0x1a,info_size,1},{ack_send,0x1b,ack_size,1}}}) {
+   input.fill(0x5a);header.fill(0);const auto* body=input.data();std::memcpy(header.data(),&body,4);const auto length=std::uint16_t(base);std::memcpy(header.data()+8,&length,2);header[0x10]=std::uint8_t(opcode);header[0x11]=1;entry=site;ret(site+5);send_count=0;
+   if(mode==0)invoke_direct();else if(mode==1)invoke_single();else invoke_broadcast();
+   unsigned parsed=0;
+   check(send_count==1 && output_size==base+local.bytes().size()+linked_frame_rate_core::settings_size &&
+     linked_frame_rate_core::decode(output.data()+base+local.bytes().size(),linked_frame_rate_core::settings_size,parsed) && parsed==host_rate,
+     "linked rate: every installed native admission sender carries the versioned numeric target");
+   check(local.compare({output.data()+base,output_size-base})!=result::match,"linked rate: beta.1 record parser refuses the extended body before native admission");
+  }
+  frame_rate::clear_session_rate();frame_rate::host_setting=host_rate==30 ? 60 : 30;
+  const auto settings=linked_frame_rate_core::encode(host_rate);
+  // The skinned Other ways browser still enters the installed 0x18 adapter.
+  // Listing hosts must validate their settings without adopting any of them.
+  input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
+  std::memcpy(input.data()+request_size+local.bytes().size(),settings.data(),settings.size());
+  auto browser=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
+  event advert{0x18,input.data(),std::uint16_t(request_size+local.bytes().size()+settings.size()),0,context.data(),sender.data()};
+  forwarded=0;admitted_session_rate=0;
+  check(browser(&advert)==73 && forwarded==1 && admitted_session_rate==0 && frame_rate::session_rate()==0,
+    "beta.2 Other ways browser: compatible 30/60 host is listed without adopting its rate");
+  // Reproduce repeated broadcast/direct replies against the CURRENT native table.
+  // The retail handler's old allocation path is our forwarding counter here.
+  context.fill(0);selected_session=context.data();
+  std::memcpy(context.data()+0x410,"LC24",5);std::memcpy(input.data()+0x3e,"LC24",5);
+  const std::uint16_t source_port=5165;std::memcpy(sender.data()+8,&source_port,2);
+  const std::array<std::uint8_t,4> source_ip{192,0,2,10};std::memcpy(sender.data()+0x14,source_ip.data(),4);
+  auto* row=context.data()+0x5b4;
+  std::memcpy(row+8,source_ip.data(),4);std::memcpy(row+0xc,&source_port,2);
+  std::array<std::uint8_t,20> node{};
+  auto* row_pointer=row;std::memcpy(node.data()+0x10,&row_pointer,4);
+  auto* head=node.data();std::memcpy(context.data()+0x2208,&head,4);put(0x2214,1);
+  const auto first_forwarded=forwarded;
+  for(unsigned n=0;n<64;++n) {
+   input[0x38]=std::uint8_t(n%4+1);
+   check(browser(&advert)==0 && forwarded==first_forwarded && get(0x2214)==1 && row[0x38]==input[0x38],
+    "repeated compatible LAN replies refresh one row and its live player count");
+  }
+  check(std::memcmp(row+8,source_ip.data(),4)==0 && *reinterpret_cast<std::uint16_t*>(row+0xc)==source_port && row[0x11]==1,
+    "refresh retains the proven source endpoint and native version flag");
+  ++sender[0x14];check(browser(&advert)==73 && forwarded==first_forwarded+1,"same game name at a different IPv4 remains a separate host");--sender[0x14];
+  ++sender[8];check(browser(&advert)==73 && forwarded==first_forwarded+2,"same IPv4 with a different game port remains a separate host");--sender[8];
+  put(0x2214,101);check(browser(&advert)==0 && forwarded==first_forwarded+2,"over-capacity discovery table refuses without allocating another row");
+  put(0x2214,1);std::memcpy(node.data()+8,&head,4);
+  check(browser(&advert)==0 && forwarded==first_forwarded+2,"cyclic discovery chain refuses without inserting");
+  node.fill(0);auto* foreign=input.data();std::memcpy(node.data()+0x10,&foreign,4);
+  check(browser(&advert)==0 && forwarded==first_forwarded+2,"out-of-pool discovery record refuses without dereferencing it");
+  context.fill(0);check(browser(&advert)==73 && forwarded==first_forwarded+3,"a cleared/new search has no stale dedupe cache");
+  const auto listed=forwarded;advert.length=std::uint16_t(request_size+local.bytes().size());
+  browser(&advert);
+  check(forwarded==listed && frame_rate::session_rate()==0,
+    "beta.2 Other ways browser: beta.1 host without settings is refused before the native list callback");
+  input.fill(0);std::memcpy(input.data()+reply_size,local.bytes().data(),local.bytes().size());
+  std::memcpy(input.data()+reply_size+local.bytes().size(),settings.data(),settings.size());
+  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(reply_registration+1)));
+  pending_context();event incoming{0x1f,input.data(),std::uint16_t(reply_size+local.bytes().size()+settings.size()),0,context.data(),sender.data()};
+  forwarded=0;admitted_session_rate=0;
+  check(receiver(&incoming)==73 && forwarded==1 && admitted_session_rate==host_rate && frame_rate::session_rate()==host_rate,
+    "linked rate: host 30/guest 60 and reverse applied before the actual native reply callback");
+  const auto calls_before=forwarded;incoming.length=std::uint16_t(reply_size+local.bytes().size());pending_context();
+  receiver(&incoming);
+  check(forwarded==calls_before && frame_rate::session_rate()==0,"linked rate: a missing/old settings trailer never reaches native admission and restores the local cap");
+ }
+ online_tick::link_fixture=false;frame_rate::clear_session_rate();frame_rate::host_setting=60;
  separate_host_joiner();
  host_notice_tests();
  for(const auto [registration,opcode,base,joining]:std::array<std::array<std::uint32_t,4>,4>{{{request_registration,0x18,request_size,0},{reply_registration,0x1f,reply_size,1},{info_registration,0x1a,info_size,0},{ack_registration,0x1b,ack_size,1}}}){

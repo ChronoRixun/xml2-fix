@@ -126,7 +126,8 @@ static void refusals() {
 static lc_fonts_plan::targets targets(DWORD manager) {
  return {manager,addr(lc_fonts::font_names),addr(reinterpret_cast<void*>(&lc_fonts::style_stub)),
   addr(reinterpret_cast<void*>(&lc_fonts::render_item)),addr(reinterpret_cast<void*>(&lc_fonts::draw_scale_stub)),
-  addr(reinterpret_cast<void*>(&lc_fonts::clip_scale_stub)),addr(lc_fonts::map_pc),addr(lc_fonts::map_hd)};
+  addr(reinterpret_cast<void*>(&lc_fonts::clip_scale_stub)),addr(lc_fonts::map_pc),addr(lc_fonts::map_hd),addr(reinterpret_cast<void*>(&lc_fonts::list_clip_stub)),
+  addr(reinterpret_cast<void*>(&lc_fonts::list_draw_stub)),addr(reinterpret_cast<void*>(&lc_fonts::list_height_stub))};
 }
 static void faults_and_canaries() {
  for(bool rollback:{false,true}) {
@@ -255,12 +256,26 @@ static void invoke_style(void* style) {
   pop esi
  }
 }
-static DWORD invoke_scale(void* item,bool clip) {
- void* hook=clip?reinterpret_cast<void*>(&lc_fonts::clip_scale_stub):reinterpret_cast<void*>(&lc_fonts::draw_scale_stub);
+static DWORD invoke_scale(void* item,bool clip,bool list=false) {
+ void* hook=list ? (clip?reinterpret_cast<void*>(&lc_fonts::list_clip_stub):reinterpret_cast<void*>(&lc_fonts::list_draw_stub)) :
+  (clip?reinterpret_cast<void*>(&lc_fonts::clip_scale_stub):reinterpret_cast<void*>(&lc_fonts::draw_scale_stub));
  DWORD result=0;
  __asm {
   push esi
   mov esi,item
+  call hook
+  mov result,eax
+  pop esi
+ }
+ return result;
+}
+static int invoke_list_height(void* item,int measured) {
+ int result;
+ void* hook=reinterpret_cast<void*>(&lc_fonts::list_height_stub);
+ __asm {
+  push esi
+  mov esi,item
+  mov eax,measured
   call hook
   mov result,eax
   pop esi
@@ -273,8 +288,10 @@ static void styles() {
  jump(0x564b70,reinterpret_cast<void*>(&style_attribute));
  lc_fonts::style_resume=addr(reinterpret_cast<void*>(&style_return));
  lc_fonts::draw_resume=lc_fonts::clip_resume=addr(reinterpret_cast<void*>(&scale_return));
+ lc_fonts::list_clip_resume=lc_fonts::list_draw_resume=addr(reinterpret_cast<void*>(&scale_return));
+ lc_fonts::list_height_resume=addr(reinterpret_cast<void*>(&style_return));
  std::array<std::uint8_t,12> style{};
- std::array<std::uint8_t,0xac> item{};void* style_pointer=style.data();std::memcpy(item.data()+0x94,&style_pointer,4);
+ std::array<std::uint8_t,0xf0> item{};void* style_pointer=style.data();std::memcpy(item.data()+0x94,&style_pointer,4);
  for(const auto name:{"big","BIG","BiG","medium","hud","HUD","unknown","lc_title","LC_TITLE","lc_row","lc_body","lc_label"}) {
   font_name=name;scale_value="0.375";invoke_style(style.data());
   const auto index=lc_fonts_rules::font_index(name);
@@ -296,6 +313,14 @@ static void styles() {
    const bool custom=lc_fonts_rules::font_index(name)>=4;
    const auto wanted=custom?std::bit_cast<DWORD>(.1875f*factor):0x3f800000;
    check(invoke_scale(item.data(),false)==wanted);check(invoke_scale(item.data(),true)==wanted);
+   check(invoke_scale(item.data(),false,true)==wanted);check(invoke_scale(item.data(),true,true)==wanted);
+   // Use the actual prepared atlas height; each viewport recomputes from it,
+   // never rescales a stored row. Stock styles preserve even a caller override.
+   const auto atlas_height=*reinterpret_cast<short*>(lc_fonts::manager.data()+lc_fonts_rules::font_index(name)*lc_fonts_rules::stride+6);
+   const int expected_height=custom ? std::max(1,int((atlas_height*.1875f+4)*factor+.5f)) : 27;
+   check(invoke_list_height(item.data(),27)==expected_height);
+   check(*reinterpret_cast<int*>(item.data()+0xe0)==expected_height);
+   check(invoke_list_height(item.data(),27)==expected_height);
   }
  }
  font_name="lc_row";scale_value="0.1875";invoke_style(style.data());*reinterpret_cast<volatile int*>(0xa0a000)=720;

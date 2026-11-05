@@ -9,3 +9,4 @@
 
 # research scratch: copies of game binaries and disassembly dumps - never commit
 docs/research/
+__pycache__/

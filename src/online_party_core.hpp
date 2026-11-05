@@ -20,10 +20,10 @@
 namespace online_party_core
 {
 	// ---- the framing (docs/online-party.md sections 1, 5, 6) ----
-	constexpr std::uint8_t kind_report = 7, kind_table = 8, wire = 1;
+	constexpr std::uint8_t kind_report = 7, kind_table = 8, wire = 2;
 	constexpr std::size_t key_size = 8, code_size = 8, token_max = 32, name_max = 31, rtt_rows_max = 3, members_max = 4;
 	constexpr std::size_t rtt_row_size = 8 + 2 + 1, table_row_size = 8 + 1 + 1 + 1 + 2 + 1 + 1;
-	constexpr std::size_t report_fixed = 1 + 1 + code_size + 4 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2; // 23
+	constexpr std::size_t report_fixed = 1 + 1 + code_size + 4 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 5; // 28
 	constexpr std::size_t report_max = 128, table_fixed = 1 + 1 + code_size + 4 + 2 + 1, table_max = 80;
 	static_assert(report_fixed + token_max + name_max + rtt_rows_max * rtt_row_size <= report_max);
 	static_assert(table_fixed + members_max * table_row_size <= table_max);
@@ -88,6 +88,8 @@ namespace online_party_core
 		bool agreed = false; // flags bit 0: the sender's admission by the host's native/GCAP checks
 		std::string token, name;
 		std::vector<rtt_row> rtt;
+        std::uint16_t local_fps = linked_frame_rate_core::unknown_rate, measured_fps_x10 = 0;
+        linked_frame_rate_core::capacity capacity = linked_frame_rate_core::capacity::unknown;
 	};
 	struct table_row
 	{
@@ -156,6 +158,9 @@ namespace online_party_core
 			o.push_back(std::uint8_t(r.rtt[i].how));
 		}
 		detail::put16(o, hero_unknown);
+        detail::put16(o, r.local_fps);
+        detail::put16(o, r.measured_fps_x10);
+        o.push_back(std::uint8_t(r.capacity));
 		return o;
 	}
 	inline std::vector<std::uint8_t> encode(const table& t)
@@ -215,7 +220,7 @@ namespace online_party_core
 		at += name;
 		const std::size_t rows = d[at++];
 		if (rows > rtt_rows_max) return refusal::rtt;
-		if (at + rows * rtt_row_size + 2 != n) return refusal::size;
+		if (at + rows * rtt_row_size + 7 != n) return refusal::size;
 		for (std::size_t i = 0; i < rows; ++i, at += rtt_row_size)
 		{
 			rtt_row r;
@@ -228,6 +233,11 @@ namespace online_party_core
 			out.rtt.push_back(r);
 		}
 		if (detail::get16(d + at) != hero_unknown) return refusal::hero;
+        out.local_fps = detail::get16(d + at + 2);
+        out.measured_fps_x10 = detail::get16(d + at + 4);
+        if ((out.local_fps != linked_frame_rate_core::unknown_rate && out.local_fps != 0 && (out.local_fps < 10 || out.local_fps > 1000)) ||
+            out.measured_fps_x10 > 10000 || d[at + 6] > std::uint8_t(linked_frame_rate_core::capacity::slow)) return refusal::flags;
+        out.capacity = linked_frame_rate_core::capacity(d[at + 6]);
 		return refusal::none;
 	}
 	inline refusal parse(const std::uint8_t* d, std::size_t n, table& out)
@@ -413,6 +423,8 @@ namespace online_party_core
 		build stage = build::checking;
 		bool ready = false, ready_known = false;
 		std::string name; // native name when admitted, else the reported one (raw bytes; callers sanitize for display)
+        std::uint16_t local_fps = linked_frame_rate_core::unknown_rate, measured_fps_x10 = 0;
+        linked_frame_rate_core::capacity capacity = linked_frame_rate_core::capacity::unknown;
 	};
 
 	class model
@@ -600,6 +612,7 @@ namespace online_party_core
 				else if (m.facts.index >= 0) { c.now = phase::in_lobby; c.phase_known = true; }
 				else if (m.facts.tunnel) { c.now = phase::checking_build; c.phase_known = true; }
 				else { c.now = phase::connecting; c.phase_known = true; }
+                if (fresh) { c.local_fps = m.last.local_fps; c.measured_fps_x10 = m.last.measured_fps_x10; c.capacity = m.last.capacity; }
 				if (c.admitted && (c.now == phase::connecting || c.now == phase::checking_build || c.now == phase::left)) c.now = phase::in_lobby;
 				if (!c.admitted && m.facts.tunnel && c.now == phase::connecting) c.now = phase::checking_build;
 				// Local native readiness wins whenever it is known. A waiting guest

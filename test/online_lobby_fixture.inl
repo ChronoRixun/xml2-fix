@@ -22,6 +22,7 @@ bool host_role=true,image_present=true,image_success=true,admitted=true;
 int broadcasts=0,transfers=0,starts=0,kicks=0,leaves=0,announces=0,refreshes=0,activations=0,cleanups=0;
 bool last_ready=false;
 bool fixture_throw=false,fixture_bad_code=false;
+bool lobby_rate_facts=false,lobby_rate_slow=false;
 void* participant(unsigned id) {
     for(unsigned i=0;i<people_count;++i) if(participant_ids[i]==id) return lobby_people[i].data();
     return nullptr;
@@ -83,9 +84,13 @@ unsigned* dialog_object=dialog_vt.data();
 void* __cdecl dialog_getter() { return &dialog_object; }
 void __fastcall show_dialog(void*,void*,const char*,float,int) { calls.push_back("native-admission-error"); }
 bool lobby_fields_stub(online_menus::lobby_fixture& out) {
+    if(mode=="r4-lan-join") return false;
     if(fixture_throw) throw std::bad_alloc();
     std::strcpy(out.code,fixture_bad_code ? "BAD" : "ABCD-EFGH");out.count=3;
     out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};
+    if(lobby_rate_facts) for(auto& member:out.members) {
+        member.local_fps=60;member.session_fps=30;member.rate_capacity=lobby_rate_slow ? linked_frame_rate_core::capacity::slow : linked_frame_rate_core::capacity::unknown;
+    }
     if(mode.find("r7-")!=std::string::npos) {
         // Round 7 card facts (docs/online-party.md section 8): RTT provenance/route, build stage, phase, one pending member.
         out.members[0].ping_to_host=true;out.members[0].route=2;out.members[0].build=1;out.members[0].phase=6;
@@ -93,6 +98,10 @@ bool lobby_fields_stub(online_menus::lobby_fixture& out) {
         out.members[2].route=1;out.members[2].build=2;out.members[2].phase=2;
         std::strcpy(out.pending[0].name,"Remy\x01x");out.pending[0].phase=1;out.pending[0].build=0;out.pending[0].ping_ms=55;out.pending[0].route=1;
         out.pending_count=mode.find("r7-bounds")!=std::string::npos ? 4 : 1;
+        if(lobby_rate_facts) for(auto& pending:out.pending) {
+            pending.local_fps=60;pending.session_fps=30;
+            pending.rate_capacity=lobby_rate_slow ? linked_frame_rate_core::capacity::slow : linked_frame_rate_core::capacity::unknown;
+        }
         if(mode=="r4-r7-host-waiting-join") {
             std::strcpy(out.pending[0].name,"Host player");out.pending[0].host=true;
             out.pending[0].phase=7;out.pending[0].build=2;
@@ -663,7 +672,7 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
         const auto prior=activations;
         for(bool ready_missing:{false,true}) {
             people_count=3;setup_lobby(true);missing_list=!ready_missing;missing_ready_list=ready_missing;
-            activate(child.data(),nullptr,0);assert(activations==prior && calls.back()=="request:online");
+            activate(child.data(),nullptr,0);assert(activations==prior && calls.back()=="request:lc_online_unavailable");
             missing_list=missing_ready_list=false;
         }
         // A consumed native state 2 cannot authorize a later departure.
@@ -872,7 +881,7 @@ void tests() {
 }
 int __fastcall guest_footer_controller(void*,void*) { return 1; }
 void lobby_tests(const script_functions_rules::func_entry* registration) {
-    if(mode=="r4-r7-host-waiting-join") people_count=1;
+    if(mode=="r4-r7-host-waiting-join") { people_count=1;lobby_rate_facts=lobby_rate_slow=true; }
     const bool host=mode.find("join")==std::string::npos && mode!="r4-guest-footer";setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
     auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
@@ -880,6 +889,25 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     auto post=[&](intent action) {
         int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(reinterpret_cast<void*>(1));
     };
+    if(mode=="r4-lan-join") {
+        frame_rate::fixture_session=30;
+        auto* session=reinterpret_cast<unsigned char*>(0xa53058);
+        std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");
+        session[0x3dd]=4;session[0x3df]=1;session[0x3e0]=1;
+        activate(child.data(),nullptr,0);tick(child.data(),nullptr);
+        assert(texts["lc_room_name"]=="Synthetic host room" && texts["lc_room_visibility"]=="LAN");
+        assert(visibility["lc_code_label"] && visibility["lc_room_code"] && visibility["lc_copy_code"]);
+        assert(visibility["lc_p4_empty_help"] && !visibility["lc_p4_empty_title"]);
+        assert(texts["lc_p1_hero_fallback"]=="30 online" && visibility["lc_p1_measuring"]);
+        assert(texts["lc_p2_hero_fallback"]=="30 local / 30 online");
+        assert(texts["desctext3"].empty());
+        // A later code-bearing view restores controls and the sharing hint.
+        mode="r4-join";tick(child.data(),nullptr);
+        assert(!visibility["lc_code_label"] && !visibility["lc_room_code"] && !visibility["lc_copy_code"]);
+        assert(!visibility["lc_p4_empty_help"] && enabled_items["lc_copy_code"]);
+        std::cout<<"PASS LAN lobby: native title, no code or sharing hint, actual session rate, code controls restored\n";
+        return;
+    }
     if(mode.starts_with("r4-native-slots")) { native_slot_tests(host);return; }
     if(mode=="r4-retail-list" || mode=="r4-back-combos" || mode=="r4-unknown-kick" || mode=="r4-dismiss-invalid") {
         retail_list_review_tests(registration);return;
@@ -901,6 +929,8 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         assert(texts["lc_p2_name"]=="Host player" && texts["lc_p2_phase"]=="Playing");
         assert(visibility["lc_p2_ready"] && visibility["lc_p2_not_ready"]);
         assert(*reinterpret_cast<unsigned*>(0xa53058+0x278)==1);
+        std::cerr<<"pending rate field: "<<texts["lc_p2_hero_fallback"]<<" hidden="<<visibility["lc_p2_hero_fallback"]<<std::endl;
+        assert(texts["lc_p2_hero_fallback"]=="Cannot hold 30 fps" && !visibility["lc_p2_hero_fallback"]);
         std::cout<<"PASS late guest host card: authenticated room host shown, Playing, no fabricated ready/native record\n";return;
     }
 
@@ -910,8 +940,15 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");
     assert(texts["lc_room_code"]=="ABCD-EFGH" && texts["lc_ready_count"]=="2" && texts["lc_member_count"]=="3");
-    assert(texts["lc_waiting_name"]=="Alex" && !visibility["lc_ready_waiting"]);
+    assert(texts["lc_waiting_name"]=="Waiting for Alex to get ready." && visibility["lc_ready_waiting"]);
     assert(!visibility["lc_p3_hero_fallback"] && texts[host ? "lc_p2_ping" : "lc_p1_ping"]==(host ? "38" : "0"));
+    lobby_rate_facts=true;tick(child.data(),nullptr);
+    assert(texts["lc_p2_hero_fallback"]=="60 local / 30 online" && !visibility["lc_p2_hero_fallback"]);
+    lobby_rate_slow=true;tick(child.data(),nullptr);
+    assert(texts["lc_p2_hero_fallback"]=="Cannot hold 30 fps" && !visibility["lc_p2_hero_fallback"]);
+    lobby_rate_slow=false;lobby_rate_facts=false;tick(child.data(),nullptr);
+    assert(texts["lc_p2_hero_fallback"]=="Hero assigned at start" && !visibility["lc_p2_hero_fallback"]);
+    std::cout<<"PASS linked rate lobby: local/session fields, plain mismatch notice, stale facts cleared\n";
     const auto pool=*reinterpret_cast<unsigned*>(0x8abe20);
     auto row_text=reinterpret_cast<const char*(__fastcall*)(void*,void*,int)>(0x5bfcd0);
     auto row_value=reinterpret_cast<unsigned(__fastcall*)(void*,void*,int)>(0x5bfc20);
@@ -950,7 +987,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         assert(leave_label_native_writes>=1 && texts["text_leaveroom"].empty());
         // 060r live (failure 6): the guest header read "Room details pending" for the whole visit (no broker name to bind). The room is
         // the host's game: its name comes from the host's native row (the browser's default naming); the campaign line is authored text.
-        if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Online game"); // Other ways has no broker room.
+        if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Logan?n?'s game"); // native host row without a broker room.
         auto* session=reinterpret_cast<unsigned char*>(0xa53058);
         std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");session[0x3dd]=4;session[0x3df]=2;session[0x3e0]=1;
         put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400);session[0x3e1]=0;

@@ -515,12 +515,25 @@ void run_join_hold() {
     run_lost_newcomer_fixture(); // p060fix/AR: a newcomer lost between its admission and the shared start
 
     // ---- 7. The overlay's other paths: 16-bit back buffer (blend), multisampled (clear, viewport restored), refusals ----
+    {
+        const char* notice="Synthetic network notice with a participant name and a longer explanation. The active native message remains readable on a small display, in the normal aspect ratio and on a wide display.";
+        for(const auto size:{std::pair{320u,240u},std::pair{640u,360u},std::pair{1920u,1080u}}) {
+            const auto wrapped=hold_overlay::render(notice,size.first,size.second,true);
+            const auto single=hold_overlay::render(notice,size.first,size.second);
+            assert(wrapped.width<=size.first && wrapped.height>single.height && wrapped.height<=size.second);
+            assert(std::count(wrapped.text_mask.begin(),wrapped.text_mask.end(),std::uint8_t(1))>0);
+            const auto where=hold_overlay::place(wrapped,size.first,size.second);
+            assert(where.left>=0 && where.top>=0 && where.right<=LONG(size.first) && where.bottom<=LONG(size.second));
+        }
+        std::cout<<"PASS wrapped native network notices at small, widescreen and HD sizes\n";
+    }
     hold_overlay::release();
     {
         join_in_progress::hold_message="A player is joining...";join_in_progress::hold_message_logged=false;join_in_progress::hold_message_failed=false;
         auto* d16=fake_d3d8::make_device(320,240,d3d8::format_r5g6b5);
         d16->back->fill(0x2104);display::fixture_overlay(d16);
         const auto p=hold_overlay::render("A player is joining...",320,240);const auto r=hold_overlay::place(p,320,240);
+        assert(r.top>=120 && r.bottom<=240); // clear of the native zone-title band
         assert(d16->back->pixel(r.left,r.top)==hold_overlay::to16(0xff5a8cd8u,d3d8::format_r5g6b5) && d16->back->pixel(0,0)==0x2104 && d16->copies==2);
         hold_overlay::release();
         auto* ms=fake_d3d8::make_device(640,360,d3d8::format_x8r8g8b8,2);
@@ -528,6 +541,7 @@ void run_join_hold() {
         display::fixture_overlay(ms);
         HOLD_EXPECT(at,"join hold: message shown (\"A player is joining...\", clear path");
         const auto p2=hold_overlay::render("A player is joining...",640,360);const auto r2=hold_overlay::place(p2,640,360);
+        assert(r2.top>=180 && r2.bottom<=360); // same safe band on widescreen
         assert(ms->copies==0 && ms->clears>=3 && ms->back->pixel(r2.left,r2.top)==0xff5a8cd8u && ms->back->pixel(r2.left+int(p2.border)+1,r2.top+int(p2.border)+1)==0xff101830u);
         assert(ms->back->pixel(0,0)==hold_scene && std::memcmp(&ms->view,&before,sizeof before)==0); // the engine's viewport is back
         ms->render_target_is_back=false;at=observed_jip_logs.size();join_in_progress::hold_message_failed=false;

@@ -4,6 +4,8 @@
 #include "e4_core.hpp"
 #include "e4_core_sites.hpp"
 #include "join_in_progress.hpp"
+#include "frame_rate.hpp"
+#include "frame_rate_rules.hpp"
 #include "join_in_progress_core.hpp"
 #include "join_in_progress_rules.hpp"
 #include "game_version.hpp"
@@ -23,6 +25,7 @@
 #include "pad_prompts.hpp"
 #include "xml1_hook_transaction.hpp"
 #include "display.hpp"
+#include "online_menus.hpp"
 #include "hold_overlay.hpp"
 #include <algorithm>
 #include <atomic>
@@ -48,6 +51,28 @@ namespace join_in_progress
 		join_in_progress_core::restart_reset restart; // the canonical cohort restart (camera image, first-frame RNG epoch)
 		bool late_restart = false;         // this epoch restarts a running session for a late joiner (host: its own image; guests: the 0x47 marker)
 		bool late_restart_sending = false; // the host is inside native_campaign_start for a late joiner: the 0x47 carries the marker
+		join_in_progress_core::restart_execution execution;
+		join_in_progress_diagnostics::execution_capture* execution_log = nullptr;
+		bool execution_observer = false, execution_wrapper = false;
+		bool pause_guard = false; unsigned pause_guard_hits = 0; // AR6 (fable-ar6): [Online] RestartPauseGuard (Layer 3)
+		bool whole_inputs = false; // AR6 (fable-ar6): [Online] RestartEpochWholeInputs (Layers 1 + 2)
+		bool clock_step = false; unsigned clock_step_lines = 0; // AR7 (fable-ar7): [Online] SymmetricClockStep, default OFF (b2c review: the stock step is already symmetric); `jip step:` line count
+		bool canonical_step = false; // AR7 belt (FINDINGS 2.2): [Online] CanonicalClockStep, default OFF; every peer must agree
+		bool input_epoch = false; std::uint16_t input_epoch_nonce_sent = 0; join_in_progress_core::input_epoch_memory input_epoch_last; unsigned input_epoch_lines = 0; // AR8 (fable-ar8): [Online] RestartInputEpoch (sender); receivers always honour a marker; the nonce memory is forgotten at every all-blocks reset and at the session's end
+		// b2d-fix-jip: the restart-release barrier (join_in_progress_core::input_epoch_barrier) - armed at this PC's own ring
+		// resets while it sends markers; a peer's records before its marker are copied here (the decoder's record, 0x24 bytes,
+		// and the store's kind) and dropped at its marker or stored at the cap. `input_epoch_replaying` lets the replayed
+		// records through the store hook (the replay calls the hooked store entry).
+		struct input_epoch_held_record { std::uint8_t bytes[join_in_progress_core::input_epoch_record_bytes]; std::uint32_t kind; };
+		join_in_progress_core::input_epoch_barrier input_epoch_hold;
+		input_epoch_held_record input_epoch_held[4][join_in_progress_core::input_epoch_hold_records]{};
+		bool input_epoch_replaying = false; unsigned input_epoch_hold_lines = 0;
+		std::uint32_t layer2_zero_record[16] = {}; // AR6 Layer 2: the "previous" for an unresolvable delta (>= 0x28 bytes, 0x558c00 reads prev+0x27)
+		using execution_boundary = join_in_progress_diagnostics::boundary;
+		void execution_snapshot(execution_boundary, const std::uint32_t* saved = nullptr);
+		void execution_end(const char* reason); void execution_flush(const char* reason);
+		void execution_note_draw(const std::uint32_t* stack, bool visual);
+		join_in_progress_core::restart_wait execution_wait_state();
 		alignas(16) std::uint8_t camera_pristine[join_in_progress_rules::camera_bytes]{};
 		std::uint32_t camera_construct_return = 0;
 		void probe_period(std::uint16_t frame); // [Dev] LateJoinProbe: the checksum sample milestones (join_in_progress_residue.inl)
@@ -72,6 +97,11 @@ namespace join_in_progress
 		DWORD restart_entry_wait = 0; bool restart_entry_waiting = false;
 		// p060fix/AR2: the host's cohort sync waits for its own first shared frame when no newcomer is left in the restart
 		bool restart_frame0_seen = false, host_sync_wait_logged = false; DWORD host_sync_wait_since = 0;
+		// AR6 observer (fable/ar5-lost-newcomer): the native input rings and controller code masks at the restarted epoch's
+		// first gate passes (frames 0..3), and a bounded early flush of the AR5 execution log (frame-0 epoch, cohort sync,
+		// 5 s after frame 0) - the AR5 flush only ran at teardown, which a PDA Quit never reaches (live-b2a: no "jip
+		// execution" line in any run). Logging only; [Online] JoinDiagnostics=1 (execution_observer) turns it on.
+		unsigned ring_trace_budget = 0; DWORD ring_trace_frame0_at = 0; bool ring_trace_flushed = false;
         bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 		// AQ3 (join_in_progress_hold.inl): host and existing peers hold from the shared admission boundary to restart.
 		extern join_in_progress_core::join_hold hold; extern int mesh_newcomers;
@@ -165,6 +195,28 @@ namespace join_in_progress
 			}
 			return limits_rules::matches(actual, actor_ai::guard(g.va, expected, d));
 		}
+		// AS + online menus (int31): the menus relocate the record+0x40 accessor 0x6141e0 (5-byte JMP to
+		// online_menus::display_name_getter, which returns record+0x40 for every caller but two roster formatting reads).
+		// 0x607390's own call (0x6073e4's record+0x40) therefore still gets the native pointer, and mesh_pair_guard writes
+		// record+0x60 directly - so that exact JMP composes with the AS guard; any other bytes there refuse as before.
+		constexpr std::uint32_t mesh_pair_name_accessor = 0x6141e0;
+		bool display_name_composed(const std::uint8_t* site)
+		{
+			if (site[0] != 0xe9) return false;
+			std::int32_t rel = 0; std::memcpy(&rel, site + 1, 4);
+			return mesh_pair_name_accessor + 5u + std::uint32_t(rel) == std::uint32_t(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+		}
+		bool composed_display_name = false;
+		const join_in_progress_rules::guard* mesh_pair_composed_mismatch(const std::uint8_t* image)
+		{
+			composed_display_name = display_name_composed(image + mesh_pair_name_accessor - 0x400000);
+			for (const auto& g : mesh_pair_guards)
+			{
+				if (g.va == mesh_pair_name_accessor && composed_display_name) continue;
+				if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
+			}
+			return nullptr;
+		}
 		const join_in_progress_rules::guard* mismatch()
 		{
 			__try
@@ -179,6 +231,12 @@ namespace join_in_progress
 				}
 				if (probe_enabled) for (const auto& g : audit_probe_guards)
 					if (!limits_rules::matches(image + g.va - 0x400000, g.hex)) return &g;
+				if (const auto* g = execution_mismatch(image,execution_observer,execution_wrapper)) return g;
+				if (pause_guard) if (const auto* g = pause_guard_mismatch(image)) return g; // AR6 L3
+				if (whole_inputs) if (const auto* g = whole_input_mismatch(image)) return g; // AR6 L1/L2
+				if (clock_step || execution_observer || canonical_step) if (const auto* g = clock_step_mismatch(image)) return g; // AR7
+				if (const auto* g = input_epoch_mismatch(image)) return g; // AR8 (the receiver hook is always installed)
+				if (const auto* g = mesh_pair_composed_mismatch(image)) return g; // AS (always installed); composes with the online menus' 0x6141e0 JMP
 				return nullptr;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
@@ -389,8 +447,14 @@ namespace join_in_progress
 			// p060fix/AR: a newcomer the host decided lost is gone from this PC's session before anything of the restart
 			// runs (every peer restarts with the same participants), and no own-timeout removal is pending for one.
 			gns_transport::newcomers_restart_entry("this PC's restart entry");
+			if (execution_observer || execution_wrapper) {
+				execution_end("restart replacement");
+				execution.begin(late_restart);
+				if (execution_log) { execution_log->iteration = execution_log->worlds = execution_log->visual_count = 0; for (auto& f : execution_log->consumed) f = ~0u; }
+			}
 			restart_restored = restart_zone_back = false;
 			restart_frame0_seen = false; host_sync_wait_since = 0; host_sync_wait_logged = false; // p060fix/AR2: per restart
+			ring_trace_budget = 12; ring_trace_frame0_at = 0; ring_trace_flushed = false; // AR6 observer: per restart
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
 				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
 			admission.clear();
@@ -445,6 +509,7 @@ namespace join_in_progress
 				}
 			}
 			fn<native_load_t>(at<std::uint32_t>(at<void*>(game, 0), 0x20c))(game, buffer, full);
+			if (full == 2 && (execution_observer || execution_wrapper)) execution.image_returned();
 			if (epoch.active && epoch.started) restart_restored = true; // p060fix/AR
 		}
 
@@ -513,10 +578,72 @@ namespace join_in_progress
 				logger::write_once("jip:camera-restore-fault", "join in progress: the camera restore faulted - the cohort restart keeps the running camera");
 			}
 		}
+		// AR6 observer: one line per participant with its native input ring head (synchronizer 0x79fbb0 + index * 0x3184:
+		// read +0x3170, write +0x3174, next expected frame +0x317c, slots +0x268 + slot * 0x28 = {valid, delta kind, -, -,
+		// frame u16, +2, UI-code mask (controller cur, bit 0x13 = the pause code), axes, flags, action bits +0x14 ...}, the
+		// last resolved record at +0x3148 that a delta is decoded against), then one line with every controller's code
+		// masks (manager 0x79ebc0, objects at +0x3c + slot * 0x390: cur +0x2f8, prev +0x374; the pause query 0x5d4970 ->
+		// vt+0x18 (0x550b70) answers (cur ^ prev) & cur, i.e. a rising edge, and the menu manager (0x5dae69) opens the
+		// pause menu on bit 0x13 of that edge while no menu is up). At a gate pass the controllers still hold the previous
+		// frame's applied state and the read slot holds this frame's record. Reads only, SEH-guarded.
+		void ring_trace(const char* why, unsigned frame, bool force)
+		{
+			if (!force) { if (!ring_trace_budget) return; --ring_trace_budget; }
+			__try
+			{
+				void* s = session();
+				void* n = s ? first(s) : nullptr;
+				for (unsigned i = 0; n && i < 4; ++i, n = at<void*>(n, node_next))
+				{
+					const auto* r = at<const void*>(n, node_record);
+					const auto index = at<std::uint32_t>(r, record_index_at);
+					if (index >= 4) continue;
+					const auto* b = reinterpret_cast<const std::uint8_t*>(0x79fbb0u + index * gns_transport_rules::input_block_size);
+					const auto read = at<std::uint32_t>(b, gns_transport_rules::input_read), write = at<std::uint32_t>(b, gns_transport_rules::input_write);
+					const auto next = at<std::uint16_t>(b, gns_transport_rules::input_next);
+					char slots[4 * 56 + 1]; slots[0] = 0;
+					for (unsigned k = 0; k < 4; ++k)
+					{
+						const unsigned slot = (read < 300u ? read : 0u) + k;
+						const auto* rec = b + gns_transport_rules::input_records + (slot % 300u) * gns_transport_rules::input_record;
+						char one[56];
+						std::snprintf(one, sizeof one, " [%u:v%u k%02x f%u m%08x a%08x]", slot % 300u, unsigned(rec[0]), unsigned(rec[1]),
+							unsigned(at<std::uint16_t>(rec, 4)), at<std::uint32_t>(rec, 8), at<std::uint32_t>(rec, 0x14));
+						strncat_s(slots, sizeof slots, one, _TRUNCATE);
+					}
+					const auto* last = b + 0x3148;
+					logger::write("jip ring: %s frame=%u index=%u ctl=%d flags=%08x read=%u write=%u next=%u last[v%u k%02x f%u m%08x]%s",
+						why, frame, index, at<int>(r, record_controller_at), at<std::uint32_t>(r, record_flags), read, write, unsigned(next),
+						unsigned(last[0]), unsigned(last[1]), unsigned(at<std::uint16_t>(last, 4)), at<std::uint32_t>(last, 8), slots);
+				}
+				const auto* m = reinterpret_cast<const std::uint8_t*>(0x79ebc0);
+				if (at<std::uint32_t>(m, 0) == 0x69a134)
+				{
+					char ctl[4 * 48 + 1]; ctl[0] = 0;
+					for (unsigned k = 0; k < 4; ++k)
+					{
+						const auto* c = m + 0x3c + k * 0x390;
+						char one[48];
+						std::snprintf(one, sizeof one, " [%u: map%d dis%u cur%08x prev%08x]", k, at<int>(m, 4 + k * 4), unsigned(m[0x14 + k]),
+							at<std::uint32_t>(c, 0x2f8), at<std::uint32_t>(c, 0x374));
+						strncat_s(ctl, sizeof ctl, one, _TRUNCATE);
+					}
+					logger::write("jip ring: %s frame=%u controllers (edge = cur & ~prev; bit 0x13 = the pause code) menu_ctl=%d pause+6c=%u%s",
+						why, frame, at<int>(m, 0x34), unsigned(*reinterpret_cast<const std::uint8_t*>(0xa3e168 + 0x6c)), ctl);
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write("jip ring: %s frame=%u - a read faulted; nothing changed", why, frame); }
+		}
 		void __cdecl frame_gate_reseed()
 		{
+            frame_rate::shared_frame_started();
 			hold_playing = true; // AQ3: a running cohort, after initial/restart loading; its next area boundary exchanges decisions
 			probe_frame_camera(); // probe only; every gated frame
+			if (execution_observer && ring_trace_budget && (restart.armed || restart_frame0_seen))
+			{
+				const auto f = *reinterpret_cast<const std::uint16_t*>(native_frame);
+				if (f < 4) ring_trace("gate pass", f, false); // AR6 observer: frames 0..3 of a restart epoch
+			}
 			if (!restart.armed) return;
 			__try
 			{
@@ -527,6 +654,7 @@ namespace join_in_progress
 				// consumed and never ran; the joiner's `late_restart` had been cleared by `cohort synchronized` 245 ms before
 				// its frame 0, so its FPU step was skipped too - the epoch differed by role).
 				if (!restart.should_reseed(frame)) return;
+				execution_snapshot(execution_boundary::canonical_before);
 				restart_frame0_seen = true; // p060fix/AR2: the host's cohort sync may land now (the newcomer case's order)
 				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
 				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
@@ -545,7 +673,11 @@ namespace join_in_progress
 				probe_events("frame 0 before rebuild"); // probe only
 				canonical_event_queue("the first shared frame", restart_reset_enabled); // follow-up 7; follow-up 9: LAST in the epoch, on every peer
 				late_restart = false; // follow-up 9: the epoch ends the late restart on every peer (not `cohort synchronized`, which may land before frame 0)
+				execution.canonical();
+				execution_snapshot(execution_boundary::canonical_after);
 				logger::write("join in progress: canonical restart - the frame-0 epoch is complete on this peer (RNG epoch, canonical camera re-anchor, respawn release and full first sweep, moved state, ground re-probe, motion fields, AI move intent, periodic events by AI bit, queue rebuild %u); the late restart ends here", event_rebuilds);
+				ring_trace_frame0_at = GetTickCount() ? GetTickCount() : 1; // AR6 observer: the bounded early flush counts from here
+				if (execution_observer || execution_wrapper) execution_flush("frame-0 epoch"); // AR6: the AR5 log reaches the file before any PDA Quit
 				camera_lines(true);
 				hero_move_rearmed = false; for (auto& v : hero_last_valid) v = false; hero_lines_arm("the frame-0 epoch", 0); // AE15b
 				snapshot("frame 0 epoch");
@@ -620,6 +752,18 @@ namespace join_in_progress
 
 		void observe_epoch()
 		{
+			if (execution_observer || execution_wrapper) {
+				execution_wait_state(); // independent of epoch.active
+				if (execution.phase == join_in_progress_core::restart_execution_phase::off) execution_flush("generation teardown");
+				// AR6 observer: 5 s after this PC's frame-0 epoch, once per restart - the AR5 samples and the ring/controller
+				// state of a peer that is stuck on the native pause by then (the PDA Quit that ends such a run never flushes).
+				if (ring_trace_frame0_at && !ring_trace_flushed && GetTickCount() - ring_trace_frame0_at >= 5000)
+				{
+					ring_trace_flushed = true;
+					execution_flush("5 s after frame 0");
+					if (execution_observer) ring_trace("5 s after frame 0", *reinterpret_cast<const std::uint16_t*>(native_frame), true);
+				}
+			}
 			if (!epoch.active) return;
 			void* pause = fn<getter_t>(pause_getter)();
 			void* menus = *reinterpret_cast<void**>(0x8aff18);
@@ -664,6 +808,7 @@ namespace join_in_progress
 				if (join_in_progress_core::cohort_sync_clears_late_restart(restart.armed)) late_restart = false;
 				else logger::write("join in progress: cohort synchronized before the first shared frame; the canonical restart stays in effect until its frame-0 epoch");
 				logger::write("join in progress: cohort synchronized; checksum protection resumed");
+				if (execution_observer || execution_wrapper) execution_flush("cohort synchronized"); // AR6: early flush (teardown is never reached after a PDA Quit)
 				// The native slow-player guard (0x559190: per participant index, count/phase pairs at 0x79fb80, a drop at
 				// 900 slow input frames in phase 2) never resets them before it drops someone. A host that played alone,
 				// or a cohort that waited out the restore, carried counts into the restarted session and the host dropped
@@ -766,7 +911,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { admission.clear(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { execution_end("session end"); admission.clear(); input_epoch_last.forget(); input_epoch_hold.disarm(); restart_restored = restart_zone_back = false; restart_entry_waiting = false; gns_transport::newcomers_restart_entry("the session's end", true); hold_end(join_in_progress_core::join_hold::event::session); mesh_newcomers = 0; if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); camera_lines(false); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1782,6 +1927,384 @@ namespace join_in_progress
 			std::memcpy(out.data() + 1, &relative, 4);
 			return out;
 		}
+#include "join_in_progress_execution.inl"
+		// AR6 (fable-ar6): the pause-code guard at the controller apply 0x550fb0 (join_in_progress_core::applied_code_mask).
+		// The bridge runs before the stock prologue with the caller's arguments intact: [esp+4] index, [esp+8] = the record's
+		// code mask (ring slot + 8), [esp+0xc] floats. For a ring record of frame < pause_guard_frames whose mask has bit
+		// 0x13, the mask argument is redirected to a filtered copy (the stock code reads it exactly once, 0x550fc8, on the
+		// game thread); the ring slot keeps its bytes. Everything else passes through untouched.
+		std::uint32_t pause_guard_mask_copy = 0, pause_guard_resume = pause_guard_resume_at;
+		void __cdecl pause_guard_filter(std::uint32_t* args) // args[0] return address, [1] index, [2] &mask, [3] floats
+		{
+			const auto mask_at = static_cast<std::uintptr_t>(args[2]);
+			if (!join_in_progress_core::ring_record_mask(mask_at)) return;
+			const auto frame = *reinterpret_cast<const std::uint16_t*>(mask_at - 4);
+			const auto mask = *reinterpret_cast<const std::uint32_t*>(mask_at);
+			const auto filtered = join_in_progress_core::applied_code_mask(mask, frame);
+			if (filtered == mask) return;
+			pause_guard_mask_copy = filtered;
+			args[2] = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&pause_guard_mask_copy));
+			if (pause_guard_hits < 16) { ++pause_guard_hits; logger::write("join in progress: pause guard - the frame %u record of participant index %u carried UI code 0x13 (mask %08x); applied without it (the same on every peer; the ring slot is unchanged)", unsigned(frame), args[1], mask); }
+		}
+		// AR6 Layer 1 (fable-ar6): at 0x5597d2 (eax = pending count, ebx = local block). Force the full-record path while the
+		// next frame < whole_input_frames; else the stock decision. ecx is reloaded on both target paths, so it is free.
+		std::uint32_t whole_input_full_resume = whole_input_full, whole_input_delta_resume = whole_input_delta;
+		__declspec(naked) void whole_input_bridge() { __asm {
+			movzx ecx, word ptr [ebx+317ch]
+			cmp ecx, 20h
+			jb l1_full
+			cmp eax, 3
+			jge l1_delta
+		l1_full:
+			jmp dword ptr [whole_input_full_resume]
+		l1_delta:
+			jmp dword ptr [whole_input_delta_resume]
+		} }
+		// AR6 Layer 2 (fable-ar6): at 0x559660 (ebx = block, cl = [ebx+0x3148] valid byte, edi = the stored record). When
+		// there is no resolved previous record, point "prev" at the zero record so the stock resolve 0x558c00 (reached at
+		// 0x559668) fills the record's absent fields with zero instead of the decoder's uninitialised stack bytes.
+		std::uint32_t delta_zero_resume_at = delta_zero_resume;
+		__declspec(naked) void delta_zero_bridge() { __asm {
+			lea eax, [ebx+3148h]
+			test cl, cl
+			jnz l2_prev
+			lea eax, layer2_zero_record
+		l2_prev:
+			jmp dword ptr [delta_zero_resume_at]
+		} }
+		__declspec(naked) void pause_guard_bridge() { __asm {
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			lea eax, [ebp+24h]
+			push eax
+			call pause_guard_filter
+			add esp, 4
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			push ebx
+			mov ebx, ecx
+			mov eax, dword ptr [ebx+2f8h]
+			jmp dword ptr [pause_guard_resume]
+		} }
+		// AR7 (fable-ar7): the `jip step:` observer at the set-step site 0x559525 (JoinDiagnostics=1 only). CALL-shaped: the
+		// bridge runs with the run function's frame intact: args[0] = the return address 0x55952b, args[6] = the caller's
+		// [esp+0x14] = A, the frame's clock step (max over participants, float bits). One line per lockstep frame for frames
+		// 0..40 of every epoch: the applied step, the placeholder-mode byte (0x79fbb0 + 0xc68b) and every ring block's head
+		// record (index:frame:step word, bit 15 = the placeholder flag, carried on the wire). Reads only, SEH-guarded; the stock fld follows.
+		void __cdecl clock_step_note(std::uint32_t* args)
+		{
+			const std::uint32_t stock_a = args[6];
+			if (canonical_step) __try
+			{
+				// Belt: a live online session (the session singleton's vtable, its bound flag and its peer list; the same
+				// reads as the AR5 observer) gets 1/N whatever the records carry; offline A stays the stock value.
+				const auto* s = reinterpret_cast<const void*>(gns_transport_rules::session_static);
+				if (at<unsigned>(s, 0) == gns_transport_rules::session_vtable && at<std::uint8_t>(s, 0x420) && at<unsigned>(s, 0x278))
+				{
+					unsigned rate = frame_rate::session_rate();
+					if (!rate) rate = frame_rate_rules::stock_online_fps;
+					const float step = join_in_progress_core::canonical_clock_step(rate);
+					std::memcpy(&args[6], &step, 4);
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:belt-fault", "jip step: the canonical step's session read faulted; the stock step stays"); }
+			if (!execution_observer || clock_step_lines >= join_in_progress_core::step_observe_lines) return;
+			__try
+			{
+				const auto frame = *reinterpret_cast<const std::uint16_t*>(native_frame);
+				if (frame >= join_in_progress_core::step_observe_frames) return;
+				const auto manager = static_cast<std::uintptr_t>(0x79fbb0);
+				const auto mode = *reinterpret_cast<const std::uint8_t*>(manager + 0xc68b);
+				std::uint32_t read[4]{}, head_frame[4]{}, head_word[4]{};
+				for (unsigned i = 0; i < 4; ++i)
+				{
+					const auto block = manager + i * 0x3184u;
+					read[i] = *reinterpret_cast<const std::uint32_t*>(block + 0x3170);
+					if (read[i] >= 300u) continue;
+					const auto slot = block + 0x268u + read[i] * 0x28u;
+					head_frame[i] = *reinterpret_cast<const std::uint16_t*>(slot + 4);
+					head_word[i] = *reinterpret_cast<const std::uint16_t*>(slot + 6);
+				}
+				++clock_step_lines;
+				logger::write("jip step: frame=%u applied=%08x stock=%08x mode=%u heads=[0:%u:%04x:%u 1:%u:%04x:%u 2:%u:%04x:%u 3:%u:%04x:%u] reads=[%u %u %u %u]",
+					unsigned(frame), args[6], stock_a, unsigned(mode),
+					head_frame[0], head_word[0] & 0x7fffu, head_word[0] >> 15, head_frame[1], head_word[1] & 0x7fffu, head_word[1] >> 15,
+					head_frame[2], head_word[2] & 0x7fffu, head_word[2] >> 15, head_frame[3], head_word[3] & 0x7fffu, head_word[3] >> 15,
+					read[0], read[1], read[2], read[3]);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:step-fault", "jip step: a read faulted; the observer line is skipped"); }
+		}
+		__declspec(naked) void clock_step_bridge() { __asm {
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			lea eax, [ebp+24h]
+			push eax
+			call clock_step_note
+			add esp, 4
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			fld dword ptr ds:[680030h]
+			ret
+		} }
+		// AR8 (fable-ar8): the input-stream epoch marker (join_in_progress_core, "AR8"). Sender: after the native ring reset
+		// of the release (0x613f68 -> 0x559150) and after the start's send-enable (0x6140b3 -> 0x558850(1)), post
+		// input_epoch_copies marker records through the native lockstep-event path 0x55a370(index, code) - the same call the
+		// retail release event 0xfff31fff uses at 0x60c3e5 - then wipe this PC's own block (0x558740) so the markers hold no
+		// label in the sender's ring either. Only in a live online session; SEH-guarded; the native call always runs first.
+		void __cdecl input_epoch_post(const char* where)
+		{
+			// Every one of this PC's all-blocks ring resets zeroes the four received-record counters, so no marker seen before
+			// it can be a repeat of one seen after it: forget the nonces (b2c review finding 4). Runs whatever the key says.
+			input_epoch_last.forget();
+			input_epoch_hold.disarm(); // b2d-fix-jip: the blocks are empty again; whatever was held belonged to the epoch before
+			if (!input_epoch) return;
+			__try
+			{
+				const auto* s = reinterpret_cast<const void*>(gns_transport_rules::session_static);
+				if (at<unsigned>(s, 0) != gns_transport_rules::session_vtable || !at<std::uint8_t>(s, 0x420) || !at<unsigned>(s, 0x278)) return;
+				void* session_object = fn<getter_t>(session_getter)();
+				if (!session_object) return;
+				const int index = fn<int(__thiscall*)(void*)>(local_participant_index)(session_object);
+				if (index < 0 || index > 3) return;
+				input_epoch_hold.arm(index, GetTickCount()); // b2d-fix-jip: every other participant's records are held until its marker (or the cap)
+				void* synchronizer = fn<getter_t>(gns_transport_rules::input_sync)();
+				if (!synchronizer) return;
+				input_epoch_nonce_sent = join_in_progress_core::next_input_epoch_nonce(GetTickCount() ^ std::uint32_t(reinterpret_cast<std::uintptr_t>(&index) * 2654435761u), input_epoch_nonce_sent);
+				const std::uint32_t mark = join_in_progress_core::input_epoch_mark_for(input_epoch_nonce_sent);
+				auto* block = static_cast<std::uint8_t*>(synchronizer) + unsigned(index) * gns_transport_rules::input_block_size;
+				const auto sending = at<std::uint8_t>(synchronizer, 0xc689); // +0xc689: sending on (0x558850); off = produced into the ring only
+				for (unsigned i = 0; i < join_in_progress_core::input_epoch_copies; ++i)
+					fn<void(__thiscall*)(void*, std::uint32_t, std::uint32_t)>(input_post_event)(synchronizer, std::uint32_t(index), mark);
+				const auto written = at<std::uint32_t>(block, gns_transport_rules::input_write);
+				fn<void(__thiscall*)(void*)>(input_block_reset)(block);
+				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: this PC (participant index %d) begins input epoch %04x after its %s ring reset - %u of %u marker record(s) produced, %s; own block wiped again; every peer counts this PC's records from 0 at the marker",
+					index, unsigned(input_epoch_nonce_sent), where, written, join_in_progress_core::input_epoch_copies, !written ? "NONE sent (the native producer refused: controller lookup -1)" : sending ? "sent" : "NOT sent (sending off here; the start's marker follows)"); }
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:epoch-post-fault", "jip input epoch: the marker post faulted; this PC's stream carries no marker for this epoch"); }
+		}
+		void __cdecl input_epoch_post_release() { input_epoch_post("release's"); }
+		void __cdecl input_epoch_post_start() { input_epoch_post("start's"); }
+		std::uint32_t input_epoch_release_native = input_ring_reset_all, input_epoch_start_native = input_send_enable;
+		__declspec(naked) void input_epoch_release_bridge() { __asm {
+			push dword ptr [esp+4]
+			call dword ptr [input_epoch_release_native]
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			call input_epoch_post_release
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			ret 4
+		} }
+		__declspec(naked) void input_epoch_start_bridge() { __asm {
+			push dword ptr [esp+4]
+			call dword ptr [input_epoch_start_native]
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			call input_epoch_post_start
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			ret 4
+		} }
+		// Receiver: at the store's entry (args[0] return, [1] record = {label u16, step u16, mask u32, ...}, [2] index, [3] kind).
+		// The mask slot is read only for the kinds whose decode wrote it (0, 1, 3, 5: input_epoch_store_kind_has_mask); for
+		// the other delta kinds it is a stale stack slot that may still hold another peer's marker from the previous message
+		// (b2c review finding 2), so those records go straight to the native store. A marker resets that participant's block
+		// (stale records dropped, counter 0) and is not stored; a repeated nonce is dropped and gives the decoder's counter
+		// increment back. Returns 1 to skip the native store.
+		// b2d-fix-jip: while the barrier expects a participant's marker (from this PC's own ring reset, cap
+		// input_epoch_hold_cap_ms), every record of that participant that is not a marker - whatever its kind - is copied
+		// into input_epoch_held and skipped; its marker then drops the copies with the block reset, or the cap stores them in
+		// order through the store itself (input_epoch_replay). The decoder's label travels with the copy (single records:
+		// the block counter, which keeps counting while records are held; resent batch records: the wire label).
+		constexpr std::uintptr_t input_synchronizer = 0x79fbb0u; // the lockstep input manager (gns_transport_rules::input_sync returns it)
+		void input_epoch_replay(std::uint32_t index, const char* why, std::uint32_t age_ms)
+		{
+			const auto n = input_epoch_hold.take(index);
+			if (index > 3) return;
+			unsigned stored = 0;
+			input_epoch_replaying = true;
+			__try
+			{
+				for (unsigned i = 0; i < n && i < join_in_progress_core::input_epoch_hold_records; ++i, ++stored)
+					fn<void(__thiscall*)(void*, const void*, std::uint32_t, std::uint32_t)>(input_epoch_store_site)(reinterpret_cast<void*>(input_synchronizer), input_epoch_held[index][i].bytes, index, input_epoch_held[index][i].kind);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:epoch-replay-fault", "jip input epoch: storing the held records faulted - the rest of them are dropped"); }
+			input_epoch_replaying = false;
+			if (input_epoch_hold_lines < 64) { ++input_epoch_hold_lines; logger::write("jip input epoch: participant index %u sent no epoch marker %s (%u ms after this PC's ring reset) - its %u held record(s) stored in the order they came (the stock labelling for this epoch; a marker from it now would be late)",
+				index, why, age_ms, stored); }
+		}
+		int __cdecl input_epoch_store_filter(std::uint32_t* args)
+		{
+			__try
+			{
+				if (input_epoch_replaying) return 0;
+				const auto* record = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(args[1]));
+				if (!record) return 0;
+				const auto kind = args[3], index = args[2];
+				const bool has_mask = join_in_progress_core::input_epoch_store_kind_has_mask(kind);
+				const auto mask = has_mask ? at<std::uint32_t>(record, 4) : 0u;
+				if (!has_mask || !join_in_progress_core::input_epoch_mark(mask))
+				{
+					// b2d-fix-jip: not a marker - held while this participant's marker is expected.
+					if (index > 3 || !input_epoch_hold.expecting[index]) return 0;
+					const auto now = GetTickCount();
+					const auto h = input_epoch_hold.record(index, now);
+					if (h == join_in_progress_core::input_epoch_hold::hold)
+					{
+						auto& slot = input_epoch_held[index][input_epoch_hold.held[index] - 1];
+						std::memcpy(slot.bytes, record, sizeof slot.bytes);
+						slot.kind = kind;
+						if (input_epoch_hold.held[index] == 1 && input_epoch_hold_lines < 64) { ++input_epoch_hold_lines; logger::write("jip input epoch: participant index %u's record(s) arrive before its epoch marker (store kind %u, decoder label %u, %u ms after this PC's ring reset) - held, not stored: dropped at its marker, stored as they came at the cap (%u ms)",
+							index, unsigned(kind), unsigned(at<std::uint16_t>(record, 0)), now - input_epoch_hold.armed_at, join_in_progress_core::input_epoch_hold_cap_ms); }
+						return 1;
+					}
+					if (h == join_in_progress_core::input_epoch_hold::flush)
+						input_epoch_replay(index, now - input_epoch_hold.armed_at >= join_in_progress_core::input_epoch_hold_cap_ms ? "within the cap" : "before the hold filled", now - input_epoch_hold.armed_at);
+					return 0;
+				}
+				if (index > 3) return 1;
+				auto* block = reinterpret_cast<std::uint8_t*>(input_synchronizer + index * gns_transport_rules::input_block_size);
+				auto* counter = reinterpret_cast<std::uint16_t*>(block + input_block_counter);
+				const auto read = at<std::uint32_t>(block, gns_transport_rules::input_read), write = at<std::uint32_t>(block, gns_transport_rules::input_write);
+				const auto next = at<std::uint16_t>(block, gns_transport_rules::input_next), counted = *counter;
+				const auto action = join_in_progress_core::input_epoch_store_action(kind, mask, input_epoch_last.last[index], read);
+				if (action == join_in_progress_core::input_epoch_action::ignore) { *counter = join_in_progress_core::input_epoch_counter_after_ignore(*counter); return 1; }
+				input_epoch_last.last[index] = join_in_progress_core::input_epoch_nonce(mask);
+				const auto dropped = input_epoch_hold.marker(index); // b2d-fix-jip: the expectation ends either way; held copies go
+				if (action == join_in_progress_core::input_epoch_action::late)
+				{
+					// b2c-fix-crash (live-b2c X-2c): this PC already consumed record(s) of this block in this epoch; a reset now
+					// would misalign every later frame. Stock labelling keeps for the epoch; the nonce is remembered.
+					*counter = join_in_progress_core::input_epoch_counter_after_ignore(*counter);
+					if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u's epoch %04x marker (store kind %u) arrived late - this PC has already consumed from its block (read %u write %u next %u counter %u) - IGNORED: the block keeps its records and labels (the stock labelling for this epoch), the marker's copy is a repeat",
+						index, unsigned(input_epoch_last.last[index]), unsigned(kind), read, write, unsigned(next), unsigned(counted)); }
+					return 1;
+				}
+				fn<void(__thiscall*)(void*)>(input_block_reset)(block);
+				if (input_epoch_lines < 64) { ++input_epoch_lines; logger::write("jip input epoch: participant index %u begins input epoch %04x (store kind %u) - its block reset here (read %u write %u next %u counter %u: %u stale record(s) dropped); its records are counted from 0 again (%u held pre-marker record(s) dropped)",
+					index, unsigned(input_epoch_last.last[index]), unsigned(kind), read, write, unsigned(next), unsigned(counted), join_in_progress_core::input_ring_pending(read, write), dropped); }
+				return 1;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+		}
+		// AS (b2c-fix-crash, live-b2c X-4p): the 0x23 mesh-pair report 0x607390(adding, sender) with a seat whose record is
+		// gone (join_in_progress_core::mesh_pair_decide; join_in_progress_rules mesh_pair_*). Called by the bridge with the
+		// manager (ecx at the entry) and the two stack arguments; returns 1 when the stock function must run (both
+		// records exist), 0 when the fix has done the stock function's work for the record(s) that exist.
+		unsigned mesh_pair_partial_lines = 0;
+		int __cdecl mesh_pair_guard(void* m, std::uint32_t a, std::uint32_t b)
+		{
+			__try
+			{
+				void* s = session();
+				using by_index_t = void*(__thiscall*)(void*, std::int32_t);
+				void* ra = s ? fn<by_index_t>(record_by_index)(s, std::int32_t(a)) : nullptr;
+				void* rb = s ? fn<by_index_t>(record_by_index)(s, std::int32_t(b)) : nullptr;
+				const auto d = join_in_progress_core::mesh_pair_decide(ra != nullptr, rb != nullptr);
+				if (d == join_in_progress_core::mesh_pair_report::stock) return 1;
+				const auto mask = join_in_progress_core::mesh_pair_mask(a, b);
+				const auto pending = m ? at<std::uint32_t>(m, mesh_pair_manager_pending) : 0u;
+				if (ra) at<std::uint32_t>(ra, record_mesh_pending) &= ~mask; // [record+0x40+0x20] &= ~mask, as 0x6073e4/0x6073f0
+				if (rb) at<std::uint32_t>(rb, record_mesh_pending) &= ~mask;
+				bool ended = false;
+				if (m && pending == mask) // 0x6073f3..0x60741c: the awaited pair is done
+				{
+					at<std::uint32_t>(m, mesh_pair_manager_pending) = 0;
+					at<std::uint32_t>(m, mesh_pair_manager_retries) = 0;
+					void* clock = fn<getter_t>(clock_getter)();
+					const auto now = (*reinterpret_cast<float(__thiscall***)(void*, int)>(clock))[clock_time_slot / 4](clock, 0);
+					at<float>(m, mesh_pair_manager_settle) = now + 1.0f;
+					ended = true;
+				}
+				if (++mesh_pair_partial_lines <= 16 || mesh_pair_partial_lines % 100 == 0)
+					logger::write("online: 0x23 mesh report names participant %u and %u but only %s has a record here (the other seat was removed: a newcomer lost before the restart, or no bit in the payload) - stock would read null+0x60 (the 4-player host crash at 0x6073e4); the pair's bits cleared on the record(s) left%s (%u so far)",
+						unsigned(a), unsigned(b), ra ? "the first" : rb ? "the second" : "neither", ended ? "; the manager's wait for exactly this pair ended (settle 1.0 s as stock)" : pending ? " (the manager waits for another pair)" : "", mesh_pair_partial_lines);
+				return 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				logger::write_once("jip:mesh-pair-fault", "online: the 0x23 mesh report guard faulted - the report is dropped");
+				return 0;
+			}
+		}
+		const std::uint32_t mesh_pair_resume_at = mesh_pair_resume;
+		// At 0x607390 (thiscall manager; [esp+4] = adding, [esp+8] = sender; ret 8). The 5 displaced bytes are re-executed
+		// before the resume when both records exist.
+		__declspec(naked) void mesh_pair_bridge() { __asm {
+			pushfd
+			pushad                       // [ebp+0x1c] eax, [ebp+0x20] flags, [ebp+0x24] return, [ebp+0x28] adding, [ebp+0x2c] sender
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			push dword ptr [ebp+2ch] // sender
+			push dword ptr [ebp+28h] // adding
+			push ecx                 // manager
+			call mesh_pair_guard
+			add esp, 0ch
+			mov dword ptr [ebp+1ch], eax // pushad's eax slot
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			test eax, eax
+			jz l_done
+			push ebx
+			mov ebx, dword ptr [esp+8]
+			jmp dword ptr [mesh_pair_resume_at]
+		l_done:
+			ret 8
+		} }
+		std::uint32_t input_epoch_store_resume_at = input_epoch_store_resume;
+		__declspec(naked) void input_epoch_store_bridge() { __asm {
+			pushfd
+			pushad
+			mov ebp, esp
+			sub esp, 210h
+			and esp, 0fffffff0h
+			fxsave [esp]
+			lea eax, [ebp+24h]
+			push eax
+			call input_epoch_store_filter
+			add esp, 4
+			mov dword ptr [ebp+1ch], eax
+			fxrstor [esp]
+			mov esp, ebp
+			popad
+			popfd
+			test eax, eax
+			jnz l8_skip
+			push ecx
+			mov eax, dword ptr [esp+0ch]
+			imul eax, eax, 3184h
+			jmp dword ptr [input_epoch_store_resume_at]
+		l8_skip:
+			ret 0ch
+		} }
 	}
 
 	void note_party_change()
@@ -1799,6 +2322,15 @@ namespace join_in_progress
 		trace = ini::flag(L"Dev", L"JoinInProgressTrace", false);
 		allow_late_join = ini::flag(L"Online", L"LateJoin", false);
 		restart_reset_enabled = ini::flag(L"Dev", L"LateJoinRestartReset", true);
+		execution_observer = ini::flag(L"Online", L"JoinDiagnostics", false);
+		execution_wrapper = ini::flag(L"Online", L"JoinStallWrapper", false);
+		pause_guard = ini::flag(L"Online", L"RestartPauseGuard", true); // AR6 Layer 3: default ON; every peer must agree (see the install line)
+		whole_inputs = ini::flag(L"Online", L"RestartEpochWholeInputs", true); // AR6 Layers 1 + 2: default ON
+		clock_step = ini::flag(L"Online", L"SymmetricClockStep", false); // AR7 / b2c review: default OFF - the stock step is already symmetric (the step word travels with bit 15); ON only paces a load stall faster; every peer must agree
+		canonical_step = ini::flag(L"Online", L"CanonicalClockStep", false); // AR7 belt: default OFF (FINDINGS 2.2); every peer must agree
+		input_epoch = ini::flag(L"Online", L"RestartInputEpoch", true); // AR8: default ON (fable-ar8 live: X8-2a/2c/2a2 recovered, LJ/2e/2P/2f no regression); the receiver side is always on
+		if (execution_observer) execution_log = new (std::nothrow) join_in_progress_diagnostics::execution_capture();
+		if (execution_observer && !execution_log) { logger::write("join in progress: JoinDiagnostics allocation failed - observer disabled"); execution_observer = false; }
 		probe_enabled = ini::flag(L"Dev", L"LateJoinProbe", false);
 		if (probe_enabled)
 		{
@@ -1858,6 +2390,9 @@ namespace join_in_progress
 				unsigned(event_manager_pump_slot), probe_at<std::uint32_t>(event_manager_pump_slot), unsigned(event_manager_pump), xml1_turrets::installed_process_hook());
 			return;
 		}
+		if (composed_display_name)
+			logger::write("online: JoinInProgress composes with the online menus' record+0x40 accessor relocation at 0x%06X (JMP -> %08x: native pointer for every caller but the two roster name reads); the AS mesh-pair guard writes record+0x60 directly",
+				unsigned(mesh_pair_name_accessor), unsigned(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter())));
 		if (const auto hook = xml1_turrets::installed_process_hook())
 			logger::write("online: JoinInProgress composes with the xml1 turrets scheduler dispatch hook at the timed-event manager's pump slot (%08x); the canonical queue rebuild never calls the pump (retail alloc/store/push only)", hook);
 		if (const auto& detour = actor_pools::installed_controller_reset(); detour.size() >= 5 && detour[0] == 0xe9 && actor_ai::installed().stage == 1 && !e4_core::installed())
@@ -1923,13 +2458,14 @@ namespace join_in_progress
 				writes.push_back({camera_construct_call, bytes(camera_construct_original), rel(0xe8, camera_construct_call, reinterpret_cast<const void*>(&camera_construct_bridge), 5)});
 			else
 				logger::write("join in progress: the camera singleton was constructed before the fix installed - cohort restarts keep the running camera");
-			writes.push_back({frame_gate_run_call, bytes(frame_gate_run_original), rel(0xe8, frame_gate_run_call, reinterpret_cast<const void*>(&frame_gate_run_bridge), 5)});
+			writes.push_back({frame_gate_run_call, bytes(frame_gate_run_original), rel(0xe8, frame_gate_run_call,
+				execution_observer || execution_wrapper ? reinterpret_cast<const void*>(&execution_gate_run_bridge) : reinterpret_cast<const void*>(&frame_gate_run_bridge), 5)});
 			writes.push_back({prepare_opcode_site, bytes(prepare_opcode_original), rel(0xe9, prepare_opcode_site, reinterpret_cast<const void*>(&prepare_opcode_bridge), 5)});
 			// P1/P2: the zone-load epochs (CALL replacements of argument-less getters); P3: the draw entry (JMP) only with the probe.
 			writes.push_back({zone_load_entry_call, bytes(zone_load_entry_original), rel(0xe8, zone_load_entry_call, reinterpret_cast<const void*>(&zone_load_entry_bridge), 5)});
 			writes.push_back({zone_start_entry_call, bytes(zone_start_entry_original), rel(0xe8, zone_start_entry_call, reinterpret_cast<const void*>(&zone_start_entry_bridge), 5)});
 			writes.push_back({zone_load_zone_entry_call, bytes(zone_load_zone_entry_original), rel(0xe8, zone_load_zone_entry_call, reinterpret_cast<const void*>(&zone_load_zone_entry_bridge), 5)});
-			if (probe_enabled) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
+			if (probe_enabled || execution_observer) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
 			// Follow-up 3: the zone-start camera anchor (CALL replacement of the 5-byte table load).
 			writes.push_back({camera_anchor_table_load, bytes(camera_anchor_table_original), rel(0xe8, camera_anchor_table_load, reinterpret_cast<const void*>(&camera_anchor_table_bridge), 5)});
 			// Follow-up 5: the game update's CSmartEntMgr getter call (CALL replacement; the site's return address stays) and,
@@ -1959,10 +2495,38 @@ namespace join_in_progress
 			// p060fix/AQ2: the hold's message is drawn by the fix before every Present (display::install follows).
 			display::set_overlay(&hold_overlay_draw);
 		}
+		execution_add_patches(writes);
+		if (pause_guard) writes.push_back({pause_guard_site, bytes(pause_guard_original), rel(0xe9, pause_guard_site, reinterpret_cast<const void*>(&pause_guard_bridge), pause_guard_original.size())}); // AR6 L3
+		if (whole_inputs) { // AR6 L1 + L2
+			writes.push_back({whole_input_site, bytes(whole_input_original), rel(0xe9, whole_input_site, reinterpret_cast<const void*>(&whole_input_bridge), whole_input_original.size())});
+			writes.push_back({delta_zero_site, bytes(delta_zero_original), rel(0xe9, delta_zero_site, reinterpret_cast<const void*>(&delta_zero_bridge), delta_zero_original.size())});
+		}
+		if (clock_step) writes.push_back({clock_step_site, bytes(clock_step_original), bytes(clock_step_patch)}); // AR7: in-place, no bridge
+		if (execution_observer || canonical_step) writes.push_back({clock_step_observe_site, bytes(clock_step_observe_original), rel(0xe8, clock_step_observe_site, reinterpret_cast<const void*>(&clock_step_bridge), clock_step_observe_original.size())});
+		writes.push_back({input_epoch_store_site, bytes(input_epoch_store_original), rel(0xe9, input_epoch_store_site, reinterpret_cast<const void*>(&input_epoch_store_bridge), input_epoch_store_original.size())}); // AR8 receiver (always)
+		{ // AR8 sender sites, always installed: the native call runs first, the marker post is gated by the key, the nonce memory's forget is not (b2c review finding 4)
+			writes.push_back({input_epoch_release_call, bytes(input_epoch_release_original), rel(0xe8, input_epoch_release_call, reinterpret_cast<const void*>(&input_epoch_release_bridge), 5)});
+			writes.push_back({input_epoch_start_call, bytes(input_epoch_start_original), rel(0xe8, input_epoch_start_call, reinterpret_cast<const void*>(&input_epoch_start_bridge), 5)});
+		}
+		writes.push_back({mesh_pair_site, bytes(mesh_pair_original), rel(0xe9, mesh_pair_site, reinterpret_cast<const void*>(&mesh_pair_bridge), mesh_pair_original.size())}); // AS: 0x23 mesh-pair report with a removed seat (always)
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
+			logger::write("join in progress: AS 0x23 mesh-pair guard at 0x%06X - a mesh report that names a seat without a participant record (removed before the restart) no longer reads null+0x60 (live-b2c X-4p host crash); the pair's bits are cleared on the record(s) left and the manager's wait for that pair ends as stock would", unsigned(mesh_pair_site));
+			if (input_epoch) logger::write("join in progress: AR8 input epoch marker ON ([Online] RestartInputEpoch=1) - after each ring reset of a cohort restart (the release 0x613f68 and the start 0x6140b3) this PC posts %u marker record(s) (mask 0xfffa|nonce) ahead of its first real record, so every peer counts its records from 0 at the marker instead of from a stale pre-reset record (the one-label-late guest stream of fable-ar7 X7-2a); markers are honoured by every peer of this build", join_in_progress_core::input_epoch_copies);
+			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));
+			if (input_epoch) logger::write("join in progress: restart-release barrier ON (with RestartInputEpoch) - after each of this PC's ring resets a peer's records are held until its epoch marker (dropped there: pre-restart records) or for %u ms (then stored as they came); every peer counts a peer's records from the same record (live-b2d N-LATE4 / N-2c-LATE)", join_in_progress_core::input_epoch_hold_cap_ms);
+			if (clock_step) logger::write("join in progress: AR7 clock step patch ON ([Online] SymmetricClockStep=1, an opt-in experiment) at 0x%06X - a placeholder record counts its measured frame time (up to 1.0 s) instead of the stock 0.025 s on every peer, so game time runs ahead through a load stall; every peer of a session must use the same setting (the clock step is part of the lockstep)", unsigned(clock_step_site));
+			else logger::write("join in progress: AR7 clock step patch OFF (default; [Online] SymmetricClockStep=0) - the stock rule is already the same on every peer (the step word travels with its placeholder bit), a placeholder record counts 0.025 s everywhere");
+			if (execution_observer) logger::write("join in progress: AR7 `jip step:` observer at 0x%06X for frames 0..%u of every epoch (JoinDiagnostics=1)", unsigned(clock_step_observe_site), join_in_progress_core::step_observe_frames - 1);
+			if (canonical_step) logger::write("join in progress: AR7 canonical clock step ON ([Online] CanonicalClockStep=1) at 0x%06X - every lockstep frame of a live online session steps the clock by 1/N (N = the session's agreed tick; the host's linked rate, else %u) whatever the records carry; every peer of a session must use the same setting", unsigned(clock_step_observe_site), frame_rate_rules::stock_online_fps);
+			if (pause_guard) logger::write("join in progress: AR6 pause guard installed at the controller apply 0x550fb0 - a lockstep record of frame < %u is applied without UI code 0x13 (the pause code) on every peer; [Online] RestartPauseGuard=0 turns it off (every peer of a session must use the same setting: the applied inputs are part of the lockstep)", join_in_progress_core::pause_guard_frames);
+			else logger::write("join in progress: AR6 pause guard OFF ([Online] RestartPauseGuard=0) - a stray frame-0 pause code can hold one peer on the native online pause");
+			if (whole_inputs) logger::write("join in progress: AR6 whole-input fix installed - the sender keeps the first %u frames after a ring reset FULL (0x5597d2) and the receiver resolves an unresolvable delta against zero (0x559660), so a late-resetting peer decodes the real inputs rather than stack garbage; [Online] RestartEpochWholeInputs=0 turns it off (a full record is the stock wire format, so a stock peer is unaffected; the beta.2 build gates cross-build joins)", join_in_progress_core::whole_input_frames);
+			else logger::write("join in progress: AR6 whole-input fix OFF ([Online] RestartEpochWholeInputs=0) - a late-resetting peer can decode a first delta against no previous record");
 			if (composed_receiver) entity_transfer::observe_prepare(&campaign_notice);
 			state = 1;
+			if (execution_observer || execution_wrapper) logger::write("join in progress: AR5 JoinDiagnostics=%u JoinStallWrapper=%u (both default OFF); bounded observer; guarded render-tail subset at 0x4021b7, native prefix retained; live deterministic recovery unproven",
+				unsigned(execution_observer), unsigned(execution_wrapper));
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
@@ -2130,6 +2694,7 @@ namespace join_in_progress
 		return true;
 	}
 	bool bringing_in() { return installed() && (machine.holding() || epoch.active); }
+	const char* hold_overlay_text() { return hold_message; }
 	bool can_service() { return bringing_in() && !deferred_start_running && !zone_load_pending(); }
 	bool pending_player(const void* record) { return installed() && machine.pending(record); }
 	// p060fix/AR (gns_transport.cpp host_newcomer_decision / carry_decisions / vanished_links)

@@ -433,7 +433,7 @@ namespace
 		    script_functions::requested_by_key() || online_menus::requested())
 		{
 			const auto mold = mold_controller::capability();
-			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
+			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision_for(mold_controller::requested()), mold.values, mold.verified);
 			const auto turrets = xml1_turrets::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 			const auto functions = script_functions::capability();
@@ -572,12 +572,13 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::model_pools_id, model_pools_rules::agreement_revision,
 				model_pools::agreement_values(), model_pools::verified());
 		// [Online] TickRate: the online frame's 1/30 s as 1/60 s (docs/online-tick-rate.md). Before the exe's code runs.
-		// Rule 29 (TickRate) carries the rate in effect whenever the key is there: lockstep runs every PC's frames
-		// together, so a 60 and a 30 PC refuse each other by name; absent = the game's 30 and the released record.
+		// Rule 29 revision 2 agrees on host-owned session pacing support, not a guest's
+        // local rate. Numeric settings arrive before admission in the roster/native
+        // handshake. A refused timer patch closes admission instead of mixing rates.
 		online_tick::install(game);
 		if (online_tick::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::tick_rate_id, frame_rate_rules::tick_rate_revision,
-				online_tick::agreement_values(), true);
+			gameplay_agreement::register_rule(gameplay_capabilities::tick_rate_id, online_tick::revision(),
+				online_tick::agreement_values(), online_tick::verified());
 		geometry_sharing::install(game);
 		ladder_paths::install(game);
 		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and

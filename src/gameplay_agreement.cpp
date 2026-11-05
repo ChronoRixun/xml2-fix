@@ -3,6 +3,8 @@
 #include "game_version.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include "frame_rate.hpp"
+#include "online_tick.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -175,6 +177,7 @@ namespace gameplay_agreement
   }
   int fail_local(event e,bool joining,refusal why)
   {
+   if(joining)frame_rate::clear_session_rate();
    disconnect_peer(e.sender);
    if(joining && failure_ready && e.context){e.type=rejection_opcode;return reinterpret_cast<callback>(native_failure)(&e);}
    if(joining){dialog(false);return 0;}
@@ -213,16 +216,83 @@ namespace gameplay_agreement
   // games table (0x608c20/0x608d60, status 6). An incompatible host is not filed: this PC sees the native
   // dialog, as before, and the host is told why with 0x1d (it takes that from a queried peer, see
   // host_rejection_flags). The browser has no pending join or session to clean up.
+  // Retail 0x6090d0 allocates at 0x609122 and appends at 0x6091d3 on EVERY reply.
+  // Repeated LAN broadcasts/direct queries therefore list the same endpoint twice.
+  // Refresh the current table's existing row; never cache across a search/leave.
+  // Key = the proven reply source IPv4 + game port, not the untrusted advertised name.
+  // Return 0 for a new endpoint, 1 for an updated row, -1 for a malformed table.
+  int refresh_discovery(void* raw)
+  {
+   __try {
+    const auto& e=*static_cast<const event*>(raw);
+    if(!e.context || !e.sender || !e.body || e.length<request_size)return -1;
+    auto* campaign=static_cast<std::uint8_t*>(e.context);
+    const auto count=*reinterpret_cast<const unsigned*>(campaign+0x2214);
+    if(count>100)return -1;
+    if(!count)return 0;
+    using address=const std::uint8_t*(__thiscall*)(void*);
+    using port=std::uint16_t(__thiscall*)(void*);
+    const auto* source=reinterpret_cast<address>(native_address)(e.sender);
+    const auto source_port=reinterpret_cast<port>(native_port)(e.sender);
+    if(!source || !source_port)return -1;
+    auto* node=*reinterpret_cast<std::uint8_t**>(campaign+0x2208);
+    std::array<bool,100> seen{};std::uint8_t* match=nullptr;
+    for(unsigned i=0;i<count;++i) {
+     if(!node)return -1;
+     auto* row=*reinterpret_cast<std::uint8_t**>(node+0x10);
+     const auto offset=reinterpret_cast<std::uintptr_t>(row)-reinterpret_cast<std::uintptr_t>(campaign+0x5b4);
+     if(offset>=100*0x44 || offset%0x44 || seen[offset/0x44])return -1;
+     seen[offset/0x44]=true;
+     if(std::memcmp(row+8,source+8,4)==0 && *reinterpret_cast<const std::uint16_t*>(row+0xc)==source_port) {
+      if(match)return -1;
+      match=row;
+     }
+     node=*reinterpret_cast<std::uint8_t**>(node+8);
+    }
+    if(node)return -1;
+    if(!match)return 0;
+    using getter=const std::uint8_t*(__cdecl*)();
+    const auto* version=reinterpret_cast<getter>(0x612be0)()+0x410;
+    const auto* body=static_cast<const std::uint8_t*>(e.body);
+    if(!std::memchr(body+0x3e,0,6) || !std::memchr(version,0,6))return -1;
+    std::array<std::uint8_t,14> endpoint{};std::memcpy(endpoint.data(),match,endpoint.size());
+    // Same 0x44-byte copy as retail 0x615760; retain its canonical source endpoint.
+    std::memcpy(match,body,0x44);std::memcpy(match,endpoint.data(),endpoint.size());
+    match[0x11]=std::strcmp(reinterpret_cast<const char*>(body+0x3e),reinterpret_cast<const char*>(version))==0;
+    using status=void(__cdecl*)(int,void*,void*);
+    const auto callback=*reinterpret_cast<status*>(campaign+0x2298);
+    if(callback)callback(6,*reinterpret_cast<void**>(campaign+0x229c),match);
+    return 1;
+   } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
+  }
   enum class endpoint { host,joiner,browser };
   int receive(void* raw,std::size_t base,std::uint32_t native,endpoint role,std::uint8_t opcode)
   {
    std::array<std::uint8_t,receive_room> bytes{};std::size_t size=0;gameplay_capabilities::difference diff{};
-   const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size},&diff) : gameplay_capabilities::result::malformed;
+   const bool extracted=extract(raw,base,bytes,size);
+   unsigned session_fps=0;
+   const bool settings_ok=!online_tick::linked() || (size>=gameplay_capabilities::record_size+linked_frame_rate_core::settings_size &&
+       linked_frame_rate_core::decode(bytes.data()+size-linked_frame_rate_core::settings_size,linked_frame_rate_core::settings_size,session_fps));
+   const auto record_size=online_tick::linked() && settings_ok ? size-linked_frame_rate_core::settings_size : size;
+   auto match=extracted ? capabilities.compare({bytes.data(),record_size},&diff) : gameplay_capabilities::result::malformed;
+   if(match==gameplay_capabilities::result::match && !settings_ok)match=gameplay_capabilities::result::malformed;
+   // Browsing multiple hosts must not retarget this PC. Only an actual admission
+   // reply/follow-up adopts the host's target, before retail can take a shared frame.
+   // A room's earlier reliable roster already fixed it; a conflicting reply refuses.
+   if(transport_ready && match==gameplay_capabilities::result::match && role==endpoint::joiner && online_tick::linked() && !frame_rate::adopt_session_rate(session_fps))
+       match=gameplay_capabilities::result::value;
    if(transport_ready && match==gameplay_capabilities::result::match){
     if(role!=endpoint::host)clear_browser_notice(); // a compatible host answered or admitted this PC: the refusal row ends
     // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
     // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
     // leaves (send_single), which retail sends only once the participant is taken.
+    if(role==endpoint::browser) {
+     const auto refreshed=refresh_discovery(raw);
+     if(refreshed) {
+      if(refreshed<0)logger::write("online: malformed discovery table or endpoint refused; no duplicate row allocated");
+      return 0;
+     }
+    }
     return reinterpret_cast<callback>(native)(raw);
    }
    // Nothing of a refused message reaches the native handler: a wrong protocol, a short, long or malformed body and
@@ -248,7 +318,7 @@ namespace gameplay_agreement
   struct packet
   {
    std::array<std::uint8_t,0x14> header{};
-   std::array<std::uint8_t,request_size+gameplay_capabilities::max_size> body{};
+   std::array<std::uint8_t,request_size+gameplay_capabilities::max_size+linked_frame_rate_core::settings_size> body{};
    bool build(const std::uint8_t* original)
    {
     if(!transport_ready || !capabilities.ready())return false;
@@ -257,11 +327,29 @@ namespace gameplay_agreement
     if(!expected || size!=expected)return false;
     std::memcpy(body.data(),*reinterpret_cast<const void*const*>(original),size);
     const auto record=capabilities.bytes();std::memcpy(body.data()+size,record.data(),record.size());
-    size=static_cast<std::uint16_t>(size+record.size());const auto* data=body.data();std::memcpy(header.data(),&data,4);std::memcpy(header.data()+8,&size,2);return true;
+    size=static_cast<std::uint16_t>(size+record.size());
+    if(online_tick::linked()) {
+        // A host's advertisements/replies freeze its rate. Guest info (0x1a)
+        // reports its candidate without adopting it; the receiving host ignores it.
+        const unsigned fps=frame_rate::session_rate() ? frame_rate::session_rate() : frame_rate::host_rate();
+        if(opcode!=0x1a && !frame_rate::adopt_session_rate(fps))return false;
+        const auto settings=linked_frame_rate_core::encode(fps);
+        std::memcpy(body.data()+size,settings.data(),settings.size());size+=static_cast<std::uint16_t>(settings.size());
+    }
+    const auto* data=body.data();std::memcpy(header.data(),&data,4);std::memcpy(header.data()+8,&size,2);return true;
    }
   };
+  // Query callbacks survive on guests after start. Never offer their ephemeral
+  // source port as another joinable endpoint for the host's session.
+  bool guest_advertisement(const std::uint8_t* header) {
+   if(!header || header[0x10]!=0x18)return false;
+   __try {
+    const auto* session=static_cast<const std::uint8_t*>(reinterpret_cast<void*(__cdecl*)()>(0x612be0)());
+    return !session || !session[0x421];
+   } __except(EXCEPTION_EXECUTE_HANDLER){return true;}
+  }
   int __fastcall send_direct(void* transport,void*,const void* address,int port,const std::uint8_t* header)
-  { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
+  { if(guest_advertisement(header)) { logger::write_once("online:guest-discovery","online: guest discovery reply suppressed; only the session host advertises");return 0;} packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
   void __fastcall send_single(void* session,void*,void* transport,const std::uint8_t* header,int flags)
   {
    packet p;if(!p.build(header)){show_install_failure();return;}reinterpret_cast<send>(native_send)(session,transport,p.header.data(),flags);

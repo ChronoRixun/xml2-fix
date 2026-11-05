@@ -56,6 +56,10 @@ def run(tag, dlldir, extra, drop=()):
         # rule 10 is revision 3 with the key from 1.8.0 (the first game's group price; beta 7 charged 200 * level^2 as
         # revision 2) on purpose; without it rule 10 stays the released revision 2 in both
         cfg.remove_option('Game', 'RevivalCost')
+    if drop and cfg.has_option('Game', 'Xml1MasterMold'):
+        # the boss stuck-step audit (25a6c0c) makes a REQUESTED Master Mold rule 3 revision 2 on purpose (bounded core / facing /
+        # travel waits); without the key Mold stays the released revision 1 / off record in both
+        cfg.remove_option('Game', 'Xml1MasterMold')
     for section, key, value in extra:
         if not cfg.has_section(section):
             cfg.add_section(section)

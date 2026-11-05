@@ -3,7 +3,7 @@
 // (0x560150) runs at the first shared frame through the frame-gate bridge, the 0x47 stamp bridge is entered BY JUMP
 // exactly as installed, and a given-up seat is released through the native participant drop.
 namespace restart_fixture {
-unsigned constructor_calls=0,input_runs=0,drops=0;void* input_run_this=nullptr;
+unsigned constructor_calls=0,input_runs=0,drops=0,input_run_sample=0;void* input_run_this=nullptr;
 void* drop_session=nullptr;void* drop_record=nullptr;unsigned drop_codes[4]{};
 void __fastcall fake_constructor(void* self,void*,int) {
     ++constructor_calls;
@@ -12,7 +12,7 @@ void __fastcall fake_constructor(void* self,void*,int) {
     put(self,join_in_progress_rules::camera_mode_at,0u);
     put(self,0x2f8,0x3f490fdbu); // pitch 45 deg as the constructor stores it
 }
-void __fastcall fake_input_run(void* self,void*) { ++input_runs;input_run_this=self; }
+void __fastcall fake_input_run(void* self,void*) { ++input_runs;input_run_this=self;input_run_sample=frame_rate::fixture_shared_starts; }
 void __fastcall fake_drop(void* self,void*,void* record,unsigned a,unsigned b,unsigned c,unsigned d) {
     ++drops;drop_session=self;drop_record=record;drop_codes[0]=a;drop_codes[1]=b;drop_codes[2]=c;drop_codes[3]=d;
 }
@@ -225,10 +225,13 @@ void run() {
     join_in_progress::input_manager_run_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_input_run));
     join_in_progress::restart.arm();*frame=0;*seed=0x22222222u;*count=5;
     const auto bridge=reinterpret_cast<void(__fastcall*)(void*,void*)>(&join_in_progress::frame_gate_run_bridge);
+    const auto samples_before=frame_rate::fixture_shared_starts;
     bridge(reinterpret_cast<void*>(0x1234),nullptr);
     assert(input_runs==1 && input_run_this==reinterpret_cast<void*>(0x1234) && *seed==native_seed && *count==0);
+    assert(input_run_sample==samples_before+1);
     bridge(reinterpret_cast<void*>(0x1234),nullptr);
-    assert(input_runs==2 && *seed==native_seed);
+    assert(input_runs==2 && *seed==native_seed && input_run_sample==samples_before+2);
+    std::cout<<"PASS linked rate meter: production passed-gate bridge starts sampling before native input processing, preserving its ABI and RNG epoch\n";
     // The 0x47 stamp bridge, entered by JUMP exactly as installed, on Start Game's frame: opcode 0x47 at [esp+0x30],
     // the tail bytes [esp+0x1e] 0 (lobby START) or the marker (late restart), every other byte untouched, EAX kept.
     join_in_progress::prepare_opcode_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&resume_stub));

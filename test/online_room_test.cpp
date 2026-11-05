@@ -295,6 +295,16 @@ int main()
 		      "AS roster: the late rejoiner adopts the host's map - itself .3, r1 .4 (RR-1 agrees)");
 		r = joiner.adopt(rows, gen, h, s1);
 		check(r.ok && !r.changed, "AS roster: the same roster again changes nothing");
+		{
+			room_roster flags_only=joiner;
+			auto changed_flags=rows;changed_flags[1].active=false;
+			const auto flags=flags_only.adopt(changed_flags,gen+1,h,s1);
+			check(flags.ok && flags.changed && !flags.mapping_changed && !flags_only.contains(g1) &&
+			      flags_only.address(g1)==joiner.address(g1),
+			      "roster diagnostics: flag-only changes do not claim that this PC's address map changed");
+			check(joiner.adopt(rows,gen,h,s1).ok && !joiner.adopt(rows,gen,h,s1).mapping_changed,
+			      "roster diagnostics: a duplicate host roster has no address-map change");
+		}
 		// A new identity after a leave: the host appends it at .5; the newcomer learns it from the roster.
 		room_roster host2;
 		check(host2.reset({h}, 1) && host2.join(g1, 2) && host2.join(s1, 3) && host2.join(r1, 4) && host2.leave(s1, 5) && host2.join(x, 6) &&
@@ -359,6 +369,16 @@ int main()
 		}
 		check(ok && many.size() == roster_capacity && !many.join("legends:7000000000000000", 999) && many.active_size() == 1,
 		      "AS roster: 64 identities fill a room's history; a 65th new one is refused");
+		// Maximum room HISTORY, with the wire-2 FPSC trailer (not just four live members).
+		const auto linked_roster=encode_session_roster(many.gen(),many.rows(),60);
+		unsigned fps=0;std::vector<roster_row_t> decoded;
+		check(linked_roster.size()==roster_header+roster_capacity*roster_row+linked_frame_rate_core::settings_size &&
+		      decode_session_roster(linked_roster.data(),linked_roster.size(),gen,decoded,fps) && decoded.size()==roster_capacity && fps==60,
+		      "wire-2 roster: all 64 history rows plus FPSC fit and decode (591 bytes)");
+		auto truncated=linked_roster;truncated.pop_back();
+		check(!decode_session_roster(truncated.data(),truncated.size(),gen,decoded,fps),"wire-2 roster: a truncated FPSC is refused");
+		auto oversized=linked_roster;oversized.push_back(0);
+		check(!decode_session_roster(oversized.data(),oversized.size(),gen,decoded,fps),"wire-2 roster: an extra trailer byte is refused");
 		room_roster full;
 		check(full.reset({h, g1, s1, r1}) && !full.join(x, 0) && full.leave(g1) && full.join(x) && !full.join(g1),
 		      "AS roster: four active members at most (a rejoin waits for a seat too)");

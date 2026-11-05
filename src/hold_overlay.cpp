@@ -24,6 +24,7 @@ namespace hold_overlay
 		panel cached;
 		std::string cached_text;
 		unsigned cached_bb_w = 0, cached_bb_h = 0;
+		bool cached_wrap = false;
 		void* scratch = nullptr; // IDirect3DSurface8 in system memory
 		void* scratch_device = nullptr;
 		DWORD scratch_format = 0;
@@ -34,11 +35,11 @@ namespace hold_overlay
 			return format == d3d8::format_x8r8g8b8 || format == d3d8::format_a8r8g8b8 || format == d3d8::format_r5g6b5 ||
 			       format == d3d8::format_x1r5g5b5 || format == d3d8::format_a1r5g5b5;
 		}
-		const panel& panel_for(const char* text, unsigned w, unsigned h)
+		const panel& panel_for(const char* text, unsigned w, unsigned h, bool wrap)
 		{
-			if (cached_text != text || cached_bb_w != w || cached_bb_h != h)
+			if (cached_text != text || cached_bb_w != w || cached_bb_h != h || cached_wrap != wrap)
 			{
-				cached = render(text, w, h);
+				cached = render(text, w, h, wrap);cached_wrap=wrap;
 				cached_text = text;
 				cached_bb_w = w;
 				cached_bb_h = h;
@@ -160,7 +161,7 @@ namespace hold_overlay
 		return std::uint16_t(top | ((r * 31 + 127) / 255) << 10 | ((g * 31 + 127) / 255) << 5 | ((b * 31 + 127) / 255));
 	}
 
-	panel render(const char* text, unsigned bb_w, unsigned bb_h)
+	panel render(const char* text, unsigned bb_w, unsigned bb_h, bool wrap)
 	{
 		panel p;
 		if (!text || !*text || bb_w < 32 || bb_h < 32) return p;
@@ -175,6 +176,11 @@ namespace hold_overlay
 		SIZE extent{};
 		const int length = int(std::strlen(text));
 		GetTextExtentPoint32A(dc, text, length, &extent);
+		if (wrap) {
+			RECT measure{0,0,std::max<LONG>(1,LONG(bb_w*9/10)-2*pad_x),0};
+			DrawTextA(dc,text,length,&measure,DT_CALCRECT|DT_WORDBREAK|DT_CENTER|DT_NOPREFIX);
+			extent.cx=measure.right;extent.cy=measure.bottom;
+		}
 		const unsigned w = std::min<unsigned>(bb_w, unsigned(extent.cx + 2 * pad_x)), h = std::min<unsigned>(bb_h, unsigned(std::max<LONG>(extent.cy, font_px) + 2 * pad_y));
 		BITMAPINFO bi{};
 		bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -191,8 +197,8 @@ namespace hold_overlay
 			std::memset(bits, 0, std::size_t(w) * h * 4);
 			SetBkMode(dc, TRANSPARENT);
 			SetTextColor(dc, RGB(255, 255, 255));
-			RECT box{0, 0, LONG(w), LONG(h)};
-			DrawTextA(dc, text, length, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+			RECT box=wrap ? RECT{pad_x,pad_y,LONG(w)-pad_x,LONG(h)-pad_y} : RECT{0,0,LONG(w),LONG(h)};
+			DrawTextA(dc, text, length, &box, DT_CENTER | DT_NOPREFIX | (wrap ? DT_WORDBREAK : DT_VCENTER | DT_SINGLELINE));
 			GdiFlush();
 			p.width = w; p.height = h;
 			p.argb.resize(std::size_t(w) * h);
@@ -236,12 +242,14 @@ namespace hold_overlay
 	{
 		const LONG w = LONG(std::min(p.width, bb_w)), h = LONG(std::min(p.height, bb_h));
 		const LONG left = (LONG(bb_w) - w) / 2;
-		LONG top = LONG(bb_h) * 3 / 10 - h / 2;
+		// The native area title occupies the upper/central band immediately
+		// after a load, exactly when this panel opens. Keep the hold below it.
+		LONG top = LONG(bb_h) * 3 / 5 - h / 2;
 		top = std::clamp<LONG>(top, 0, LONG(bb_h) - h);
 		return RECT{left, top, left + w, top + h};
 	}
 
-	outcome draw(void* device, const char* text, bool force_clear)
+	outcome draw(void* device, const char* text, bool force_clear, bool wrap)
 	{
 		outcome o;
 		if (!device || !text || !*text) return o;
@@ -252,7 +260,7 @@ namespace hold_overlay
 		d3d8::surface_desc desc{};
 		hr = d3d8::method<d3d8::get_desc_t>(back, d3d8::surface_slot::get_desc)(back, &desc);
 		if (FAILED(hr)) { o.result = hr; o.step = "GetDesc"; return o; }
-		const panel& p = panel_for(text, desc.width, desc.height);
+		const panel& p = panel_for(text, desc.width, desc.height, wrap);
 		if (!p.width || !p.height) { o.result = E_FAIL; o.step = "the text panel (GDI)"; return o; }
 		const RECT r = place(p, desc.width, desc.height);
 		if (!force_clear && desc.multi_sample_type == d3d8::multisample_none && blendable(desc.format))

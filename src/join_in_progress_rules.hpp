@@ -603,4 +603,193 @@ namespace join_in_progress_rules
 		return campaign_receive + 5 + relative == owned_target;
 	}
 	constexpr std::uint16_t agreement_revision = 7;
+
+	// AR5 optional call-site contracts. These guards participate only with the corresponding switch.
+	constexpr std::uint32_t execution_raw = 0x401e81;
+	inline constexpr std::array<unsigned char, 8> execution_raw_original{0xff,0x52,0x14,0xc6,0x44,0x24,0x08,0x01};
+	constexpr std::uint32_t execution_input = 0x40219e;
+	inline constexpr std::array<unsigned char, 5> execution_input_original{0xe8,0x0d,0x81,0x15,0x00};
+	constexpr std::uint32_t execution_stall = 0x4021b7;
+	inline constexpr std::array<unsigned char, 5> execution_stall_original{0xe8,0x64,0x07,0x00,0x00};
+	constexpr std::uint32_t execution_render = 0x402a09;
+	inline constexpr std::array<unsigned char, 5> execution_render_original{0xe8,0xf2,0x88,0x1e,0x00};
+	constexpr std::uint32_t execution_world = 0x40235a;
+	inline constexpr std::array<unsigned char, 6> execution_world_original{0xff,0x92,0x6c,0x01,0x00,0x00};
+	constexpr std::uint32_t execution_query = 0x5dae69;
+	inline constexpr std::array<unsigned char, 6> execution_query_original{0xff,0x92,0x34,0x01,0x00,0x00};
+	constexpr std::uint32_t execution_gate_fail = 0x606cc1;
+	inline constexpr std::array<unsigned char, 5> execution_gate_fail_original{0xe8,0xfa,0x1a,0xf5,0xff};
+	constexpr std::uint32_t execution_produce = 0x55a31a;
+	inline constexpr std::array<unsigned char, 5> execution_produce_original{0xe8,0xe1,0xf3,0xff,0xff};
+	constexpr std::uint32_t execution_apply = 0x558da9;
+	inline constexpr std::array<unsigned char, 10> execution_apply_original{0xff,0x52,0x24,0x8b,0x14,0xad,0x78,0xad,0xa6,0x00};
+	constexpr std::uint32_t execution_retire = 0x5594ce;
+	inline constexpr std::array<unsigned char, 8> execution_retire_original{0x88,0x18,0x8b,0x8d,0x70,0x31,0x00,0x00};
+	constexpr std::uint32_t execution_visual = 0x5600e0;
+	inline constexpr std::array<unsigned char, 6> execution_visual_original{0x8b,0x0d,0xb0,0xd8,0x7a,0x00};
+	inline constexpr guard execution_wrapper_guards[]{
+		{0x5d8920,"a118ff8a0085c0750ae882ffffffa118ff8a00c3","AR5: menu getter backing pointer (eligibility never calls it)"},
+		{0x5eb300,"a1ec138b0085c0750ae882ffffffa1ec138b00c3","AR5: video getter backing pointer (observer never calls it)"},
+		{0x6a33a4,"309e5e00","AR5: video active predicate virtual slot"},
+		{0x5e9e30,"8b813c40000085c07c1883f8037d1369c0601500008d4408188a805d1500002401c38d41188a805d1500002401c3","AR5: complete read-only active-video predicate"},
+		{0x55a3d9,"8b0c24b8b0fb790064890d0000000083c40cc3","AR5: input manager getter returns the observed singleton"},
+		{0x606d40,"b8d8bba300c3","AR5: native gate getter returns the observed singleton"},
+		{0x610d20,"8a8120040000c3","AR5: native online-state byte"},
+		{0x4021a3,"6a03e8564b20008bc8e8cf46200084c0740c8bcee864070000e91a070000806614fe","AR5: native wait test, stalled call, common-cleanup jump"},
+		{0x402920,"83ec105356578bf9","AR5: native helper stack frame"},
+		{0x4029e9,"e8228820008bc8e8db7b200085c07510e8024320008a480684c90f8447010000e8f2881e00","AR5: message/mode render choice after retained services"},
+		{0x402b50,"5f5e5b83c410c3","AR5: native no-render epilogue"},
+	};
+	inline constexpr guard execution_observer_guards[]{
+		{0x551f19,"8b0c24b8c0eb790064890d0000000083c40cc3","AR5: controller getter returns the observed singleton"},
+		{0x5cec00,"568bf18a8644190000","AR5: PDA-open entry, observation only"},
+		{0x60c230,"53568bf18a466c","AR5: native pause toggle, observation only"},
+		{0x402a19,"e8e2881e00","AR5: video render branch"},
+		{0x402a7c,"e89f5e1d00","AR5: ordinary render branch"},
+		{0x401e81,"ff5214c644240801","AR5: execution_raw"},
+		{0x40219e,"e80d811500","AR5: execution_input"},
+		{0x40235a,"ff926c010000","AR5: execution_world"},
+		{0x5dae69,"ff9234010000","AR5: execution_query"},
+		{0x606cc1,"e8fa1af5ff","AR5: execution_gate_fail"},
+		{0x55a31a,"e8e1f3ffff","AR5: execution_produce"},
+		{0x558da9,"ff52248b14ad78ada600","AR5: execution_apply"},
+		{0x5594ce,"88188b8d70310000","AR5: execution_retire"},
+		{0x5600e0,"8b0db0d87a00","AR5: execution_visual"},
+	};
+	inline constexpr std::array<unsigned char,5> execution_video_branch_original{0xe8,0xe2,0x88,0x1e,0x00};
+	inline constexpr std::array<unsigned char,5> execution_ordinary_branch_original{0xe8,0x9f,0x5e,0x1d,0x00};
+	inline constexpr std::array<unsigned char,9> execution_pda_original{0x56,0x8b,0xf1,0x8a,0x86,0x44,0x19,0,0};
+	inline constexpr std::array<unsigned char,7> execution_pause_original{0x53,0x56,0x8b,0xf1,0x8a,0x46,0x6c};
+	// AR6 Layer 1 (fable-ar6): the sender 0x559700's full-vs-delta decision (0x5597d2: cmp eax,3; jge 0x5598a0 - 9 bytes;
+	// eax = the pending count clamped >= 0, ebx = the local block base set at 0x55972c). The bridge forces the full path
+	// (0x5597db) while [ebx+0x317c] (the next frame) < whole_input_frames, else keeps the stock decision (pending < 3 full,
+	// else delta at 0x5598a0). Layer 2: the store 0x559560's resolve-against-+0x3148 (0x559660: lea eax,[ebx+0x3148]; je
+	// 0x559675 - 8 bytes); when +0x3148 has no resolved record (cl == 0), the bridge points the "previous" at a zero record
+	// so 0x558c00 fills the absent fields with zero instead of the store skipping and leaving the decoder's stack garbage.
+	constexpr std::uint32_t whole_input_site = 0x5597d2, whole_input_full = 0x5597db, whole_input_delta = 0x5598a0;
+	inline constexpr std::array<unsigned char, 9> whole_input_original{0x83,0xf8,0x03,0x0f,0x8d,0xc5,0x00,0x00,0x00};
+	constexpr std::uint32_t delta_zero_site = 0x559660, delta_zero_resume = 0x559668;
+	inline constexpr std::array<unsigned char, 8> delta_zero_original{0x8d,0x83,0x48,0x31,0x00,0x00,0x74,0x0d};
+	inline constexpr guard whole_input_guards[]{
+		{0x5597d2,"83f8030f8dc5000000","AR6 L1: sender full-vs-delta decision"},
+		{0x5597db,"8b45048d","AR6 L1: sender full-record path target"},
+		{0x5598a0,"8b442418","AR6 L1: sender delta path target"},
+		{0x559660,"8d8348310000740d","AR6 L2: store resolve-against-+0x3148 skip"},
+		{0x559668,"57508bcae8","AR6 L2: store resolve call (push record, push prev, call 0x558c00)"},
+	};
+	inline const guard* whole_input_mismatch(const std::uint8_t* image) {
+		for (const auto& g : whole_input_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	// AR6 (fable-ar6): the pause-code guard's site = the controller apply vt+0x24 (0x550fb0: push ebx; mov ebx,ecx; mov eax,
+	// [ebx+2f8h] - 9 bytes re-executed by the bridge); the guard covers the whole prologue up to the one read of the mask
+	// argument (0x550fc8 mov edx,[ecx]) and its write to cur (0x550fcb), the apply loop's call (0x558da9, the record's mask at
+	// esi+4 pushed as the argument) and the ring layout the pointer test relies on (0x558d0b..0x558d0e, slot = +0x26c + read*0x28).
+	constexpr std::uint32_t pause_guard_site = 0x550fb0, pause_guard_resume_at = 0x550fb9;
+	inline constexpr std::array<unsigned char, 9> pause_guard_original{0x53,0x8b,0xd9,0x8b,0x83,0xf8,0x02,0x00,0x00};
+	inline constexpr guard pause_guard_guards[]{
+		{0x550fb0,"538bd98b83f80200008b4c240c568b7424148983740300008b11578993f8020000","AR6: controller apply prologue, mask read and cur write"},
+		{0x558d0b,"8d0cb68db4c86c020000","AR6: apply loop's slot address (+0x26c + read*0x28)"},
+		{0x558da1,"538d4e045155","AR6: apply loop pushes floats, record+4 (the code mask), index"},
+	};
+	inline const guard* pause_guard_mismatch(const std::uint8_t* image) {
+		for (const auto& g : pause_guard_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	// AR7 (fable-ar7) / b2c review: [Online] SymmetricClockStep, default OFF. The input-manager run 0x559190 derives every
+	// lockstep frame's clock step from the participants' head records: 0x559222 movzx eax, word [block + read*0x28 + 0x26e]
+	// = the record's step word (0.1 ms units, capped at 0x2710 = 1.0 s by the producer 0x558f90; bit 15 = produced in
+	// placeholder mode, 0x558fc3). Stock: a flagged record counts 0.025 s for the clock (0x55923b: s14 = 0x3ccccccd) on
+	// EVERY peer - the step word travels with bit 15 (0x5597e9 mov cx,[ebp+2] -> 0x5597fe, the same in every delta kind;
+	// the `and eax, 0xffff7fff` at 0x5597f1 masks the code-mask dword [ebp+4]), the decoder stores it unchanged (0x559fd6,
+	// 0x55a1f1, 0x55a238) and the run loop has no own-participant test. The patch at 0x559233 (mov [esp+0x10], eax - the
+	// first instruction after the mask) jumps to the unflagged path 0x55924f, which computes s10 = s14 = value * 1e-4 from
+	// ax (already masked): a flagged record then counts its measured frame time (up to 1.0 s) on every peer instead of
+	// 0.025 s. Both rules are symmetric; the patch only paces game time faster through a load stall, so it stays OFF
+	// (see join_in_progress_core.hpp). Two bytes (eb 1a) + two nops; no bridge, no wire change.
+	constexpr std::uint32_t clock_step_site = 0x559233, clock_step_target = 0x55924f;
+	inline constexpr std::array<unsigned char, 4> clock_step_original{0x89,0x44,0x24,0x10};
+	inline constexpr std::array<unsigned char, 4> clock_step_patch{0xeb,0x1a,0x90,0x90};
+	static_assert(clock_step_site + 2 + 0x1a == clock_step_target, "AR7: the short jump lands on the unflagged step path");
+	// The `jip step:` observer (JoinDiagnostics=1 only) and the optional belt share the set-step site 0x559525 (fld dword
+	// [0x680030] = 0.0f, 6 bytes; the caller's A is at [esp+0x14] when the fld runs), replaced by a CALL + nop.
+	constexpr std::uint32_t clock_step_observe_site = 0x559525, clock_step_observe_resume = 0x55952b;
+	inline constexpr std::array<unsigned char, 6> clock_step_observe_original{0xd9,0x05,0x30,0x00,0x68,0x00};
+	inline constexpr guard clock_step_guards[]{
+		{0x559222,"0fb784c56e02000084e4792125ff7f000089442410db442410c7442414cdcccc3cd80d18056800d95c2410eb190fb7c8894c2410db442410d80d18056800d9542410d95c24148b5708","AR7: step-word read, flag test, flagged and unflagged step paths"},
+		{0x559282,"d9442414d85c241cdfe0f6c441","AR7: A = max(A, s14) over the participants"},
+		{0x559525,"d90530006800d9442414dae9dfe0f6c4447b11e8d32000008b4c24148b10518bc8ff523c","AR7: A compared with 0.0 and set into the clock (vt+0x3c)"},
+	};
+	inline const guard* clock_step_mismatch(const std::uint8_t* image) {
+		for (const auto& g : clock_step_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	// AR8 (fable-ar8): the input-stream epoch marker. Sender sites (CALL replacements; the bridge re-pushes the one stack
+	// argument, calls the native and posts the markers after it): the release's ring reset 0x613f68 `call 0x559150` inside
+	// the network setup's campaign-start branch (0x613f03.., flags & 1: clock 2.0, RNG seeds, all four blocks reset, then
+	// 0x60c230(0)) and the start's send-enable 0x6140b3 `call 0x558850` (flags & 2: 0x559e00 resets the blocks and sets
+	// +0xc68c, 0x558850(1) sets +0xc689 = sending on). Receiver site: the store 0x559560's entry (push ecx; mov eax,[esp+0xc];
+	// imul eax,eax,0x3184 - 11 bytes re-executed by the bridge; JMP shape; args record, index, kind; ret 0xc).
+	constexpr std::uint32_t input_epoch_release_call = 0x613f68, input_epoch_start_call = 0x6140b3;
+	constexpr std::uint32_t input_epoch_store_site = 0x559560, input_epoch_store_resume = 0x55956b;
+	constexpr std::uint32_t input_ring_reset_all = 0x559150, input_send_enable = 0x558850, input_block_reset = 0x558740;
+	constexpr std::uint32_t input_post_event = 0x55a370, local_participant_index = 0x611250, input_block_counter = 0x317e;
+	inline constexpr std::array<unsigned char, 5> input_epoch_release_original{0xe8,0xe3,0x51,0xf4,0xff};
+	inline constexpr std::array<unsigned char, 5> input_epoch_start_original{0xe8,0x98,0x47,0xf4,0xff};
+	inline constexpr std::array<unsigned char, 11> input_epoch_store_original{0x51,0x8b,0x44,0x24,0x0c,0x69,0xc0,0x84,0x31,0x00,0x00};
+	static_assert(input_epoch_release_call + 5 - 0x000bae1d == input_ring_reset_all, "AR8: 0x613f68 calls the all-blocks ring reset 0x559150");
+	static_assert(input_epoch_start_call + 5 - 0x000bb868 == input_send_enable, "AR8: 0x6140b3 calls the send-enable 0x558850");
+	inline constexpr guard input_epoch_guards[]{
+		{0x613f5f,"6a00e82a64f4ff8bc8e8e351f4ff6a00e86c88ffff8bc8e8b582ffff","AR8: release - push 0; manager; call 0x559150; push 0; pause object; call 0x60c230"},
+		{0x61409e,"e8ed62f4ff8bc8e8565df4ff6a01e8df62f4ff8bc8e89847f4ff","AR8: start - manager; call 0x559e00; push 1; manager; call 0x558850"},
+		{0x559560,"518b44240c69c08431000053568b7424108bd18d1c10668b06662b837c310000","AR8: store entry (push ecx; index * 0x3184; record; label - next)"},
+		{0x55a370,"8b5424046a008d44240c5052e87ff3ffffc20800","AR8: lockstep event post 0x55a370(index, code) -> 0x559700(index, &code, 0)"},
+		{0x558740,"8bd133c057b9b80b00008dba68020000f3ab","AR8: per-block ring reset 0x558740 (slots, history, +0x3148, read/write/next/counter)"},
+		{0x611250,"e89bffffff85c074078bc8e9b02f0000","AR8: the local participant index getter 0x611250"},
+		{0x559ee7,"8bc769c0843100008d84287e31000033d2668b10668954241042668910","AR8: decoder - a single record's label is the block's counter +0x317e, then counter++"},
+	};
+	inline const guard* input_epoch_mismatch(const std::uint8_t* image) {
+		for (const auto& g : input_epoch_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report. A peer that completes natneg with the participant
+	// being added sends 0x23 with one dword {bit (1 << adding) << 16 | bit (1 << self)} (0x607210, 0x60725e..0x607298). The
+	// handler 0x604dc0 turns each half into an index (first set bit; 4 when none) and calls 0x607390(adding, self) - its
+	// only two callers (0x604e0a, 0x604e1e). 0x607390 looks both indices up with record_by_index 0x6110c0 (null when no
+	// record carries that index), takes record+0x40 through 0x6141e0 (lea, no null test) and clears the pair's bits in
+	// [record+0x60] of both (0x6073e4 `mov ebx,[esi+0x20]`: the 4-player host crash reading 0x60 = null+0x40+0x20 after
+	// p060fix/AR removed the lost newcomer's record at once while the slowest lobby guest still had to report its mesh
+	// with it). The entry's 5 bytes (push ebx; mov ebx,[esp+8]) are replaced by a JMP; the bridge re-executes them when
+	// both records exist, and otherwise does what the stock function would for the record(s) that exist.
+	constexpr std::uint32_t mesh_pair_site = 0x607390, mesh_pair_resume = 0x607395, mesh_pair_handler = 0x604dc0;
+	constexpr std::uint32_t mesh_pair_manager_pending = 0x2220, mesh_pair_manager_retries = 0x2238, mesh_pair_manager_settle = 0x2228;
+	constexpr std::uint32_t record_mesh_pending = 0x60; // record+0x40 (0x6141e0) +0x20: the participants this record still has to mesh with
+	constexpr std::uint32_t clock_time_slot = 0x28;    // clock_getter()'s vtable slot 0x28 (thiscall, one argument 0) -> float game time
+	inline constexpr std::array<unsigned char, 5> mesh_pair_original{0x53,0x8b,0x5c,0x24,0x08};
+	inline constexpr guard mesh_pair_guards[]{
+		{0x607390,"538b5c2408555657538bf9e840b80000","AS: 0x607390 entry - push ebx; mov ebx,[esp+8]; push ebp/esi/edi/ebx; mov edi,ecx; call 0x612be0 (session)"},
+		{0x6073a0,"8bc8e8199d00008b6c2418558bf0e82db800008bc8e8069d00008bce89442414e81bce00008b4c24148bf0e810ce00008bcbba01000000d3e28bcdbb01000000d3e30bd38b5e208bcaf7d123d9895e202148203b9720220000","AS: 0x607390 body - record_by_index x2, +0x40 x2, (1<<a)|(1<<b), [rec+0x60] &= ~mask x2, cmp with manager+0x2220"},
+		{0x6073f9,"752733f689b72022000089b738220000e80242f5ff8b10568bc8ff5228d8052c016800d99f282200005f5e5d5bc20800","AS: 0x607390 tail - manager+0x2220/+0x2238 := 0, +0x2228 := clock time + 1.0 (0x68012c); ret 8"},
+		{0x604dc0,"8b4424048b48048b018bd0c1ea1033c9","AS: 0x23 handler 0x604dc0 - payload dword: high half the seat being added, low half the sender"},
+		{0x604e0a,"e881250000","AS: 0x23 handler call 0x607390 (low mask had a bit)"},
+		{0x604e1e,"e86d250000","AS: 0x23 handler call 0x607390 (low mask had none: index 4)"},
+		{0x6141e0,"8d4140c3","AS: 0x6141e0 = record + 0x40 (no null test)"},
+		{0x6110c0,"8b817802000085c05356577430","AS: record_by_index 0x6110c0 - null when the session has no record with that index"},
+	};
+	inline const guard* mesh_pair_mismatch(const std::uint8_t* image) {
+		for (const auto& g : mesh_pair_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
+	inline const guard* execution_mismatch(const std::uint8_t* image, bool observer, bool wrapper) {
+		if (observer || wrapper) for (const auto& g : execution_wrapper_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		if (observer) for (const auto& g : execution_observer_guards)
+			if (!limits_rules::matches(image + g.va - limits_rules::image_base,g.hex)) return &g;
+		return nullptr;
+	}
 }

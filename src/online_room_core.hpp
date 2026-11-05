@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "linked_frame_rate_core.hpp"
 
 namespace online_room_core
 {
@@ -444,6 +445,25 @@ namespace online_room_core
 		}
 		return true;
 	}
+    // Kind 12 version 2 adds the session settings trailer to the existing roster.
+    // Keep the v1 codec above for explicit legacy/refusal fixtures, never for runtime fallback.
+    inline std::vector<std::uint8_t> encode_session_roster(long long gen, const std::vector<roster_row_t>& rows, unsigned fps) {
+        if (!linked_frame_rate_core::valid(fps)) return {};
+        auto out = encode_roster(gen, rows);
+        if (out.empty()) return {};
+        out[1] = 2;
+        const auto settings = linked_frame_rate_core::encode(fps);
+        out.insert(out.end(), settings.begin(), settings.end());
+        return out;
+    }
+    inline bool decode_session_roster(const std::uint8_t* data, std::size_t size, long long& gen, std::vector<roster_row_t>& rows, unsigned& fps) {
+        fps = 0; rows.clear();
+        if (!data || size < roster_header + roster_row + linked_frame_rate_core::settings_size || data[1] != 2) return false;
+        const auto length = size - linked_frame_rate_core::settings_size;
+        if (!linked_frame_rate_core::decode(data + length, linked_frame_rate_core::settings_size, fps)) return false;
+        std::vector<std::uint8_t> legacy(data, data + length); legacy[1] = roster_wire;
+        return decode_roster(legacy.data(), legacy.size(), gen, rows);
+    }
 	class room_roster
 	{
 		struct entry { std::string id; std::uint32_t address; bool active = true; };
@@ -509,7 +529,7 @@ namespace online_room_core
 		// Broker peer_joined / peer_left (gen 0 = the line carried none). True when it changed the membership.
 		bool join(const std::string& id, long long gen = 0) { return event_in(gen, true, id); }
 		bool leave(const std::string& id, long long gen = 0) { return event_in(gen, false, id); }
-		struct adopt_result { bool ok = false; bool changed = false; const char* why = ""; };
+		struct adopt_result { bool ok = false; bool changed = false; const char* why = ""; bool mapping_changed = false; };
 		// The host's roster (decode_roster's rows, stamped gen): the history in the host's order, addresses 1..n. Then the
 		// broker events this PC saw after that stamp are replayed in their order, so a roster that lags this PC's broker
 		// stream ends at the map the host reaches with the same events; one that leads it covers the events still on their
@@ -536,6 +556,9 @@ namespace online_room_core
 				if (e.gen == 0 || e.gen > gen) { next.apply(e.id, e.joined); if (e.gen > next.gen_) next.gen_ = e.gen; }
 			if (!next.contains(self)) { r.why = "this PC is not an active member in it"; return r; }
 			r.changed = !confirmed_ || next.entries_.size() != entries_.size();
+			r.mapping_changed = r.changed;
+			for (std::size_t i = 0; !r.mapping_changed && i < entries_.size(); ++i)
+				r.mapping_changed = entries_[i].id != next.entries_[i].id || entries_[i].address != next.entries_[i].address;
 			for (std::size_t i = 0; !r.changed && i < entries_.size(); ++i)
 				r.changed = entries_[i].id != next.entries_[i].id || entries_[i].address != next.entries_[i].address || entries_[i].active != next.entries_[i].active;
 			for (const auto& e : since_) if (e.gen > gen) next.since_.push_back(e);

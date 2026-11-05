@@ -41,7 +41,9 @@ struct state {
     u32 owner=0,target=0;
     int phase=0,step=0;
     bool forced=false,pending_shield=false,shield=false,catwalk_latch=false,catwalk_pending=false;
-    float wait_until=0,retry_at=0,shot_until=0;
+    float wait_until=0,retry_at=0,shot_until=0,step_started=0,last_time=-1;
+    boss_wait_rules::window marker_facing;
+    mold_combat_rules::travel_state travel;
     mold_combat_rules::deadlines attacks{};
 } boss;
 bool enabled=false,was_requested=false,installed=false;
@@ -53,7 +55,8 @@ void reset(u32 owner){
     // Other startup installers may replace native query pools after ours.
     // Recheck the effective layout before this encounter can raise a shield.
     if(!mold_query::supported()){enabled=false;logger::write("mold controller: effective query layout differs; native fallback retained");return;}
-    boss=state{};boss.owner=owner;boss.attacks=mold_combat_rules::deadlines(now());
+    boss=state{};boss.owner=owner;boss.last_time=now();boss.attacks=mold_combat_rules::deadlines(boss.last_time);
+    trace_at=trace_decision_at=-1;
     mold_effects::reset();
     u32 stage=0;
     for(int i=0;i<saved_stage.width;++i)
@@ -96,6 +99,14 @@ void* select_core(void* actor,u32& selected){
     selected=mold_query::select(actor,boss.forced);
     return selected?fn<resolve_t>(0x4654b0)(&selected,nullptr):nullptr;
 }
+struct core_game {
+    void* brain;void* actor;u32* output;
+    bool valid(u32 h){auto* core=resolve(h);return mold_query::is_a(core,0x753f64)&&at<float>(core,0x27c)>0;}
+    bool face(u32 h){return mold_controller::face(brain,actor,resolve(h),output,.98f);}
+    bool node_available(){return move(actor,"blaster")!=nullptr;}
+    void fire(u32 h){play(actor,"blaster");target(actor,h);logger::write("mold controller: ordinary blaster, source %08X target %08X",boss.owner,h);}
+    void wait(float seconds){mold_controller::wait(brain,seconds);}
+};
 void coordinate_party(void* boss_actor,void* boss_brain){
     u32 hero_token=0;auto* hero=mold_query::active_hero(hero_token);
     if(!mold_query::is_a(hero,0x70b83c)||at<float>(hero,0x27c)<=0)return;
@@ -169,49 +180,41 @@ void tick(void* brain,void* actor,u32* output){
     if(!living_hero)return;
     fn<target_t>(0x538290)(brain,nullptr,hero_id);target(actor,hero_id);
     if(boss.forced){
-        u32 chosen=0;if(select_core(actor,chosen)){boss.target=chosen;boss.step=1;boss.forced=false;}
+        u32 chosen=0;if(select_core(actor,chosen)){mold_combat_rules::begin_core(boss,chosen,t);boss.forced=false;}
     }
-    if(boss.step==1){
-        auto* core=resolve(boss.target);
-        if(mold_query::is_a(core,0x753f64)&&at<float>(core,0x27c)>0){
-            if(face(brain,actor,core,output,.98f))boss.step=2;
-            return;
-        }
-        boss.step=0;boss.target=0;
-    }
-    if(boss.step==2){
-        auto* core=resolve(boss.target);
-        const auto decision=mold_combat_rules::ready_core(living_hero,mold_query::is_a(core,0x753f64)&&at<float>(core,0x27c)>0,move(actor,"blaster")!=nullptr);
-        if(decision==mold_combat_rules::core_action::fire){
-            play(actor,"blaster");target(actor,boss.target);
-            boss.step=3;boss.shot_until=t+4;boss.retry_at=t+9;wait(brain,4);
-            logger::write("mold controller: ordinary blaster, source %08X target %08X",boss.owner,boss.target);
-        }else if(decision==mold_combat_rules::core_action::abandon){boss.step=0;boss.target=0;boss.retry_at=t+9;}
-        return;
+    if(boss.step==1||boss.step==2){
+        const int before=boss.step;core_game g{brain,actor,output};
+        if(mold_combat_rules::update_core(boss,t,g))return;
+        if(trace)logger::write("mold trace: abandoned core step %d at %.3f retry %.3f",before,t,boss.retry_at);
     }
     if(boss.phase==2&&t>boss.retry_at){
-        u32 h=0;if(select_core(actor,h)){boss.target=h;boss.step=1;voice(brain);logger::write("mold controller: aiming at %08X (party bait)",h);}
+        u32 h=0;if(select_core(actor,h)){mold_combat_rules::begin_core(boss,h,t);voice(brain);logger::write("mold controller: aiming at %08X (party bait)",h);}
     }
     const float range=distance2(actor,hero);
     auto& deadline=boss.attacks.value;
     if(boss.phase==0){
+        boss.travel={};
         if(std::fabs(at<float>(hero,0x28)-at<float>(actor,0x28))<60&&range<250.f*250.f){
-            if(t>deadline[3]){play(actor,"stomp");deadline[3]=t+5;}return;
+            if(t>deadline[3]){const bool played=play(actor,"stomp");deadline[3]=t+5;
+                if(trace)logger::write("mold trace: stomp requested at %.3f available %d",t,int(played));}return;
         }
         if(!first_count){boss.phase=1;deadline[0]=t+2;deadline[1]=t+5;return;}
         int nearest=-1;float distance=std::numeric_limits<float>::max();
         for(int i=0;i<12;++i)if(markers[i]){const auto d=distance2(hero,markers[i]);if(d<distance){distance=d;nearest=i;}}
         if(nearest<0)return;
-        if(!face(brain,actor,nearest<6?markers[nearest]:hero,output,.9f))return;
-        if(nearest>=6){if(t>deadline[1]&&available(brain,actor,7)){deadline[1]=t+8;buttons(output,0x180);target(actor,hero_id);}return;}
+        if(!boss.marker_facing.ready(t,face(brain,actor,nearest<6?markers[nearest]:hero,output,.9f),5.f))return;
+        if(nearest>=6){if(t>deadline[1]&&available(brain,actor,7)){deadline[1]=t+8;buttons(output,0x180);target(actor,hero_id);
+                if(trace)logger::write("mold trace: marker action 180 at %.3f",t);}return;}
         using kill_t=void(__fastcall*)(void*,void*);
         if(t>deadline[0]&&available(brain,actor,2,true)&&at<kill_t>(at<void*>(markers[nearest],0),8)==fn<kill_t>(0x499740)){
             fn<kill_t>(0x499740)(markers[nearest],nullptr);deadline[0]=t+10;buttons(output,0x20);voice(brain);
             logger::write("mold controller: native platform marker death %d",nearest);
-        }else buttons(output,0x10);
+        }else {buttons(output,0x10);if(trace)logger::write("mold trace: marker action 10 at %.3f",t);}
         return;
     }
+    boss.marker_facing.reset();
     if(at<float>(hero,0x28)<-100&&range<300.f*300.f){
+        boss.travel={};
         target(actor,0);fn<void(__fastcall*)(void*,void*,unsigned char)>(0x502cc0)(brain,nullptr,1);
         fn<unsigned char(__fastcall*)(void*,void*,u32)>(0x4a7da0)(actor,nullptr,hero_id);put(brain,0x1c4,1.f);
         const int due=boss.attacks.floor_due(t);
@@ -225,14 +228,18 @@ void tick(void* brain,void* actor,u32* output){
         return;
     }
     auto* point=resolve(mold_query::waypoint(hero));
-    if(point&&distance2(actor,point)<100.f*100.f){
-        if(!face(brain,actor,hero,output,.9f)){
+    const bool arrived=point&&distance2(actor,point)<100.f*100.f;
+    const auto travel=mold_combat_rules::waypoint(boss.travel,t,arrived,[&]{return face(brain,actor,hero,output,.9f);});
+    if(travel!=mold_combat_rules::travel_action::move){
+        if(!arrived)fn<void(__fastcall*)(void*,void*)>(0x423c30)(actor,nullptr);
+        if(travel==mold_combat_rules::travel_action::face){
             // Source clears only actor movement state here, without changing
             // the brain's movement mode or dispatching a stop-movement node.
             for(u32 offset=0x1d0;offset<=0x1e4;offset+=4)put(actor,offset,0x00800000u);
             put(actor,0x180,0u);put(actor,0x184,0u);put(actor,0x3ec,0u);return;
         }
-        if(range<250.f*250.f){output[1]|=0x10;return;}
+        if(!arrived&&trace)logger::write("mold trace: waypoint recovery at %.3f; movement rearmed",t);
+        if(range<250.f*250.f){output[1]|=0x10;if(trace)logger::write("mold trace: close action 10 at %.3f",t);return;}
         if(t>deadline[0]&&available(brain,actor,5)){
             deadline[0]=t+4;const float random=fn<float(__cdecl*)(unsigned char)>(0x560190)(1);
             voice(brain);buttons(output,mold_combat_rules::ranged_choice(random));
@@ -275,6 +282,9 @@ bool brain_update(void* brain,u32* output){
     if(!enabled||!boss.owner||!scope())return false;
     auto* actor=brain?at<void*>(brain,0x10):nullptr;
     if(actor&&at<u32>(actor,0x1c)==boss.owner&&resolve(boss.owner)==actor&&mold_query::is_a(actor,0x70b83c)){
+        const float t=now();
+        if(t<boss.last_time){const auto owner=boss.owner;reset(owner);if(!enabled)return false;}
+        boss.last_time=t;
         if(trace&&now()>trace_at){
             trace_at=now()+1;
             logger::write("mold trace: brain update time %.3f state %u queue %u native wait %.3f core %d",now(),at<u32>(brain,8),at<u32>(brain,0x410),at<float>(brain,0x1c),boss.step);
@@ -310,7 +320,7 @@ bool prepare(HMODULE game,xml1_hook_transaction::patch& beam){
     if(!binding){logger::write("mold controller: saved-stage binding unavailable; native fallback retained");return false;}
     saved_stage=*binding;
     if(!mold_beam::prepare(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return false;}
-    constexpr std::array<limits_rules::guard,29> guards{{
+    constexpr std::array<limits_rules::guard,30> guards{{
         {0x5173f3,"8b460883f840","brain state dispatch after native gates"},
         {0x517370,"83ec188b44241c535556578b","brain update frame"},
         {0x516930,"51568bf18b46108b88d40300","native lifecycle and wait gate"},
@@ -334,6 +344,7 @@ bool prepare(HMODULE game,xml1_hook_transaction::patch& beam){
         {0x5279c0,"566a018bf1e8c6870300d85c240c83c4","attack voice helper"},
         {0x560190,"8a44240484c07405e9f3feffffe93eff","native random stream"},
         {0x424a90,"8b44240483ec0c55568bf1578daed001","actor movement"},
+        {0x423c30,"c781ec03000000000000e951","movement target reset"},
         {0x499740,"83ec6ca154fa6700565050506a016a00","physent native death"},
         {0x41b5b0,"83ec18558b6c242085ed56578bf17461","action activation"},
         {0x41fbb0,"568b711885f67507b8681968005ec3e8","instance name"},

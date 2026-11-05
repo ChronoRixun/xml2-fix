@@ -1,12 +1,14 @@
 #include "join_in_progress_core.hpp"
 #include "gns_transport_core.hpp" // p060fix/AR: the lost-newcomer decision and its ledger (the cohort model below)
 #include "join_in_progress_rules.hpp"
+#include "gns_transport_rules.hpp" // AR8: the input block layout the epoch-marker hooks read
 #include "join_in_progress_diagnostics.hpp"
 #include "gameplay_capabilities.hpp"
 #include "actor_ai_layout.hpp" // p060fix/AI: the brain ring layout per stage, checked against E4's ledger rows
 #include "e4_core_sites.hpp"
 #include <cstdlib>
 #include <algorithm>
+#include <iterator>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -50,6 +52,7 @@ namespace
 		return o;
 	}
 #include "join_in_progress_lost_newcomer.inl"
+#include "join_in_progress_execution.inl"
 	// p060fix/AR: the pure pieces, one by one.
 	void lost_newcomer_units()
 	{
@@ -124,6 +127,184 @@ namespace
 		lost_newcomer_model::run_all();
 		lost_newcomer_model::control_060zj();
 		lost_newcomer_model::sensitivity();
+		// b2d-fix-jip (live-b2d N-STALL4): the decision at a transport tick before the native add was parsed.
+		{
+			check(newcomer_decision_waits_for_record(true, false) && !newcomer_decision_waits_for_record(true, true) && !newcomer_decision_waits_for_record(false, false) && !newcomer_decision_waits_for_record(false, true),
+				"AR carry (b2d): an absent record keeps the decision open at a tick and settles it only at the restart entry; a removed record settles it anywhere");
+			// X-4p-b on the slow guest: decision (pump) -> tick: no record -> 0x1f parsed: record created -> tick: removed.
+			newcomer_ledger slow;
+			slow.decide(3);
+			bool record_exists = false;
+			auto tick = [&](bool last_chance) { // carry_decisions' shape: absent at a tick stays open; a record is removed; absent at the entry settles
+				if (!slow.must_remove(3)) return false;
+				if (!record_exists) { if (newcomer_decision_waits_for_record(true, last_chance)) return false; slow.removed(3); return true; }
+				record_exists = false; slow.removed(3); return true;
+			};
+			check(!tick(false) && slow.must_remove(3), "AR carry (b2d, X-4p-b): at the tick before the native add is parsed the decision stays open (the b2d build closed it as 'already gone')");
+			record_exists = true; // the parser runs the host's 0x1f (mesh completion, 0x25 reply): the record for the removed seat exists
+			check(tick(false) && !record_exists && !slow.must_remove(3) && (slow.applied & 0x08), "AR carry (b2d, X-4p-b): the next tick removes the record the native add created - the restart sees 3 participants on every peer");
+			check(!tick(false) && slow.restart_entry() == 0, "AR carry (b2d): nothing is left open at the restart entry");
+			// X-4p-c's order (the add parsed first) is unchanged: one tick removes it.
+			newcomer_ledger fast; fast.decide(3); record_exists = true;
+			slow = fast; check(tick(false) && !slow.must_remove(3), "AR carry (b2d, X-4p-c): with the record already there the tick removes it as before");
+			// The native 0x2b removed it before any tick: open until the restart entry, settled there without a removal.
+			newcomer_ledger gone; gone.decide(2);
+			check(newcomer_decision_waits_for_record(true, false) && gone.must_remove(2), "AR carry (b2d): a record the native 0x2b already removed keeps the decision open through the ticks");
+			gone.removed(2); // the restart entry (last chance): absent settles
+			check(!gone.must_remove(2) && gone.restart_entry() == 0, "AR carry (b2d): the restart entry settles it as 'already gone' (no decision left open, no wait)");
+		}
+	}
+	// b2d-fix-jip (live-b2d N-LATE4 / N-2c-LATE): the restart-release barrier (join_in_progress_core::input_epoch_barrier) -
+	// unit rules, then a label model of the receiver: every peer of a cohort runs the same filter over its own arrival order
+	// and the model compares what label each peer gives the sender's records (what the one-label-late split is made of).
+	namespace barrier_model
+	{
+		using namespace join_in_progress_core;
+		enum class ev { stale, real, resent, marker };
+		struct entry { bool stale; int label; };
+		struct receiver
+		{
+			input_epoch_barrier barrier; input_epoch_memory memory;
+			unsigned counter[4]{}; std::uint32_t read[4]{}; bool armed = true;
+			std::vector<entry> stored[4], held[4]; // per participant block: what the native store holds, what the barrier holds aside
+			unsigned dropped_at_marker = 0, flushed = 0, resets = 0, lates = 0;
+			void reset_all(int own, std::uint32_t now) { memory.forget(); barrier.disarm(); if (armed) barrier.arm(own, now); for (unsigned i = 0; i < 4; ++i) { counter[i] = 0; read[i] = 0; stored[i].clear(); held[i].clear(); } }
+			// The store hook's decision for one record of `index` arriving at `now`.
+			void receive(unsigned index, ev e, std::uint32_t now, std::uint16_t nonce = 0, int wire_label = 0)
+			{
+				if (e == ev::marker)
+				{
+					const auto a = input_epoch_store_action(0, input_epoch_mark_for(nonce), memory.last[index], read[index]);
+					if (a == input_epoch_action::ignore) return;
+					memory.last[index] = nonce;
+					dropped_at_marker += barrier.marker(index); held[index].clear();
+					if (a == input_epoch_action::late) { ++lates; return; }
+					++resets; counter[index] = 0; read[index] = 0; stored[index].clear(); // the block reset
+					return;
+				}
+				const int label = e == ev::resent ? wire_label : int(counter[index]++); // the decoder: single records take the counter, batch records the wire label
+				const auto h = barrier.record(index, now);
+				if (h == input_epoch_hold::hold) { held[index].push_back({e == ev::stale, label}); return; }
+				if (h == input_epoch_hold::flush) { for (const auto& r : held[index]) { stored[index].push_back(r); ++flushed; } held[index].clear(); barrier.take(index); }
+				stored[index].push_back({e == ev::stale, label});
+			}
+			void consume(unsigned index, unsigned n) { read[index] += n; }
+			int first_real_label(unsigned index = 2) const { for (const auto& r : stored[index]) if (!r.stale) return r.label; return -1; }
+			unsigned stale_stored(unsigned index = 2) const { unsigned n = 0; for (const auto& r : stored[index]) n += r.stale; return n; }
+		};
+		bool same_labels(const std::vector<receiver>& peers, unsigned index = 2)
+		{
+			for (std::size_t i = 1; i < peers.size(); ++i)
+				if (peers[i].first_real_label(index) != peers[0].first_real_label(index) || peers[i].stale_stored(index) != peers[0].stale_stored(index)) return false;
+			return true;
+		}
+	}
+	void restart_release_barrier_units()
+	{
+		using namespace join_in_progress_core;
+		using namespace barrier_model;
+		{
+			input_epoch_barrier b;
+			check(!b.any() && b.record(1, 100) == input_epoch_hold::store && b.marker(1) == 0, "barrier: never armed - every record is stored, a marker drops nothing");
+			b.arm(0, 1000);
+			check(b.any() && !b.expecting[0] && b.expecting[1] && b.expecting[2] && b.expecting[3] && b.armed_at == 1000, "barrier: armed at this PC's ring reset for every index but its own");
+			check(b.record(0, 1001) == input_epoch_hold::store && b.held[0] == 0, "barrier: this PC's own records (the own-record store) are never held");
+			check(b.record(2, 1001) == input_epoch_hold::hold && b.record(2, 1500) == input_epoch_hold::hold && b.held[2] == 2 && b.expecting[2], "barrier: a peer's records before its marker are held and counted");
+			check(b.marker(2) == 2 && !b.expecting[2] && b.held[2] == 0 && b.marker(2) == 0, "barrier: its marker ends the expectation and drops the held records (a second marker drops nothing)");
+			check(b.record(2, 1600) == input_epoch_hold::store, "barrier: after the marker its records are stored as usual");
+			check(b.record(3, 1000 + input_epoch_hold_cap_ms - 1) == input_epoch_hold::hold && b.record(3, 1000 + input_epoch_hold_cap_ms) == input_epoch_hold::flush && !b.expecting[3] && b.held[3] == 1,
+			      "barrier: at the cap (5000 ms after the reset) the next record flushes - the held one(s) are stored first, then it");
+			check(b.take(3) == 1 && b.held[3] == 0 && b.record(3, 9000) == input_epoch_hold::store, "barrier: take() hands the held count to the replay; after the flush nothing is held");
+			input_epoch_barrier full; full.arm(0, 0);
+			for (unsigned i = 0; i < input_epoch_hold_records; ++i) full.record(1, 10);
+			check(full.held[1] == input_epoch_hold_records && full.record(1, 11) == input_epoch_hold::flush && !full.expecting[1], "barrier: a full hold (96 records) flushes before the cap");
+			full.arm(2, 50); check(!full.expecting[2] && full.expecting[1] && full.held[1] == 0 && full.armed_at == 50, "barrier: re-arming (the start's reset after the release's) clears the counts and the clock");
+			full.disarm(); check(!full.any() && full.record(1, 60) == input_epoch_hold::store, "barrier: disarmed (session end, RestartInputEpoch=0) - stored as stock");
+			check(input_epoch_hold_cap_ms == 5000 && input_epoch_hold_records == 96 && input_epoch_record_bytes == 0x24, "barrier: cap 5 s (observed marker skew 1.0-2.4 s), 96 records, the store's 0x24-byte record");
+			input_epoch_barrier wrap; wrap.arm(0, 0xfffffff0u);
+			check(wrap.record(1, 0x00000010u) == input_epoch_hold::hold && wrap.record(1, 0xfffffff0u + input_epoch_hold_cap_ms) == input_epoch_hold::flush, "barrier: the cap survives a GetTickCount wrap");
+		}
+		// The label model. P = index 2 restarts; the receivers (host 0, guest 1[, guest 3]) each reset at t0 and see P's
+		// records in their own order. `stale` = a record P sent before its restart (in flight); `real` = P's frame 0 after
+		// its marker (a single record); `resent` = P's frame 0 through the reliable 0x5c/0x5d resend (wire label).
+		auto cohort = [](std::size_t n, bool barrier) { std::vector<receiver> peers(n); for (std::size_t i = 0; i < n; ++i) { peers[i].armed = barrier; peers[i].reset_all(int(i == 0 ? 0 : i == 1 ? 1 : 3), 1000); } return peers; };
+		for (const std::size_t players : {2u, 3u, 4u}) // 2, 3 and 4 players: 1, 2 and 3 receivers of P's stream
+		{
+			const std::size_t n = players - 1;
+			{ // on-time marker on every peer (the common case): nothing changes - label 0 = P's first real record
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::marker, 2500, 0x2d25); r.receive(2, ev::real, 2800); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.first_real_label() == 0 && r.stale_stored() == 0 && r.resets == 1 && r.dropped_at_marker == 0;
+				check(ok, "barrier model: on-time marker - every peer labels P's first real record 0 (nothing held)");
+			}
+			{ // X-4p-a: ONE peer (the host) gets a stale record first and P's marker 0.3 s after it would have passed its gate
+				auto fixed = cohort(n, true), before = cohort(n, false);
+				for (auto* set : {&fixed, &before})
+				{
+					auto& host = (*set)[0];
+					host.receive(2, ev::stale, 1300); // m11's pre-restart record, parsed after the host's reset
+					const bool gate_can_pass = !host.stored[2].empty();
+					if (gate_can_pass) host.consume(2, 1); // the b2d host passed its frame-0 gate on it (05:36:01.880)
+					host.receive(2, ev::marker, 2538, 0x2d25); // m11's marker, 05:36:02.169
+					host.receive(2, ev::real, 2800);
+					for (std::size_t i = 1; i < set->size(); ++i) { (*set)[i].receive(2, ev::marker, 2500, 0x2d25); (*set)[i].receive(2, ev::real, 2800); }
+				}
+				check(!fixed[0].stored[2].empty() && fixed[0].first_real_label() == 0 && fixed[0].stale_stored() == 0 && fixed[0].dropped_at_marker == 1 && fixed[0].lates == 0 && same_labels(fixed),
+				      players == 4 ? "barrier model (X-4p-a, 4 players): the host holds m11's stale record, cannot pass its gate on it, drops it at m11's marker - label 0 = m11's frame 0 on the host and both guests"
+				                   : "barrier model (X-4p-a shape): the one late peer holds the stale record and drops it at the marker - labels equal on every peer");
+				check(before[0].lates == 1 && before[0].stale_stored() == 1 && before[0].first_real_label() == 1 && (before.size() == 1 || (before[1].first_real_label() == 0 && !same_labels(before))),
+				      "barrier model (control, b2d build): without the barrier the host stores the stale record as label 0, passes its gate, ignores the late marker, and labels m11's frame 0 as 1 while the guests label it 0 - the N-LATE4 split");
+			}
+			{ // X-2cR / X-2cL / X-2cR2 (2 players): the guest gets the host's stale record, the marker 1.2-2.4 s after its reset
+				auto fixed = cohort(1, true), before = cohort(1, false);
+				for (auto* set : {&fixed, &before}) { auto& g = (*set)[0]; g.reset_all(1, 1000); g.receive(0, ev::stale, 1100); g.receive(0, ev::stale, 1120); if (!g.stored[0].empty()) g.consume(0, 1); g.receive(0, ev::marker, 3400, 0x1d59); g.receive(0, ev::real, 3600); }
+				check(fixed[0].stale_stored(0) == 0 && fixed[0].first_real_label(0) == 0 && fixed[0].dropped_at_marker == 2 && fixed[0].lates == 0 && before[0].lates == 1 && before[0].first_real_label(0) == 2,
+				      "barrier model (X-2cR shape): the guest holds the host's two stale records and drops them at the marker (label 0 = the host's frame 0, as on the host); the b2d build labelled it 2 after a late marker");
+			}
+			{ // late on every peer (every parser behind): the same hold and drop everywhere
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::stale, 1200); r.receive(2, ev::marker, 4500, 0x2d25); r.receive(2, ev::real, 4700); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.first_real_label() == 0 && r.dropped_at_marker == 1;
+				check(ok, "barrier model: marker late (inside the cap) on every peer - every peer drops its held stale record; labels equal");
+			}
+			{ // marker lost on every peer: the cap stores the held records as they came - the stock labelling, the same everywhere
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::stale, 1200); r.receive(2, ev::real, 6100); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.flushed == 1 && r.stale_stored() == 1 && r.first_real_label() == 1;
+				check(ok, "barrier model: marker lost everywhere - at the cap each peer stores the stale record (label 0) and the real one (label 1): the stock labelling, equal on every peer");
+			}
+			{ // marker lost on one peer only, with a stale record there: the residual (the cap gives that peer the stock labelling)
+				auto p = cohort(n, true), before = cohort(n, false);
+				for (auto* set : {&p, &before})
+				{
+					(*set)[0].receive(2, ev::stale, 1200); (*set)[0].receive(2, ev::real, 6100);
+					for (std::size_t i = 1; i < set->size(); ++i) { (*set)[i].receive(2, ev::marker, 2500, 0x2d25); (*set)[i].receive(2, ev::real, 2800); }
+				}
+				check(p[0].first_real_label() == 1 && (n == 1 || (!same_labels(p) && !same_labels(before))) && p[0].stale_stored() == before[0].stale_stored(),
+				      "barrier model (residual): a marker lost on one peer that holds a stale record gives that peer the stock labelling at the cap - the b2d build's outcome, never worse");
+				auto clean = cohort(n, true);
+				clean[0].receive(2, ev::real, 6100); for (std::size_t i = 1; i < n; ++i) { clean[i].receive(2, ev::marker, 2500, 0x2d25); clean[i].receive(2, ev::real, 2800); }
+				check(same_labels(clean) && clean[0].first_real_label() == 0, "barrier model: a marker lost on one peer with nothing stale there - its cap stores the real record as label 0, equal to the others");
+			}
+			{ // P-LJ3: the newcomer's frame 0 reaches every peer through the reliable resend 11 s after their resets, its marker 16.6 s after
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::resent, 12000, 0, 0); r.consume(2, 1); r.receive(2, ev::marker, 12013, 0x70d8); r.receive(2, ev::real, 12100); }
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.lates == 1 && r.first_real_label() == 0 && r.flushed == 0 && r.dropped_at_marker == 0;
+				check(ok, "barrier model (P-LJ3): past the cap the resent frame 0 is stored (wire label 0) and consumed, the marker is late and IGNORED on every peer alike (the live PASS, unchanged)");
+			}
+			{ // a resent real record inside the cap, then the marker: dropped, requested again (the resend serves it by label)
+				auto p = cohort(n, true);
+				for (auto& r : p) { r.receive(2, ev::resent, 3000, 0, 0); r.receive(2, ev::marker, 3500, 0x70d8); r.receive(2, ev::resent, 4000, 0, 0); r.receive(2, ev::real, 4100); }
+				// (How the block counter follows a stored batch record is the decoder's business and not modelled: only the first label is checked.)
+				bool ok = same_labels(p); for (auto& r : p) ok = ok && r.dropped_at_marker == 1 && r.resets == 1 && r.first_real_label() == 0 && r.stored[2].size() == 2 && !r.stored[2][0].stale;
+				check(ok, "barrier model: a resent frame 0 held inside the cap is dropped at the marker and comes again by label - label 0 = frame 0 on every peer");
+			}
+		}
+		{ // the hold is per participant: P's hold never touches Q's records; a marker for Q releases only Q
+			receiver r; r.reset_all(0, 1000);
+			r.receive(2, ev::stale, 1100); r.receive(1, ev::marker, 1200, 0x1111); r.receive(1, ev::real, 1300);
+			check(r.held[2].size() == 1 && r.barrier.expecting[2] && !r.barrier.expecting[1] && r.stored[1].size() == 1 && !r.stored[1][0].stale && r.stored[2].empty(), "barrier model: holds are per participant - Q's marker releases Q alone, P's stale record stays held");
+		}
 	}
 }
 
@@ -401,6 +582,16 @@ int main(int argc, char** argv)
 		check(loaded, "retail image mapped");
 		if (loaded)
 		{
+			check(join_in_progress_rules::execution_mismatch(mapped.data(),true,true)==nullptr,"AR5: all optional instruction/ABI contracts match retail");
+			for(const auto group : {std::span<const join_in_progress_rules::guard>(join_in_progress_rules::execution_wrapper_guards),std::span<const join_in_progress_rules::guard>(join_in_progress_rules::execution_observer_guards)}) {
+				bool refuse=true,off=true;
+				for(const auto& g:group) for(unsigned i=0;i<g.hex.size()/2;++i) {
+					auto changed=mapped;changed[g.va-limits_rules::image_base+i]^=1;
+					refuse &= join_in_progress_rules::execution_mismatch(changed.data(),true,true)!=nullptr;
+					off &= join_in_progress_rules::execution_mismatch(changed.data(),false,false)==nullptr;
+				}
+				check(refuse && off,"AR5: every optional guard byte refuses ON and adds no OFF acceptance constraint");
+			}
 			const auto* bad = join_in_progress_rules::first_mismatch(mapped.data());
 			check(bad == nullptr, bad ? bad->what : "every install guard matches the retail executable");
 			check(join_in_progress_rules::first_mismatch(mapped.data(), true) == nullptr, "AM: probe-only visibility/spawner guards match retail");
@@ -808,6 +999,64 @@ int main(int argc, char** argv)
 			check(event_kind_key(mem) == 0x320 && canonical_event_less(mem, jk, 0x3ff) && !canonical_event_less(jk, mem, 0x3ff), "follow-up 9: a member event (its offset) sorts before a static kind on the same owner");
 			check(!canonical_event_less(hk, jk, 0x3ff) && !canonical_event_less(jk, hk, 0x3ff), "follow-up 9: the same kind on the same slot is equal across processes");
 			check(cohort_sync_clears_late_restart(false) && !cohort_sync_clears_late_restart(true), "follow-up 9: cohort synchronized ends the late restart only when no frame-0 epoch is still armed");
+			// AR6 (fable-ar6): the pause-code guard at the controller apply - a function of the record alone.
+			{
+				using join_in_progress_core::applied_code_mask; using join_in_progress_core::pause_code_bit; using join_in_progress_core::ring_record_mask;
+				check(pause_code_bit == 0x00080000u && join_in_progress_core::pause_guard_frames == 2, "AR6: UI code 0x13 is bit 19; the guard covers frames 0 and 1");
+				check(applied_code_mask(0x00080000u, 0) == 0 && applied_code_mask(0x00080000u, 1) == 0, "AR6: frames 0 and 1 drop the pause code");
+				check(applied_code_mask(0x00080000u, 2) == 0x00080000u && applied_code_mask(0x00080000u, 1000) == 0x00080000u, "AR6: frame 2 and later keep it");
+				check(applied_code_mask(0x0008a5a5u, 0) == 0x0000a5a5u && applied_code_mask(0x0000a5a5u, 0) == 0x0000a5a5u, "AR6: only bit 0x13 changes; a record without it is untouched");
+				check(applied_code_mask(0xffffffffu, 1) == 0xfff7ffffu && applied_code_mask(0, 0) == 0, "AR6: every other code survives; zero stays zero");
+				const std::uintptr_t sync = 0x79fbb0u, slot0 = sync + 0x268u;
+				check(ring_record_mask(slot0 + 8u) && ring_record_mask(slot0 + 0x28u + 8u) && ring_record_mask(slot0 + 299u * 0x28u + 8u), "AR6: block 0 slots 0, 1, 299 - the code mask at slot + 8");
+				check(ring_record_mask(sync + 3u * 0x3184u + 0x268u + 8u) && ring_record_mask(sync + 3u * 0x3184u + 0x268u + 299u * 0x28u + 8u), "AR6: block 3 (the last participant) too");
+				check(!ring_record_mask(sync + 4u * 0x3184u + 0x268u + 8u) && !ring_record_mask(slot0 + 300u * 0x28u + 8u), "AR6: a fifth block or a 301st slot is not a ring record");
+				check(!ring_record_mask(slot0 + 4u) && !ring_record_mask(slot0 + 12u) && !ring_record_mask(slot0) && !ring_record_mask(sync + 0x3170u), "AR6: the frame word, the axes, the valid byte and the ring head are not the mask field");
+				check(!ring_record_mask(0x12345678u) && !ring_record_mask(0) && !ring_record_mask(sync - 0x28u + 8u), "AR6: a stack record, null and memory below the synchronizer are left alone");
+				check(ring_record_mask(0x1000u + 0x268u + 8u, 0x1000u) && !ring_record_mask(0x1000u + 0x268u + 9u, 0x1000u), "AR6: the test works on any synchronizer address and needs the exact field");
+			}
+			// AR6 Layer 1 (fable-ar6): the sender keeps the first whole_input_frames records full after a ring reset.
+			{
+				using join_in_progress_core::restart_whole_input; using join_in_progress_core::send_form; using join_in_progress_core::whole_input_frames;
+				check(whole_input_frames == 32, "AR6 L1: the whole-input window is 32 frames (~1 s at 30 fps)");
+				check(restart_whole_input(0) == send_form::force_full && restart_whole_input(31) == send_form::force_full, "AR6 L1: frames 0 and 31 go out full");
+				check(restart_whole_input(32) == send_form::stock && restart_whole_input(2000) == send_form::stock, "AR6 L1: frame 32 and later use the stock delta decision");
+			}
+			// AR7 (fable-ar7) / b2c review: the clock step. The step word travels with its placeholder bit (the sender's
+			// `and eax, 0xffff7fff` masks the code-mask dword), so the stock rule is already the same on every peer; the
+			// patch ([Online] SymmetricClockStep, default OFF) only changes what a flagged record counts, everywhere alike.
+			{
+				using namespace join_in_progress_core;
+				const std::uint16_t capped = std::uint16_t(step_word_cap | step_placeholder_bit), frame33 = std::uint16_t(333u | step_placeholder_bit);
+				check(step_seconds(step_word_cap) == 1.0f && step_seconds(capped) == 1.0f && step_seconds(0) == 0.0f, "AR7: the step word is 0.1 ms units, bit 15 is not part of the value");
+				check(wire_step_word(capped) == capped && wire_step_word(frame33) == frame33 && wire_step_word(step_word_cap) == step_word_cap, "AR7: the wire carries the step word verbatim, placeholder bit included (0x5597e9 -> 0x5597fe)");
+				check(wire_code_mask(0xffffffffu) == 0xffff7fffu && wire_code_mask(0x00088000u) == 0x00080000u && wire_code_mask(0x00080000u) == 0x00080000u, "AR7: it is the code-mask dword that loses bit 15 on the wire (0x5597f1)");
+				check(stock_clock_step(capped) == step_placeholder_seconds && stock_clock_step(wire_step_word(capped)) == step_placeholder_seconds, "AR7: stock - a flagged 1.0 s record counts 0.025 s on its owner and, received verbatim, 0.025 s on every other peer");
+				check(stock_clock_step(step_word_cap) == 1.0f && stock_clock_step(333) == step_seconds(333), "AR7: stock - an unflagged record counts its value everywhere");
+				bool stock_symmetric = true, patched_symmetric = true;
+				for (unsigned w = 0; w < 0x10000u; ++w)
+				{
+					const auto word = std::uint16_t(w);
+					if (stock_clock_step(word) != stock_clock_step(wire_step_word(word))) stock_symmetric = false;
+					if (symmetric_clock_step(word) != symmetric_clock_step(wire_step_word(word)) || symmetric_clock_step(word) != step_seconds(word)) patched_symmetric = false;
+				}
+				check(stock_symmetric, "AR7: for every step word the stock step on the owner equals the stock step on a receiver (the stock rule is symmetric; the AR7 premise was wrong)");
+				check(patched_symmetric, "AR7: for every step word the patched step is the value, on the owner and on every receiver alike");
+				check(symmetric_clock_step(frame33) == step_seconds(333) && stock_clock_step(frame33) == step_placeholder_seconds && symmetric_clock_step(capped) == 1.0f, "AR7: with the patch a flagged 33.3 ms record counts 33.3 ms and a capped placeholder 1.0 s (stock: 25 ms) - a pacing change, not a desync fix");
+				check(std::uint32_t(0x3ccccccd) == [] { float f = step_placeholder_seconds; std::uint32_t u; std::memcpy(&u, &f, 4); return u; }(), "AR7: the stock constant at 0x55923f is 0.025f");
+				// The patch: 2 bytes at 0x559233 (the first instruction after `and eax, 0x7fff`) jump to the unflagged path.
+				using namespace join_in_progress_rules;
+				check(clock_step_site + 2 + clock_step_patch[1] == clock_step_target && clock_step_patch[0] == 0xeb && clock_step_patch[2] == 0x90 && clock_step_patch[3] == 0x90, "AR7: eb 1a at 0x559233 lands on 0x55924f (movzx ecx, ax), then two nops");
+				const std::string region(clock_step_guards[0].hex);
+				const auto at = [&](std::uint32_t va, std::size_t n) { return region.substr((va - clock_step_guards[0].va) * 2, n * 2); };
+				check(clock_step_guards[0].va == 0x559222 && region.size() == 2 * (0x55926b - 0x559222), "AR7: the guard covers 0x559222..0x55926a (the read, both paths and the join)");
+				check(at(clock_step_site, 4) == "89442410" && at(clock_step_target, 3) == "0fb7c8" && at(0x55922e, 5) == "25ff7f0000" && at(0x55923b, 8) == "c7442414cdcccc3c", "AR7: the guarded bytes hold the original mov, the jump target's movzx, the mask and the 0.025 s constant");
+				check(std::string(clock_step_guards[2].hex).substr(0, 12) == "d90530006800" && clock_step_guards[2].va == clock_step_observe_site && clock_step_observe_resume == clock_step_observe_site + clock_step_observe_original.size(), "AR7: the observer site is the guarded fld dword [0x680030] (6 bytes), resume right after it");
+				check(step_observe_frames == 41 && step_observe_lines == 2048, "AR7: the observer covers frames 0..40 and at most 2048 lines per process");
+				bool belt = true;
+				for (unsigned n = 10; n <= 60; ++n) { float f = canonical_clock_step(n); std::uint32_t u; std::memcpy(&u, &f, 4); if (f != 1.0f / float(n) || !(f > 0.0f) || (n == 30 && u != 0x3d088889u) || (n == 60 && u != 0x3c888889u)) belt = false; }
+				check(belt && canonical_clock_step(0) == 0.0f, "AR7 belt: 1/N for N in 10..60 (30 -> 0x3d088889, 60 -> 0x3c888889); no rate -> 0 (the stock step stays)");
+			}
 			// Follow-up 10 (round 7): the pump's resume after the world restore is the ONLY controls resume of an existing member
 			// (AE10's zone-start resume consumed it and the host never produced its frame-0 input); it happens once, after the
 			// epoch saw the loading flags, and never before.
@@ -920,7 +1169,125 @@ int main(int argc, char** argv)
 		event_entry heap_no_vtable = heap_host; heap_no_vtable.kind_vtable = 0;
 		check(event_kind_key(heap_no_vtable) == 0x033a4568, "follow-up 14 (S2): a heap kind whose vtable could not be read keeps its raw address");
 	}
-	lost_newcomer_units(); // p060fix/AR
+	// AR8 (fable-ar8): the input-stream epoch marker - pure rules and the three sites.
+	{
+		using namespace join_in_progress_core;
+		using namespace join_in_progress_rules;
+		check(input_epoch_mark_prefix == 0xfffa0000u && input_epoch_copies == 2, "AR8: markers carry the 0xfffa prefix; two copies per epoch");
+		check(input_epoch_mark(0xfffa0001u) && input_epoch_mark(0xfffaffffu) && !input_epoch_mark(0xfffa0000u) && !input_epoch_mark(0xfffb0001u) && !input_epoch_mark(0) && !input_epoch_mark(0x00080000u) && !input_epoch_mark(0xffffffffu),
+		      "AR8: a marker is prefix | non-zero nonce; nonce 0, another prefix, zero, the pause code and all-ones are not markers");
+		bool natives_clear = true;
+		for (const auto code : native_event_codes) natives_clear &= !input_epoch_mark(code);
+		check(natives_clear, "AR8: none of the four native lockstep event codes is a marker");
+		check(input_epoch_mark_for(0x1234) == 0xfffa1234u && input_epoch_mark_for(0) == 0xfffa0001u && input_epoch_nonce(0xfffa1234u) == 0x1234 && input_epoch_mark(input_epoch_mark_for(0)),
+		      "AR8: mark_for/nonce round-trip; a zero nonce becomes 1");
+		// b2c review: the sender strips bit 15 of the code mask (0x5597f1), so the nonce is 15 bits - a marker is the same
+		// dword in the sender's own ring and after the wire, and a nonce 0x8000 can no longer arrive as "not a marker".
+		check(input_epoch_nonce_mask == 0x7fffu && input_epoch_mark_for(0x8000) == 0xfffa0001u && input_epoch_mark_for(0x9234) == 0xfffa1234u && input_epoch_nonce(0xfffa9234u) == 0x1234,
+		      "AR8: the nonce is 15 bits (bit 15 of the mask is stripped on the wire); 0x8000 becomes 1, 0x9234 becomes 0x1234");
+		bool wire_same = true;
+		for (unsigned n = 0; n < 0x10000u && wire_same; ++n) { const auto m = input_epoch_mark_for(std::uint16_t(n)); wire_same = wire_code_mask(m) == m && input_epoch_mark(wire_code_mask(m)) && input_epoch_nonce(wire_code_mask(m)) == input_epoch_nonce(m); }
+		check(wire_same, "AR8: for every nonce the marker survives the wire's mask strip unchanged and is still a marker with the same nonce");
+		bool nonces_ok = true;
+		std::uint16_t prev = 0;
+		for (std::uint32_t seed = 0; seed < 70000u && nonces_ok; seed += 7u) { const auto n = next_input_epoch_nonce(seed, prev); nonces_ok = n != 0 && n != prev && !(n & 0x8000u); prev = n; }
+		check(nonces_ok && next_input_epoch_nonce(0x5bd1u, 0) != 0 && next_input_epoch_nonce(0, 0) != 0, "AR8: the next nonce is never 0, never the previous one and never has bit 15 (70000 seeds)");
+		bool nonces_collide_free = true;
+		for (unsigned p = 1; p < 0x8000u && nonces_collide_free; ++p) { const auto seed = std::uint32_t(p ^ 0x5bd1u); const auto n = next_input_epoch_nonce(seed, std::uint16_t(p)); nonces_collide_free = n != 0 && n != p && !(n & 0x8000u); }
+		check(nonces_collide_free, "AR8: when the seed would repeat the previous nonce, the fallback is a different non-zero 15-bit nonce (every previous value)");
+		check(input_epoch_receive(0x00080000u, 7) == input_epoch_action::store && input_epoch_receive(0xfff31fffu, 7) == input_epoch_action::store, "AR8: a real record and a native event are stored as before");
+		check(input_epoch_receive(0xfffa0007u, 0) == input_epoch_action::reset && input_epoch_receive(0xfffa0007u, 6) == input_epoch_action::reset, "AR8: a new nonce resets the participant's block");
+		check(input_epoch_receive(0xfffa0007u, 7) == input_epoch_action::ignore, "AR8: the same nonce again (the extra copy) is ignored");
+		check(input_epoch_counter_after_ignore(5) == 4 && input_epoch_counter_after_ignore(1) == 0 && input_epoch_counter_after_ignore(0) == 0, "AR8: an ignored copy gives the decoder's counter increment back, never below 0");
+		// b2c review finding 2: the store's kind says which decoder kinds wrote the mask slot; only those may be read as a marker.
+		{
+			bool kinds_ok = input_epoch_store_kind_has_mask(0) && input_epoch_store_kind_has_mask(1) && input_epoch_store_kind_has_mask(3) && input_epoch_store_kind_has_mask(5);
+			for (const auto k : {2u, 4u, 6u, 8u, 0x10u, 7u, 0x11u, 0xffffffffu}) kinds_ok = kinds_ok && !input_epoch_store_kind_has_mask(k);
+			check(kinds_ok, "AR8: the decoder writes the mask for store kinds 0 (full), 1 (mask), 3 (mask+axes01) and 5 (mask+axes23) only; 2, 4, 6, 8 and 0x10 leave the slot stale");
+			// Three peers: A's marker (a full record, kind 0) resets A's block; the next message is B's axes-only delta (kind 2)
+			// decoded at the same stack depth, so its record's mask slot still holds A's marker. B's block must not be reset.
+			input_epoch_memory memory;
+			const auto a_mark = input_epoch_mark_for(0x2a2a);
+			std::uint8_t decoder_record[0x28]{};
+			std::memcpy(decoder_record + 4, &a_mark, 4);
+			check(input_epoch_store_action(0, a_mark, memory.last[0]) == input_epoch_action::reset, "AR8: peer A's marker, a full record (kind 0), resets A's block");
+			memory.last[0] = input_epoch_nonce(a_mark);
+			std::uint32_t stale = 0; std::memcpy(&stale, decoder_record + 4, 4); // B's kind-2 decode wrote +2 and +8 only
+			check(stale == a_mark && input_epoch_store_action(2, stale, memory.last[1]) == input_epoch_action::store && memory.last[1] == 0,
+			      "AR8: peer B's axes-only delta (kind 2) reaches the store with A's marker still in the stale mask slot - it is stored, B's block is NOT reset");
+			check(input_epoch_store_action(8, stale, memory.last[1]) == input_epoch_action::store && input_epoch_store_action(4, stale, memory.last[2]) == input_epoch_action::store && input_epoch_store_action(6, stale, memory.last[3]) == input_epoch_action::store && input_epoch_store_action(0x10, stale, memory.last[1]) == input_epoch_action::store,
+			      "AR8: the same for the step-only (8), axes23 (4), both-axes (6) and body (0x10) kinds of every other peer");
+			check(input_epoch_store_action(0, a_mark, memory.last[0]) == input_epoch_action::ignore && input_epoch_store_action(1, a_mark, memory.last[0]) == input_epoch_action::ignore,
+			      "AR8: A's second copy (full, or a mask-carrying delta) is the repeat it always was");
+			check(input_epoch_store_action(0, 0x00080000u, memory.last[0]) == input_epoch_action::store && input_epoch_store_action(3, 0x00080000u, memory.last[0]) == input_epoch_action::store,
+			      "AR8: a real mask in a mask-carrying kind is stored as before");
+			// b2c review finding 4: the nonce memory does not outlive the blocks. A new occupant of index 1 whose first nonce
+			// equals the old occupant's last one is a new epoch after this PC's all-blocks reset or the session's end.
+			memory.last[1] = 0x1357;
+			check(input_epoch_store_action(0, input_epoch_mark_for(0x1357), memory.last[1]) == input_epoch_action::ignore, "AR8: without forgetting, a new peer's equal nonce would be taken for a repeat (no reset: the one-label offset)");
+			memory.forget();
+			check(memory.empty() && input_epoch_store_action(0, input_epoch_mark_for(0x1357), memory.last[1]) == input_epoch_action::reset && input_epoch_store_action(0, input_epoch_mark_for(0x2a2a), memory.last[0]) == input_epoch_action::reset,
+			      "AR8: after the forget (every all-blocks ring reset, the session's end) every index's next marker resets its block, equal nonce or not");
+		}
+		check(input_ring_pending(0, 5) == 5 && input_ring_pending(3, 3) == 0 && input_ring_pending(298, 1) == 3 && input_ring_pending(300, 1) == 0, "AR8: pending records from read/write with the 300-slot wrap; an out-of-range index counts 0");
+		// Sites: the two CALL replacements reach the retail reset and send-enable; the store's displaced prologue is 11 bytes.
+		check(input_epoch_release_original[0] == 0xe8 && input_epoch_start_original[0] == 0xe8 && input_epoch_release_call + 5 + std::int32_t(0xfff451e3u) == input_ring_reset_all && input_epoch_start_call + 5 + std::int32_t(0xfff44798u) == input_send_enable,
+		      "AR8: 0x613f68 calls 0x559150 and 0x6140b3 calls 0x558850 (the displaced rel32s)");
+		check(input_epoch_store_original.size() == 11 && input_epoch_store_resume == input_epoch_store_site + 11 && input_epoch_store_original[0] == 0x51 && input_epoch_store_original[5] == 0x69 && input_epoch_store_original[7] == 0x84 && input_epoch_store_original[8] == 0x31,
+		      "AR8: the store's prologue push ecx / mov eax,[esp+0xc] / imul eax,eax,0x3184 is re-executed by the bridge; resume at 0x55956b");
+		for (const auto va : {input_epoch_release_call, input_epoch_start_call, input_epoch_store_site, input_post_event, input_block_reset, local_participant_index, 0x559ee7u})
+			check(std::any_of(std::begin(input_epoch_guards), std::end(input_epoch_guards), [va](const auto& g) { return g.va <= va && va + 5 <= g.va + g.hex.size() / 2; }), "AR8: every site and helper the marker relies on is guarded");
+		check(std::string(input_epoch_guards[0].hex).substr((input_epoch_release_call - input_epoch_guards[0].va) * 2, 10) == "e8e351f4ff" && std::string(input_epoch_guards[1].hex).substr((input_epoch_start_call - input_epoch_guards[1].va) * 2, 10) == "e89847f4ff" && std::string(input_epoch_guards[2].hex).substr(0, 22) == "518b44240c69c084310000",
+		      "AR8: the guarded bytes at the three sites are the originals the transaction replaces");
+		check(input_block_counter == 0x317e && gns_transport_rules::input_block_size == 0x3184 && gns_transport_rules::input_read == 0x3170 && gns_transport_rules::input_write == 0x3174 && gns_transport_rules::input_next == 0x317c,
+		      "AR8: the block layout the hooks read (counter +0x317e next to the next frame +0x317c)");
+	}
+	// b2c-fix-crash (live-b2c X-2c N-2c): a marker that reaches a block this PC has already consumed from is late - ignored.
+	{
+		check(input_epoch_receive(0xfffa0007u, 0, 0) == input_epoch_action::reset && input_epoch_receive(0xfffa0007u, 0, 1) == input_epoch_action::late && input_epoch_receive(0xfffa0007u, 0, 299) == input_epoch_action::late,
+		      "late marker: a new nonce after this PC consumed from the block (read index moved) is late, not a reset");
+		check(input_epoch_receive(0xfffa0007u, 7, 1) == input_epoch_action::ignore && input_epoch_receive(0x00080000u, 0, 5) == input_epoch_action::store && input_epoch_receive(0xfff31fffu, 0, 5) == input_epoch_action::store,
+		      "late marker: a repeat stays a repeat; real records and native events are stored whatever was consumed");
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0, 1) == input_epoch_action::late && input_epoch_store_action(2, input_epoch_mark_for(0x0801), 0, 1) == input_epoch_action::store && input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0, 0) == input_epoch_action::reset,
+		      "late marker: X-2c's host marker 0801 at read 1 is late through the store action; a stale-slot kind is stored; read 0 still resets");
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0801), 0) == input_epoch_action::reset && input_epoch_receive(input_epoch_mark_for(0x0801), 0) == input_epoch_action::reset,
+		      "late marker: the three-argument forms (nothing consumed) are the AR8 rules unchanged");
+		// X-2c's receiver sequence: one record consumed (read 1), the host's marker 0801 arrives -> late (ignored, nonce
+		// remembered), its second copy -> the repeat it always was; the next all-blocks reset forgets, a new nonce resets.
+		input_epoch_memory memory;
+		const auto m = input_epoch_mark_for(0x0801);
+		check(input_epoch_store_action(0, m, memory.last[0], 1) == input_epoch_action::late, "late marker: X-2c - the first copy is late");
+		memory.last[0] = input_epoch_nonce(m);
+		check(input_epoch_store_action(0, m, memory.last[0], 1) == input_epoch_action::ignore && input_epoch_store_action(0, m, memory.last[0], 0) == input_epoch_action::ignore,
+		      "late marker: the remembered nonce makes the second copy a repeat, consumed or not");
+		memory.forget();
+		check(input_epoch_store_action(0, input_epoch_mark_for(0x0802), memory.last[0], 0) == input_epoch_action::reset && input_epoch_store_action(0, m, memory.last[0], 0) == input_epoch_action::reset,
+		      "late marker: after this PC's next all-blocks reset a new nonce (or the same one) resets again");
+	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report 0x607390 with a seat whose record was removed.
+	{
+		using namespace join_in_progress_rules;
+		check(mesh_pair_decide(true, true) == mesh_pair_report::stock && mesh_pair_decide(true, false) == mesh_pair_report::partial && mesh_pair_decide(false, true) == mesh_pair_report::partial && mesh_pair_decide(false, false) == mesh_pair_report::none,
+		      "AS: the stock function runs only with both records; one record is partial; neither is none");
+		check(mesh_pair_mask(3, 2) == 0xc && mesh_pair_mask(0, 1) == 0x3 && mesh_pair_mask(4, 2) == 0x14 && mesh_pair_mask(35, 2) == 0xc,
+		      "AS: the pair mask is (1<<a)|(1<<b) with shl-by-cl's 5-bit count (X-4p: edx 0xc = seats 3 and 2)");
+		check(mesh_pair_index(0x8) == 3 && mesh_pair_index(0x4) == 2 && mesh_pair_index(0x1) == 0 && mesh_pair_index(0x6) == 1 && mesh_pair_index(0) == 4 && mesh_pair_index(0x10) == 4,
+		      "AS: the handler's index of a payload half is its first set bit of four, else 4 (no record carries 4: the guard's partial/none branch)");
+		const std::uint32_t payload = (1u << 3) << 16 | (1u << 2); // X-4p: m85 (seat 2) reports its mesh with the removed seat 3
+		check(mesh_pair_index(payload >> 16) == 3 && mesh_pair_index(payload & 0xffff) == 2 && mesh_pair_mask(mesh_pair_index(payload >> 16), mesh_pair_index(payload & 0xffff)) == 0xc && mesh_pair_decide(false, true) == mesh_pair_report::partial,
+		      "AS: X-4p's 0x23 payload names seats 3 (adding, removed) and 2 (sender) - mask 0xc as the crash registers (edx 0xc, ebx 4, ecx 2); partial: seat 2's record alone");
+		check(mesh_pair_original.size() == 5 && mesh_pair_resume == mesh_pair_site + 5 && mesh_pair_original[0] == 0x53 && mesh_pair_original[1] == 0x8b && mesh_pair_original[2] == 0x5c && mesh_pair_original[3] == 0x24 && mesh_pair_original[4] == 0x08,
+		      "AS: the entry's push ebx / mov ebx,[esp+8] (5 bytes) are re-executed by the bridge; resume at 0x607395");
+		for (const auto va : {mesh_pair_site, mesh_pair_resume, 0x6073e4u, 0x6073f3u, 0x60741cu, mesh_pair_handler, 0x604e0au, 0x604e1eu, 0x6141e0u, record_by_index})
+			check(std::any_of(std::begin(mesh_pair_guards), std::end(mesh_pair_guards), [va](const auto& g) { return g.va <= va && va + 4 <= g.va + g.hex.size() / 2; }), "AS: the entry, the faulting load, the manager compare and timer, the handler, both callers and both helpers are guarded");
+		check(std::string(mesh_pair_guards[0].hex).substr(0, 10) == "538b5c2408" && std::string(mesh_pair_guards[1].hex).substr((0x6073e4 - 0x6073a0) * 2, 6) == "8b5e20" && std::string(mesh_pair_guards[1].hex).substr((0x6073f3 - 0x6073a0) * 2, 12) == "3b9720220000" && std::string(mesh_pair_guards[2].hex).substr((0x60741c - 0x6073f9) * 2, 12) == "d99f28220000",
+		      "AS: the guarded bytes hold the entry the transaction replaces, the faulting load at 0x6073e4, the manager+0x2220 compare and the +0x2228 timer store");
+		check(mesh_pair_manager_pending == 0x2220 && mesh_pair_manager_retries == 0x2238 && mesh_pair_manager_settle == 0x2228 && record_mesh_pending == 0x60 && clock_time_slot == 0x28,
+		      "AS: the manager fields and the record's pending-mesh mask the guard writes are the stock function's (0x6073f3..0x60741c; 0x6073e4/0x6073f0 = record+0x40+0x20)");
+	}
+	lost_newcomer_units(); // p060fix/AR (+ b2d-fix-jip: the decision before the native add)
+	restart_release_barrier_units(); // b2d-fix-jip: the restart-release barrier
+	restart_execution_units(); // AR5
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

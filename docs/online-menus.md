@@ -1,5 +1,54 @@
 # Online menus: round 5 broker lifecycle
 
+## Stick navigation in the LC text editor and Host setup
+
+The LC editor (Enter Game Name, Enter IP and Change name) and the custom Host
+rows share signed stick navigation. Retail `0x61a810` combines left/right into
+UI code 0 and forward/back into code 1; their mask bits mean that an axis is
+active. Codes 30/31 in the prompt lookup table are not separate stick edges.
+`0x5d4b00` already returns rising edges, so it must not be edge-filtered again.
+
+Navigation reads the pad slots already polled into the binding map of the
+controller the menu manager follows (`0x5d8570`, as `lobby_player()`, the same
+controller as the D-pad and button masks; the Hub's `menu_player` only when it is
+invalid). This preserves pad remapping and reads before retail `0x61a4c0`
+discards magnitudes at or below 0.75. Per axis the pad value replaces the native
+signed axis only when it is larger, so keyboard-bound movement (for example WASD)
+and other devices still move. A magnitude above 0.5 engages an axis (more
+sensitive than retail's effective 0.75, deliberately); it releases at or below
+0.35. The opposite side of an axis engages only after a neutral sample
+(|v| < 0.35) or after it has been held for 80 ms, so a sprung stick's release
+overshoot does not move back. A diagonal selects one cardinal direction
+and keeps that axis through small changes in dominance. D-pad contacts take
+precedence over the stick. Both repeat after 300 ms, then every 100 ms, matching
+the ordinary native menu timing in `0x5da1a0`; a delayed frame produces one move.
+Native lists additionally accelerate after 1.4 seconds; neither the text grid
+nor the Host rows is a native list. On Host only up/down repeat: a held
+left/right changes Visibility or Drop-in once per push (stick and D-pad).
+Activation/deactivation retires held input.
+Keyboard translation, mouse selection, native editor results and grid geometry
+retain their existing paths.
+
+During those two custom ticks, the guarded manager navigation slot returns
+neutral movement. The native base tick still runs; its independent stick
+navigation and held D-pad repeat cannot apply a second focus move. The slot
+still calls the native navigator on a scratch result (it writes bytes 0..2
+only), so its stick latches and repeat timers stay current for the next native
+menu. The scope flags are set by a scope guard and clear on every exit path. Outside
+those scopes the slot delegates to the original native function.
+
+Hub, Code, Browse, Party, the native lobby/Not Ready screens, LAN lists and pause
+roster retain native focus navigation and repeat. Their raw-mask reads dispatch
+buttons or remap X/Y prompts; they do not interpret axis bits as directions.
+The launcher has no consumer of this input lane.
+
+`xml2_online_menu_navigation_test` checks signed directions, hysteresis,
+diagonals, repeat and all-to-all grid reachability. The `r27-text` mapped-retail
+fixture executes the retail axis producer and the installed editor tick for
+every enabled cell/page/direction and both input devices. `r29-host-input`
+checks Host stick rows and held repeat. These tests do not replace live-pad
+and visual acceptance.
+
 This is a guarded presentation bridge, pending Claude review and real-game
 acceptance. Host fixtures do not establish fresh-boot stability, rendering or
 input parity. Round 3 adds owned native name polling, Code input/clipboard
@@ -638,7 +687,7 @@ Retain native menu names/types `host` / `join`, vtables 0x69f274 / 0x69f33c.
 The invisible marker item `lc_lobby_v1` opts each parsed native skin into the
 adapter. Without it, native activation/tick/Back/deactivation forward unchanged.
 Both parsed `text_playername1` and `text_readycheck1` must be real LISTBOXes
-with backing tables. A marked skin missing either returns to native online
+with backing tables. A marked skin missing either returns to the plain LC failure page
 before the retail activator can dereference it (guarded named-close fallback
 if requesting online faults). It never leaves an inactive lobby waiting for
 an inline dismissal. Unmarked/cached menus forward without resetting the
@@ -767,10 +816,11 @@ characters; counts one digit; fixture ping at most five digits); clip/ellipsis
 inside the approved region without changing the round-3 allowlist.
 
 Compose the localized summary from the numeric/name DATA nodes at the approved
-summary anchor: "2 of 3 ready. Waiting for Alex to get ready." Keep static words
-and suffix within the selected scene; `lc_ready_summary` may be a static scene
-container but is not overwritten by the DLL. The waiting scene shows only for
-an admitted unready member; all-ready and solo scenes are mutually exclusive.
+summary anchor: "2 of 3 ready. Waiting for Alex to get ready." The numeric `lc_ready_summary` remains a static scene. The hidden text
+`lc_ready_waiting` supplies a localized `Waiting for %s to get ready.` template;
+`lc_waiting_name` now holds that entire formatted sentence in one 400-unit DATA
+field. This removes fixed gaps around short names. The field is populated only
+for an admitted unready member; all-ready and solo scenes are mutually exclusive.
 Hero fallback is "Hero assigned at start". RTT unknown = Measuring with neutral
 bars; local = You. SAME BUILD means fixture/token preview, not certified wire
 compatibility. No actual hero, room title, campaign, visibility or route is
@@ -977,7 +1027,7 @@ cannot alias a real remote index zero, unknown local cannot authorize Kick, and
 Back still exits. `r4-dismiss-invalid` verifies notice dismissal does not require
 a roster read: first Back dismisses, a later intentional Back uses native Leave.
 
-Missing-list activation still queues return to native online rather than calling
+Missing-list activation queues the plain LC failure page rather than calling
 the unsafe activator. Its real manager processing/one-native-tick interval is a
 live residual to check, not proven by the queued-request fixture. No live game,
 raster capture or desktop input was executed for this correction.
@@ -2004,3 +2054,287 @@ broker (native posting, full, no installed refusal) keeps the retry copy.
 This remains an inference from this client's advertisement, not a broker-supplied refusal reason. Protocol 2 has no
 policy bit or host-advert timestamp: a host stalled beyond its normal presence interval can still leave stale metadata.
 The confirmation stays within the original deadline; if there is insufficient time, the retry copy wins.
+
+## LC Game Options and ready-roster presentation
+
+The companion builder can author `lc_game_options` with the native
+`GAME_OPTIONS_MENU` class and unchanged option/data identifiers, native commands,
+platform/mode gates and focus notifications. The original definitions are read-only authoring inputs. With Menus installed, requests select the LC variant only if
+`Data/lc_online_options.cap` exactly contains `lc-online-options/1` plus LF and
+both menu halves, scene, package, two backdrop models and the shared row-focus
+model exist. Unsupported or incomplete authoring selects the plain LC failure page.
+The native tick, session setters, save selection, Post and Back remain the
+existing setup flow; there is no second Game Options state machine.
+
+The separate ready roster at `0x5d93f0` uses roster-local LC body-font measurement
+and navy panel adapters. Its localized names, statuses, hero/slow suffixes and
+readiness decisions remain native. Missing private body metrics/atlas retain
+native arguments. This uses the existing Menus switch and font family.
+
+The draw sites `0x5d9a78` / `0x5d9b17` use font channel 0, whose scene material
+normally holds the medium atlas. That argument is a font channel, not a viewport.
+The callback `0x5ef2e0` only emits vertices: `0x5ee780` reads glyph metrics/UVs,
+`0x5ee400` emits the quad and the writer `0x584600` appends geometry attributes.
+The procedural visitor calls the callback at `0x6025c6` and only afterwards
+submits geometry/state through `igCommonTraverseGeometry` at `0x6025e3`.
+Changing and restoring a material or active texture inside the callback therefore
+leaves private glyph UVs paired with the native atlas at submission.
+
+Roster commands now use a separate native text renderer and procedural scene,
+with font slot 6 and its `lc_online_body` atlas bound permanently. It shares the
+source renderer's parent and depth, and therefore its viewport/clip state. Native
+commands retain their own streams/materials. The original UV emitter, pixel
+scaling, nested color scopes, command ownership and cleanup remain unchanged.
+Renderer attachment (`0x5f1230`), detachment (`0x5f0f90`), whole-queue reset
+(`0x5f0f60`) and destruction (`0x59b520`) also manage the private scene. Late
+creation after parent attachment works; an empty parent handle preserves the
+previous attachment for teardown. The scene consumes no menu/focus item and
+requires no companion asset regeneration or increase to the 175-item cap.
+
+`r31-ready-submit` executes the retail procedural visitor, glyph UV emitter and
+vertex writer, then captures submission after the callback returns. It checks
+atlas/UV agreement, nested colors, unchanged viewport state, native neighbors,
+exact command retirement and scene lifetimes at 800x600, 1280x960, 1280x720 and
+1920x1080. The preceding adapter fails with font 6 and atlas 0. Actual Direct3D
+pixels and host/guest pause behavior still require live acceptance.
+
+### Optional native online scenes and text entry
+
+With `Online/Menus=1`, the companion can select `lc_text_entry`,
+`lc_other_online`, `lc_campaign_lobby`, `lc_games_list` and
+`lc_player_game_options`. Each keeps its original native menu class, mode
+predicates, values, policy/information content, list services and return chain.
+The builder reads the original resources and publishes a separate exact
+`Data/lc_online_skin_<native>.cap` only for a supported template and companion
+DLL. Selection checks the complete scene/menu/package/backdrop/focus closure;
+missing assets or an invalid marker select the plain LC failure message.
+
+The PC editor implements keyboard characters but leaves the retained 40-key
+pad grid unpopulated. The scoped LC adapter supplies lower/upper/symbol pages,
+Backspace, Space and Done, plus a clickable Escape/Cancel button. Constant
+intents 100..140 are consumed only by the
+live LC editor and enter the original character lane (`0xa0a061`). Native
+`0x5e72f0` still validates the request tag's charset and byte limit and handles
+Enter/Back/Escape; `0x5e6f30` owns acceptance. The native input-context name
+comparisons stay unchanged: the stock editor uses text-only context 2, while the
+LC editor uses normal menu context 1 so pad bindings are available. Closing/deactivating retires pending
+input. Printable keyboard text comes from Windows' translated `WM_CHAR` stream,
+so the active layout owns letters, Shift/Caps Lock, AltGr and dead-key
+composition. Committed `WM_IME_CHAR` text uses the same queue. The display
+wrapper covers managed windows and native/fullscreen modes. When online
+menus are installed it uses a Unicode subclass, forwarding
+to the original ANSI procedure through `CallWindowProcW`. A thread-local
+Unicode `WH_GETMESSAGE` hook captures LC characters before an ANSI
+`PeekMessageA`/`GetMessageA` pump can narrow them. Only removed messages for
+the editor's window are queued; repeated `PM_NOREMOVE` peeks do not type.
+Consumed messages become `WM_NULL`, so later dispatch cannot type them twice.
+Sent character messages use the subclass directly. Window destruction retires
+the hook; failure to install it logs the failure and visibly refuses physical
+text (the on-screen grid remains usable). With Menus disabled the original
+ANSI subclass and forwarding stay in place.
+DirectInput supplies only arrows, Enter, Escape and Backspace. Their `WM_CHAR`
+copies are ignored, and printable/numpad DI state is consumed without producing
+text or a second menu action. The explicit `chars` test lane shares this queue
+while LC owns the editor; synthetic printable typing uses `chars`, navigation
+uses `keys`.
+
+Only printable ASCII can enter the native character byte. Unsupported Unicode
+(including composed accents, IME text and surrogate pairs) displays
+"Unsupported" instead of truncating to a low byte. Native
+`0x5e72f0` remains the authority for the narrower per-request charset and byte
+limit: a refused printable byte displays "Unsupported" or
+"Text limit" in the spare fourth footer label for three seconds.
+The queue is bounded at 64 entries and reports overflow visibly.
+For tag 3 IP entry, a comma translated from the numpad decimal scan (`0x53`)
+is a period; a main-keyboard comma is still refused. Name punctuation is
+unchanged. ASCII digits and periods from either keyboard section enter the
+same native IP filter. Keyboard arrows
+and menu D-pad bits move focus across enabled keys in the generated 9-column
+layout; Enter/A presses that key, including Done. Escape/B cancel. The native
+menu mask is suppressed only during the wrapped editor tick, so its old
+Enter/Start terminal shortcut cannot also close the grid. Mouse commands retain
+the same 100..140 lane. Owner activation/deactivation and input loss retire queued
+input; page changes repair focus if a cell becomes unavailable.
+Cancellation restores the original buffer, retires the native result request
+with `0x60c780`, and invokes the existing close slot at `0x69f098`. It does not
+call Done's `0x5e6f30` validator: retail Escape does that after restoring the
+seed, so an empty IP seed cannot close. No accepted tag-3 result reaches
+`0x5cf040`, which leaves the previous address and search state unchanged. Escape,
+pad B, focused Cancel/Enter, mouse Cancel's command and the native character
+lane have fixtures for empty/nonempty seeds and empty/edited buffers. During a
+queued close only the base lifecycle ticks; no second terminal action is taken.
+The native tag 3 IP editor exposes digits and period only. Hub and Game Options
+names retain their 31-byte limit. An inherited seed is truncated on activation
+to the request byte limit without splitting UTF-8, and the native display is
+refreshed immediately. Printable input at or above the limit is refused; Cancel
+retains the caller's original seed. Disabled character keys and their separate
+background model items are hidden together (including the IP grid's empty cells).
+The Other ways name and IP requests retain
+their native 15-byte limit. Unscoped requests for this legacy editor also select the plain failure page.
+
+The native campaign chooser's Join action requests `player_game_options` on
+PC, whose handler owns Connect by IP and queues `openmenu games_list`. Its
+optional scene is therefore part of the connected family. The browser retains
+the actual LISTBOX, columns, selection, search, filtering and admission;
+TEXTBOX/LISTBOX font metrics remain native because those renderers bypass the
+private CText scale hook. Original policy content is retained in all four
+informational modes; no replacement policy is authored.
+
+### Network notice lane
+
+`0x60a600` queues native network notices; `0x60aa40`/`0x60a690` own their
+expiry and retirement. Audit address `0x4029f0` polls the active message through
+`0x60a5d0` to keep GUI/HUD rendering during a stall; it is not a drawing entry.
+The existing hold-overlay evidence documents timed native notices failing to
+appear during holds. Menus now registers a separate pre-Present callback that
+draws the active native message with the fix's own geometric panel and GDI text.
+It uses the bounded native formatter, strips native inline colour scopes,
+requires a running campaign, and yields to admission holds and the online
+pages' existing inline/footer notices. It never changes queue priority, expiry,
+readiness, the simulation clock or the stall decision. Failed reads/draws leave
+the native queue intact. This works independently of the JoinInProgress switch.
+
+With the experimental JoinStallWrapper enabled, a classified protected restart
+wait skips the render tail and Present, so this notice lane is also suppressed.
+An active notice does not authorize that tail: it contains the local render work
+the wrapper is testing for lockstep mutations. Native message polling and prefix
+services continue; ordinary stalls and modal/loading/video exclusions retain
+presentation. Notices remain owned by the native queue and can expire while
+presentation is suppressed. Live A42 acceptance must distinguish these cases.
+
+The host matrix modes `r27-text`, `r27-other` and `r27-network` cover editor
+effects, both keyboard context selectors, native Host/Join and browser services,
+resource fallbacks and network queue observation. Actual keyboard/pad/mouse
+rendering, policy scrolling, aspect ratios and overlay placement still require
+live acceptance; no synthetic fixture establishes those visual results.
+
+
+### No GameSpy screens (beta.2)
+
+Rebuilt LC main menus request `lc_online_entry`. That resource is a plain LC
+failure page by default; a working online adapter intercepts it for the Hub.
+Disabled/refused hooks, fonts or registration therefore cannot expose native
+ONLINE_MENU. Runtime resource/marker checks, entry failure, request exceptions
+and unusable lobby controls select `lc_online_unavailable`, never a native
+GameSpy-era screen. This supersedes historical native-fallback instructions
+above. Native services behind verified LC variants and skinned save lists stay.
+
+The builder always authors the failure resource for the XML1 front end, even
+with online menus off: eight anchors within the original 175 limit, shared
+native-font styles, original navy geometry and no script-intent dependency.
+The visible Back item has `menu_cancel=true` and `usecmd="openmenu main"`;
+retail Escape/pad Back dispatches that item without our hooks. `menu_cancel`
+is an item boolean, not a root command. Rebuild/update guidance is plain text.
+Original online resource names receive this same message unless an existing
+LC-skinned host/join resource is retained. The builder removes branding model
+records, their decorative references and logo precaches from retained skins.
+
+C02-C07 legacy/friends/hero/region/Live requests are refused to this page;
+C08 Players/controller resource requests are refused when issued from the
+online flow. Ordinary PC options and save dialogs retain their own routes.
+The companion capability is `lc-online-no-gamespy/1`; regenerate matching
+content before accepting the candidate. Live visual/input acceptance remains
+required, including guard/font/marker/resource failures and Back at both aspects.
+
+## Native item-map budget and LAN list fixes
+
+The scene-anchor expansion does not expand CMenu's separate item map.
+Retail item insertion at 0x5af490 refuses another item when the count at
+menu +0x1608 equals 0xaf (175); the check is at 0x5af4af. This was rechecked
+against the owned retail image during the beta.2 blocker fix. Lobby markers
+placed after that limit were absent, so `lobby_live()` selected native refresh
+and input. The companion builder now validates the independent 175-item limit,
+puts the marker before lobby content, and reuses `lc_pN_hero_fallback` as one
+DATA field for the local/session rate pair, or the slow warning naming the session
+target (unknown rate: the normal hero fallback). Native text stays on one line.
+Its owned host/join resources use 173/169 items including backdrops. Browse
+retains seven rows at 172 items: numeric occupancy replaces redundant pip
+variants and one DATA label per row carries SAME/CHECK; another build still
+shows its token and the existing dim state.
+
+The native discovery receiver 0x6090d0 allocated at 0x609122 and appended at
+0x6091d3 on every compatible answer. Repeated broadcast/direct replies could
+therefore create duplicate rows. After gameplay/settings validation, the browser
+adapter walks the current bounded 100-row native table and refreshes an existing
+source-IPv4/game-port row in place, issuing the same status-6 update. It keeps
+the native endpoint and version flag semantics, checks the complete chain before
+writing, and refuses malformed/cyclic/out-of-pool tables. Different source
+addresses or ports remain distinct; names alone never identify a host. There is
+no cache across searches or changes to gameplay/admission settings.
+
+`lc-fonts-list/1` adds the private style scale at LISTBOX clipping/drawing
+(0x5c2136/0x5c21f2) and row-height initialization (0x5c0b31). The stored row
+height covers rendering, scrolling and native mouse hit division (0x5c0e79).
+Private height derives from atlas metrics and viewport height with four view
+units of spacing; classic styles return their original height and scale.
+These writes join the existing guarded font transaction. The builder uses the
+private row style for the LAN list and centered `lc_o_lan_focus` art, because
+native positioning places focus at the row center (0x5c14b4..0x5c14c8).
+The second header describes the native composite column as CAMPAIGN / PLAYERS.
+The details textbox retains its native metrics. Both repositories must be
+integrated and content regenerated together; older companions lacking the
+list-font capability are refused by builder preflight.
+
+
+### LAN lobby facts
+
+A native LAN/direct-IP lobby without a room hides ROOM CODE and Copy (including
+the footer), labels its visibility LAN, and hides the empty-card room-sharing
+hint. The existing empty-card title remains Waiting for a player. The native
+accepted game-info name takes precedence over the host participant's name when
+no broker title is known. The local card can show its local/session rate pair;
+remote cards show the known session rate alone when no party report supplies
+their local setting. Such cards do not claim a ping measurement is in progress.
+Code-room cards keep the existing broker facts and controls.
+
+The native LAN row formatter separates game name and difficulty with a space.
+The companion LC builder uses amber focus art for this list, matching its navy
+selected-text style.
+
+
+### Forwarded beta.2 Host controls and service state
+
+Host setup uses an explicit row order: Visibility, Room name, Campaign, Drop-in,
+Open. Up/Down move between enabled rows; Left/Right change a value and never
+move focus. Binary values toggle; Room name and Campaign open the existing
+native Game Options editor. Enter/A activates, Del/Y changes the selected value,
+and Escape/B goes Back. The Host tick owns these input edges, preventing the
+base menu from dispatching a second navigation/Accept. A held Host Enter and
+the same pad Accept edge are fenced across the native-chooser transition.
+Mouse/usecmd retains first action priority. The footer hides Change on Open or
+a locked value. Host's Select/Change footer uses the existing Host-scoped intent
+9; no new public number, wire field, or release identity is added.
+
+Service status remembers the last observed Connected/Unavailable state across
+operation cancellation; cancellation still invalidates its tickets and clears
+request-specific errors. A new pending request displays Connecting until it has
+an outcome. The UI shows localized failure scenes and retry countdowns, without
+raw operation/error IDs. Hub fallback prompts are readable on the first authored
+frame; runtime prompts follow keyboard/pad use. F4 is the keyboard Rejoin alias
+(the legacy native keypad alias remains). A closed started session asks the
+host to start a new session, rather than promising a return to its old lobby.
+
+
+Native footer input still reads the interned $MENU token. Stable key labels are
+provided through widget-owned text at the first getter call; serialized Hub/Host
+prompts retain native tokens. Binding updates preserve the original token and
+localized suffix, and cached tokens remain tied to the widget owner/name and
+resource lifetime. This keeps native mouse hover/activation while preventing
+startup binding-row names from flashing on screen. Native first-getter and raw
+getter assertions cover both sides of that contract.
+
+
+### b2c live prompt corrections
+
+The Hub card's `rejoin` action uses the same first-getter and device binding as
+its footer: F4 on keyboard, Y on pad. The serialized MENU token remains available
+to native mouse routing. F4 is handled by the existing DirectInput shortcut.
+
+Code entry's Escape/B action now returns to Online even with a partial code.
+Delete/Backspace remove one symbol; the fifth footer action shows `Del Delete`
+on keyboard and is hidden on pad. The Back footer and its localized hover
+sources say Back. The on-screen Delete grid cell remains available on pad.
+
+These content changes require regenerating the companion menus together with
+the DLL; they add no release or gameplay identity. No full owned-input build or
+game launch is part of the offline fixtures.

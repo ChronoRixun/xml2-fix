@@ -62,11 +62,11 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
     auto screen=[&](const char* name) { std::strcpy(reinterpret_cast<char*>(child.data()+0xc),name);child[4]=1;set_current(child.data()); };
-    assert(menu_lists==0 && menu_hosts==0 && menu_resolves==0 && texts["service"]=="Not connected");
+    assert(menu_lists==0 && menu_hosts==0 && menu_resolves==0 && texts["service"]=="Connecting...");
     screen("lc_browse");tick(child.data(),nullptr);assert(menu_lists==1 && !visibility["lc_broker_auth"]);
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
-    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
+    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build"] && texts["lc_row0_build"]=="SAME");
     if(mode=="r5-browse-empty") {
         assert(focused=="room_0_0");
         menu_rows_json="-";ticks+=2100;post(intent::refresh);tick(child.data(),nullptr);
@@ -121,13 +121,14 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_host");tick(child.data(),nullptr);assert(menu_hosts==0);
     post(intent::visibility);tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==0 && calls.back()=="request:game_options");
+    assert(menu_hosts==0 && calls.back()=="request:lc_game_options");
     post(intent::back);tick(child.data(),nullptr);assert(menu_leaves==0 && menu_view().state==bm::phase::idle);
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_code");tick(child.data(),nullptr);
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
     assert(menu_resolves==2 && menu_view().state==bm::phase::resolving && visibility["lc_code_complete"] && !enabled_items["done"]);
-    menu_complete=true;post(intent::back);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && menu_view().state==bm::phase::idle);
+    // Delete edits and cancels a late resolve; Back now leaves Code directly.
+    menu_complete=true;post(intent::erase);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && menu_view().state==bm::phase::idle);
     assert(!std::filesystem::exists(root/L"local/XML2 Fix/online/last-game.txt"));
     ticks+=2000;post(static_cast<intent>(39));tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::room && std::filesystem::exists(root/L"local/XML2 Fix/online/last-game.txt"));
@@ -145,7 +146,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     menu_launch={bm::operation::host,{},"Preset room",true};menu_has_preset=true;
     set_current(hub.data());tick(hub.data(),nullptr);assert(calls.back()=="request:lc_host" && menu_hosts==0);
     screen("lc_host");tick(child.data(),nullptr);ticks+=2000;post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==0 && calls.back()=="request:game_options");
+    assert(menu_hosts==0 && calls.back()=="request:lc_game_options");
     post(intent::back);tick(child.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
     ticks+=2000;screen("lc_code");tick(child.data(),nullptr);menu_refuse=true;
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
@@ -153,6 +154,9 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     for(unsigned i=0;i<20;++i) tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_err_test_mode"] && visibility["retry"]);
     post(intent::done);tick(child.data(),nullptr);assert(menu_resolve_attempts==attempts+1);
+    const auto back_generation=menu_view().generation;
+    post(intent::back);tick(child.data(),nullptr);
+    assert(calls.back()=="request:lc_online" && menu_view().state==bm::phase::idle && menu_view().generation!=back_generation);
     std::cout<<"round5 menus PASS Hub no host; row allowlist/RTT/build; bounded page/select; refresh limiter; host visibility; Back/edit before late completion; confirmed Rejoin storage\n";
 }
 
@@ -290,17 +294,15 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     // Connected service: the scene shows, the plain text stays empty so the word is never drawn twice.
     assert(shown("lc_service_ok") && texts["service"].empty() && texts["self_state"].empty());
     const char* kinds[]{"lobby","progress","full","lobby","lobby","closed","lobby"};
-    const int pips[]{2,3,4,1,0,1,1};
     const char* builds[]{"same","same","same","other","check","same","same"};
     const bool dims[]{false,false,true,true,false,true,true};
     for(unsigned r=0;r<browse_rows;++r) {
         const auto id="lc_row"+std::to_string(r);
         for(const char* k:row_status_key) assert((std::string(k)==kinds[r] ? shown(id+"_st_"+k) : gone(id+"_st_"+k)));
-        for(int k=0;k<=4;++k) assert((k==pips[r] ? shown(id+"_pips_"+std::to_string(k)) : gone(id+"_pips_"+std::to_string(k))));
-        for(const char* k:build_key) assert((std::string(k)==builds[r] ? shown(id+"_build_"+k) : gone(id+"_build_"+k)));
+        assert(shown(id+"_build") && texts[id+"_build"]==(std::string(builds[r])=="same" ? "SAME" : std::string(builds[r])=="check" ? "CHECK" : ""));
         assert(dims[r] ? shown(id+"_dim") : gone(id+"_dim"));
-        // The status word, the ping "--" (no measurement exists) and SAME/CHECK are scenes: no DLL text, no cells [4]/[5].
-        assert(!texts.count("room_"+std::to_string(r)+"_4") && !texts.count("room_"+std::to_string(r)+"_5"));
+        // Status stays a scene; ping and SAME/CHECK use compact DATA labels.
+        assert(!texts.count("room_"+std::to_string(r)+"_4") && texts["room_"+std::to_string(r)+"_5"]=="--");
     }
     assert(texts["room_0_3"]=="2/4" && texts["room_4_3"]=="--/4" && texts["room_0_2"]=="Mansion" && texts["room_1_2"]=="--");
     assert(texts["room_3_6"]=="LC36" && texts["room_0_6"].empty() && texts["room_4_6"].empty()); // only the other build's token
@@ -369,7 +371,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(menu_view().rows.empty() && menu_view().list_known && !menu_view().stale);
     assert(texts["list_count"]=="No public games" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
     for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
-    for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
+    for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build"));
 
     // 060s live: an empty cached list read "0 last known games". Exercise the
     // production tick/binder after a failed refresh, preserving the real empty list.
@@ -399,7 +401,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
 
     // Hub: a service never asked shows neutral text, the connected scene hidden.
     menu_broker.cancel();menu_broker.stopped();set_current(hub.data());tick(hub.data(),nullptr);
-    assert(gone("lc_service_ok") && texts["service"]=="Not connected");
+    assert(gone("lc_service_ok") && texts["service"]=="Unavailable");
     // No broker at all: a consistent private host card from the first frame, no error scene, no Retry.
     menu_up=false;screen("lc_host");tick(child.data(),nullptr);
     assert(shown("lc_host_private") && gone("lc_host_public") && gone("retry") && gone("lc_service_ok") && texts["service"]=="Unavailable");

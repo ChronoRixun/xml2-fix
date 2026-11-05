@@ -1,5 +1,11 @@
 # Online Party: member reports, host table, lobby cards and the status mirror (0.6 round 7)
 
+Linked-rate builds use party wire **2**, guarded by rule 29 revision 2;
+see [the session-rate contract](linked-frame-rate.md). Reports append five
+bytes (local fps, measured fps in tenths, capacity) after the hero word and
+are 28..124 bytes. The table layout stays the same with wire 2. The original
+round-7 wire-1 tables below describe the previous format.
+
 Presentation data for the four pre-game lobby cards (`host` / `join` native skins, 05-lobby), the Browse PING cell and
 `online-status.json`. Nothing here admits, readies, kicks, starts, seats or simulates anything: native readiness
 (`0x614240`), admission (GCAP agreement + native join), Start, Kick and the lockstep stay the native/rule owners'

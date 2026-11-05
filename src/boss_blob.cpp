@@ -17,7 +17,7 @@ bool scope(){return zone("nyc/alison/nyc1_1_3")||zone("mansion/dr_mag2/mag_nyc4"
 unsigned zone_id(){return zone("nyc/alison/nyc1_1_3")?1:zone("mansion/dr_mag2/mag_nyc4")?2:3;}
 void reset(){owner=0;owner_brain=nullptr;last=-1;bound_zone=0;s={};jumps={};effects={};}
 void bind(void* b,u32 h){
-    if(boss_owner_rules::reset_required(owner,reinterpret_cast<std::uintptr_t>(owner_brain),bound_zone,last,h,reinterpret_cast<std::uintptr_t>(b),zone_id(),now()))reset();
+    if(boss_owner_rules::reset_required(owner,reinterpret_cast<std::uintptr_t>(owner_brain),bound_zone,last,h,reinterpret_cast<std::uintptr_t>(b),zone_id(),now())){reset();s.advanced_at=now();}
     owner=h;owner_brain=b;bound_zone=zone_id();last=now();
 }
 std::optional<int> original_weight(void* prop){

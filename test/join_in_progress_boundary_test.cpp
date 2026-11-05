@@ -13,6 +13,11 @@
 #include <cstdarg>
 
 std::vector<std::string> observed_jip_logs;
+namespace frame_rate {
+unsigned fixture_shared_starts=0;
+void shared_frame_started() { ++fixture_shared_starts; }
+unsigned session_rate() { return 0; } // AR7 belt: no adopted session rate in the fixture (the stock 30 applies)
+}
 
 namespace logger {
 void write(const char* format,...) {
@@ -65,6 +70,9 @@ namespace pad_prompts { unsigned device_switches() { return 0; } }
 namespace entity_capacity { entity_capacity_layout::descriptor fixture_descriptor; std::uint32_t installed_target(std::uint32_t) { return 0; } const entity_capacity_layout::descriptor& installed() { return fixture_descriptor; } }
 namespace entity_transfer { void observe_prepare(void(__cdecl*)(const void*)) { assert(false); } }
 namespace display { void (*fixture_overlay)(void*) = nullptr; void set_overlay(void (*draw)(void*)) { fixture_overlay = draw; } } // p060fix/AQ2: the hold's message hook
+// int31: the online menus' 0x6141e0 accessor (the AS guard composes with exactly a JMP to it); a synthetic getter here.
+namespace online_menus { const char* __fastcall fixture_display_name(void* p,void*) { return reinterpret_cast<const char*>(p)+0x40; }
+const void* display_name_getter() { return reinterpret_cast<const void*>(&fixture_display_name); } }
 namespace ini {
 int number(const wchar_t*,const wchar_t*,int n) { return n; }
 bool flag(const wchar_t*,const wchar_t*,bool n) { return n; }
@@ -102,9 +110,113 @@ void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_lo
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
 #include "join_in_progress_checksum.inl"
+#include "join_in_progress_execution_fixture.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
+// int31: AS + online menus - the 0x6141e0 accessor guard accepts retail bytes or exactly `e9 rel32` to
+// online_menus::display_name_getter(); a JMP elsewhere, another opcode or any other altered AS byte still refuses.
+void as_menus_composition() {
+    auto* site=reinterpret_cast<unsigned char*>(0x6141e0);
+    unsigned char retail[5];std::memcpy(retail,site,5);
+    assert(join_in_progress::mismatch()==nullptr && !join_in_progress::composed_display_name);
+    auto jmp=[&](std::uintptr_t target) { site[0]=0xe9;const auto rel=static_cast<std::uint32_t>(target-0x6141e0-5);std::memcpy(site+1,&rel,4); };
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+    assert(join_in_progress::mismatch()==nullptr && join_in_progress::composed_display_name);
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter())+1);
+    { const auto* g=join_in_progress::mismatch();assert(g && g->va==0x6141e0); }
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));site[0]=0xe8;
+    { const auto* g=join_in_progress::mismatch();assert(g && g->va==0x6141e0); }
+    jmp(reinterpret_cast<std::uintptr_t>(online_menus::display_name_getter()));
+    auto* other=reinterpret_cast<unsigned char*>(0x6110c0);const auto keep=*other;*other^=0xff;
+    assert(join_in_progress::mismatch()!=nullptr);
+    *other=keep;assert(join_in_progress::mismatch()==nullptr);
+    std::memcpy(site,retail,5);
+    assert(join_in_progress::mismatch()==nullptr && !join_in_progress::composed_display_name);
+    std::cout<<"PASS AS/online menus: the 0x6141e0 accessor guard takes retail bytes or exactly the menus' JMP to display_name_getter; a wrong target, opcode or other AS byte refuses\n";
+}
+// b2d-fix-jip: the restart-release barrier through the production store hook (input_epoch_store_filter) against the retail
+// store 0x559560 of the mapped image (unhooked here: a filter result 0 means the fixture calls the retail store as the bridge
+// would; the replay at the cap calls it itself). The blocks live at 0x79fbb0 inside the mapped .data.
+void input_epoch_fixture() {
+    using namespace join_in_progress;
+    using namespace gns_transport_rules;
+    auto* sync=reinterpret_cast<unsigned char*>(0x79fbb0);
+    std::memset(sync,0,0xc700);
+    auto block=[&](unsigned i) { return sync+i*input_block_size; };
+    auto u32=[&](unsigned i,unsigned at) { std::uint32_t v;std::memcpy(&v,block(i)+at,4);return v; };
+    auto u16=[&](unsigned i,unsigned at) { std::uint16_t v;std::memcpy(&v,block(i)+at,2);return v; };
+    auto slot_label=[&](unsigned i,unsigned slot) { return u16(i,input_records+slot*input_record+4); };
+    using store_t=void(__thiscall*)(void*,const void*,std::uint32_t,std::uint32_t);
+    const auto store=reinterpret_cast<store_t>(join_in_progress_rules::input_epoch_store_site);
+    // The decoder's shape: a single record takes the block counter as its label, then counter++ (0x559ee7..0x559f01); a batch
+    // record carries its wire label. Then the store (through the hook: filter 0 = the native store runs).
+    auto deliver=[&](unsigned index,std::uint32_t mask,std::uint32_t kind,bool batch=false,std::uint16_t wire_label=0) {
+        alignas(4) unsigned char record[0x24]{};
+        std::uint16_t label=wire_label;
+        if(!batch) { auto* counter=reinterpret_cast<std::uint16_t*>(block(index)+join_in_progress_rules::input_block_counter);label=*counter;++*counter; }
+        std::memcpy(record,&label,2);std::memcpy(record+4,&mask,4);
+        std::uint32_t args[4]{0,static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(record)),index,kind};
+        const int skip=input_epoch_store_filter(args);
+        if(!skip) store(sync,record,index,kind);
+        return skip;
+    };
+    auto logged=[&](const char* text) { for(const auto& l:observed_jip_logs) if(l.find(text)!=std::string::npos) return true;return false; };
+    const std::uint32_t real=0x00080000u,marker=join_in_progress_core::input_epoch_mark_for(0x2d25);
+    assert(join_in_progress::mismatch()==nullptr);
+    // 1. RestartInputEpoch=0 / never armed: the stock path - a record is stored as it comes (write 1, next 1, label 0).
+    assert(!input_epoch_hold.any());
+    assert(deliver(2,real,0)==0 && u32(2,input_write)==1 && u16(2,input_next)==1 && slot_label(2,0)==0 && u16(2,join_in_progress_rules::input_block_counter)==1);
+    std::memset(block(2),0,input_block_size);
+    // 2. Armed at this PC's ring reset (index 0): P (index 2)'s records before its marker are held, not stored - a full
+    //    record and a delta kind alike; the decoder's counter keeps counting (labels 0, 1 travel with the copies).
+    observed_jip_logs.clear();
+    input_epoch_hold.arm(0,GetTickCount());
+    assert(deliver(2,real,0)==1 && deliver(2,0,2)==1);
+    assert(u32(2,input_write)==0 && u16(2,input_next)==0 && u16(2,join_in_progress_rules::input_block_counter)==2 && input_epoch_hold.held[2]==2);
+    { std::uint16_t l0,l1;std::memcpy(&l0,input_epoch_held[2][0].bytes,2);std::memcpy(&l1,input_epoch_held[2][1].bytes,2);assert(l0==0 && l1==1 && input_epoch_held[2][0].kind==0 && input_epoch_held[2][1].kind==2); }
+    assert(logged("record(s) arrive before its epoch marker") && logged("held, not stored"));
+    // 3. P's marker: the block resets (counter 0), the two held copies are dropped, the expectation ends; its second copy is a repeat.
+    assert(deliver(2,marker,0)==1 && u16(2,join_in_progress_rules::input_block_counter)==0 && u32(2,input_write)==0 && !input_epoch_hold.expecting[2] && input_epoch_hold.held[2]==0);
+    assert(logged("(2 held pre-marker record(s) dropped)") && logged("its block reset here (read 0 write 0 next 0 counter 3: 0 stale record(s) dropped)")); // counter 3: the decoder counted the marker too before the store
+    assert(deliver(2,marker,0)==1 && u16(2,join_in_progress_rules::input_block_counter)==0);
+    // 4. P's first real record after the marker is label 0 on this peer (as in the sender's ring).
+    assert(deliver(2,real,0)==0 && u32(2,input_write)==1 && u16(2,input_next)==1 && slot_label(2,0)==0);
+    assert(deliver(2,real,0)==0 && u32(2,input_write)==2 && u16(2,input_next)==2 && slot_label(2,1)==1);
+    // 5. This PC's own records (the own-record store 0x55a2a6) are never held.
+    assert(input_epoch_hold.expecting[1] && !input_epoch_hold.expecting[0]);
+    assert(deliver(0,real,0)==0 && u32(0,input_write)==1);
+    std::cout<<"PASS b2d barrier: P's pre-marker records are held (not stored), dropped at its marker with the block reset; its first real record is label 0; own records never held\n";
+    // 6. The cap: 5 s after this PC's reset with no marker from index 3, its held records are stored in the order they
+    //    came through the retail store (labels 0, 1), then the new one (2): the stock labelling. A marker afterwards, once a
+    //    record was consumed (read 1), is late and ignored (b2c-fix-crash), never a reset.
+    observed_jip_logs.clear();
+    assert(deliver(3,real,0)==1 && deliver(3,real,2)==1 && input_epoch_hold.held[3]==2 && u32(3,input_write)==0);
+    input_epoch_hold.armed_at-=join_in_progress_core::input_epoch_hold_cap_ms;
+    assert(deliver(3,real,0)==0 && !input_epoch_hold.expecting[3] && input_epoch_hold.held[3]==0 && !input_epoch_replaying);
+    assert(u32(3,input_write)==3 && u16(3,input_next)==3 && slot_label(3,0)==0 && slot_label(3,1)==1 && slot_label(3,2)==2 && u16(3,join_in_progress_rules::input_block_counter)==3);
+    assert(logged("sent no epoch marker within the cap") && logged("its 2 held record(s) stored in the order they came"));
+    { std::uint32_t one=1;std::memcpy(block(3)+input_read,&one,4); }
+    assert(deliver(3,join_in_progress_core::input_epoch_mark_for(0x3aaa),0)==1 && u32(3,input_write)==3 && u16(3,input_next)==3 && u16(3,join_in_progress_rules::input_block_counter)==3 && logged("arrived late") && logged("IGNORED"));
+    std::cout<<"PASS b2d barrier: at the cap the held records are stored through the retail store in order (stock labelling); a marker after consumption stays late/ignored\n";
+    // 7. A full hold (96 records) flushes before the cap; the flush stores all 96 then the 97th (labels 0..96).
+    observed_jip_logs.clear();
+    std::memset(block(1),0,input_block_size);
+    input_epoch_hold.arm(0,GetTickCount());
+    for(unsigned i=0;i<join_in_progress_core::input_epoch_hold_records;++i) assert(deliver(1,real,0)==1);
+    assert(input_epoch_hold.held[1]==join_in_progress_core::input_epoch_hold_records && u32(1,input_write)==0);
+    assert(deliver(1,real,0)==0 && u32(1,input_write)==97 && u16(1,input_next)==97 && slot_label(1,96)==96 && logged("sent no epoch marker before the hold filled"));
+    // 8. Holds are per participant: index 2 keeps holding while index 1 flushed; a replayed record passes the filter.
+    assert(input_epoch_hold.expecting[2] && deliver(2,real,0)==1 && input_epoch_hold.held[2]==1);
+    input_epoch_replaying=true;assert(deliver(2,real,0)==0 && input_epoch_hold.held[2]==1);input_epoch_replaying=false;
+    // 9. The session's end / this PC's next ring reset disarms: nothing is held afterwards.
+    input_epoch_hold.disarm();
+    assert(!input_epoch_hold.any() && deliver(2,real,0)==0);
+    assert(join_in_progress::mismatch()==nullptr);
+    std::memset(sync,0,0xc700);
+    std::cout<<"PASS b2d barrier: a full hold flushes in order; holds are per participant; replayed records pass; disarmed = stock\n";
+}
 void e4_guard_composition() {
+    as_menus_composition();
     assert(join_in_progress::mismatch()==nullptr);
     // Exact E4 operand edits from its published 96-controller layout. The last
     // byte of the pop prefix also belongs to its mandatory observer detour.
@@ -137,7 +249,10 @@ void e4_guard_composition() {
 }
 int main(int argc,char** argv) {
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
-        std::cerr<<"JIP fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]<<"\n";
+        std::cerr<<"JIP fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]
+            <<" eax="<<error->ContextRecord->Eax<<" ecx="<<error->ContextRecord->Ecx<<" edx="<<error->ContextRecord->Edx<<" esi="<<error->ContextRecord->Esi<<" esp="<<error->ContextRecord->Esp<<" ar5_stage="<<execution_fixture::fixture_stage<<"\n";
+        const auto* stack=reinterpret_cast<const unsigned*>(error->ContextRecord->Esp);
+        std::cerr<<"stack="<<stack[0]<<","<<stack[1]<<","<<stack[2]<<","<<stack[3]<<","<<stack[4]<<","<<stack[5]<<"\n";
         ExitProcess(error->ExceptionRecord->ExceptionCode);
     });
     assert(argc==2 || argc==3);
@@ -150,14 +265,19 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
-        if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();return 0; }
+        const std::string_view mode=argv[2];
+        if(mode=="e4-guards" || mode=="actorpools" || mode=="turrets")
+            join_in_progress::execution_observer=join_in_progress::execution_wrapper=true;
+        if(std::string_view(argv[2])=="execution") { execution_fixture::run();return 0; }
+        if(std::string_view(argv[2])=="input-epoch") { input_epoch_fixture();return 0; } // b2d-fix-jip
+        if(std::string_view(argv[2])=="e4-guards") { e4_guard_composition();std::cout<<"PASS AR5 optional contracts compose with E4 guards\n";return 0; }
         if(std::string_view(argv[2])=="refusal-transport") { refusal_transport_fixture::run();return 0; }
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
         if(std::string_view(argv[2])=="restart") { restart_fixture::run();return 0; }
-        if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();return 0; }
-        if(std::string_view(argv[2])=="actorpools") { restart_fixture::run_actor_pools();return 0; }
+        if(std::string_view(argv[2])=="turrets") { restart_fixture::run_turrets();std::cout<<"PASS AR5 optional contracts compose with turrets\n";return 0; }
+        if(std::string_view(argv[2])=="actorpools") { restart_fixture::run_actor_pools();std::cout<<"PASS AR5 optional contracts compose with ActorPools\n";return 0; }
         assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
         gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
     }

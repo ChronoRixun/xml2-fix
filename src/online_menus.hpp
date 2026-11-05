@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include "patch_transaction.hpp"
 #include "online_browser_core.hpp"
+#include "linked_frame_rate_core.hpp"
 
 // Guarded UI intents and snapshot bindings. Room operations use online_room;
 // native admission and participant allocation retain their native owners.
@@ -17,11 +18,15 @@ struct lobby_fixture {
     // reported campaign-transfer percentage (-1 none). The lobby cards ignore these (they read the native rows).
     struct member { unsigned native_index=0; int ping_ms=-1; bool same_build=false;
         bool ping_to_host=false; int route=0; int build=-1; int phase=-1;
-        char name[32]{}; bool self=false, host=false; int percent=-1; };
+        char name[32]{}; bool self=false, host=false; int percent=-1;
+        unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0, measured_fps_x10=0;
+        linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
     member members[4]{};
     unsigned count=0;
     // Broker-roster members without a native row yet (Connecting / Checking build): never kick targets.
-    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; bool host=false; };
+    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; bool host=false;
+        unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0, measured_fps_x10=0;
+        linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
     pending_member pending[3]{};
     unsigned pending_count=0;
     // Round 8: this PC hosts the native session / a native session is set up (online_room::party).
@@ -72,8 +77,16 @@ struct broker_api {
     bool (*drop_in_editable)()=nullptr;
 };
 void keyboard(unsigned char* state);
+// Unicode WM_CHAR text is queued only for the owning LC editor activation.
+// Returns true when consumed, including DI controls whose WM_CHAR copy is ignored.
+bool text_entry_active();
+bool text_entry_character(unsigned character,unsigned scan=0);
 bool requested();
 bool installed();
+// The record+0x40 accessor the online menus put at 0x6141e0 (a JMP; `refresh-scoped display name getter`): every caller but
+// the two guarded roster formatting reads (0x5ba66e / 0x5c829b, during a names refresh) gets the native record+0x40 pointer.
+// join_in_progress's AS guard composes with exactly this JMP (int31: shipped Menus=1 refused JoinInProgress otherwise).
+const void* display_name_getter();
 // Diagnostics: how often the native session-end wrapper ran (one kick may clear twice; review E finding 6).
 unsigned session_clear_count();
 // Pad buttons on the co-op screens (online_menus_rules.hpp pad_menu_mask): `probe(player)` says whether that player's

@@ -1,13 +1,17 @@
 #pragma once
 #include <cstdint>
+#include "boss_wait_rules.hpp"
 // XML1 0x113e80. Deadlines are integer truncations, waits and taunts are separate services.
 namespace shadowking_rules {
-struct state {int mode=0,spear_at=0,smash_at=0;bool boost=false,xtreme=false,chasing=false;};
+struct state {int mode=0,spear_at=0,smash_at=0;bool boost=false,xtreme=false,chasing=false;boss_wait_rules::window xtreme_wait;};
 inline state initial(float now,int mode){state s;s.mode=mode;s.spear_at=s.smash_at=int(now+6);return s;}
 struct action {std::uint32_t buttons=0;float wait=0;bool taunt=false,preferred90=false,follow=false,close=false;};
 template<class Available> action update(state& s,float now,float d,Available available){
-    action a;const bool requested_xtreme=s.xtreme;
-    if(s.xtreme&&available(8)){s.xtreme=false;a.buttons=0xc0;a.wait=.3f;}
+    action a;bool requested_xtreme=s.xtreme;
+    if(s.xtreme){
+        if(available(8)){s.xtreme=false;s.xtreme_wait.reset();a.buttons=0xc0;a.wait=.3f;}
+        else if(s.xtreme_wait.ready(now,false,5.f)){s.xtreme=false;s.xtreme_wait.reset();requested_xtreme=false;}
+    }
     // First form gives a pending xtreme priority over spear, then still checks smash and shield.
     if(s.mode==0){
         if(!requested_xtreme&&100<d&&d<300&&now>s.spear_at&&available(5)){s.spear_at=int(now+6);a.buttons|=0x90;a.wait=.6f;a.taunt=true;return a;}

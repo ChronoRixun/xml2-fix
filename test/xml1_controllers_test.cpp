@@ -256,7 +256,10 @@ int main(int argc,char** argv){
     CHECK(host_on.compare(renamed.bytes())==result::value&&renamed.compare(host_on.bytes())==result::value);
     CHECK(renamed.compare(peer(other_name,turret_off).bytes())==result::match);
     CHECK(!peer(xml1_capability_rules::master_mold(true,true,"",1,5),turret_off).ready());
-    CHECK(host_on.compare(peer(on,turret_off,2).bytes())==result::value); // protocol 3: a revision difference is a value (gameplay settings) difference
+    CHECK(host_on.compare(peer(on,turret_off,1).bytes())==result::value); // old unbounded controller is refused
+    CHECK(xml1_capability_rules::master_mold_revision_for(false)==1);
+    CHECK(xml1_capability_rules::master_mold_revision_for(true)==2);
+    CHECK(peer(off,turret_off,xml1_capability_rules::master_mold_revision_for(false)).compare(peer(off,turret_off,1).bytes())==result::match);
     const auto broken=peer(failed,turret_off);
     CHECK(!broken.ready()&&broken.bytes().empty()&&broken.compare(host_on.bytes())==result::unavailable);
     CHECK(host_on.compare(broken.bytes())==result::malformed);
@@ -525,14 +528,28 @@ void boss_rule_checks(){
     CHECK(gameplay_capabilities::xml1_bosses_id==40);
     CHECK(std::string(gameplay_capabilities::rule_name(40))=="Xml1Bosses");
     CHECK(boss_bit("dopples")==1&&boss_bit("avalanche")==2&&boss_bit("pyro")==4&&boss_bit("")==0);
-    CHECK(bosses(true,3,3,1).values[1]==flag_hash("dopples:1;avalanche:2;")&&bosses(true,3,3,1).values[0]==3);
+    CHECK(bosses(true,3,3,1).values[1]==flag_hash("dopples:2;avalanche:3;")&&bosses(true,3,3,1).values[0]==3);
     CHECK(boss_bit("mystique")==8&&boss_bit("shadowking")==16&&boss_bit("marrow")==32&&boss_bit("magneto")==64);
-    CHECK(bosses(true,63,63,1).values[1]==flag_hash("dopples:1;avalanche:2;pyro:1;mystique:1;shadowking:1;marrow:1;"));
+    CHECK(bosses(true,63,63,1).values[1]==flag_hash("dopples:2;avalanche:3;pyro:1;mystique:1;shadowking:2;marrow:1;"));
     CHECK(!bosses(true,63,31,1).verified); // native Marrow requested but its parser/dispatch guard failed
     CHECK(bosses(true,32,32,0).verified&&bosses(true,32,32,0).values[0]==32);
     CHECK(!bosses(true,3,1,1).verified);    // avalanche requested, only the dopples installed
     const auto on=bosses(true,1,1,1);
-    CHECK(on.verified&&on.values[0]==1&&on.values[1]==flag_hash("dopples:1;")&&on.values[2]==1&&on.values[3]==0);
+    CHECK(on.verified&&on.values[0]==1&&on.values[1]==flag_hash("dopples:2;")&&on.values[2]==1&&on.values[3]==0);
+    // Only changed controllers must refuse the earlier decision rules. Off and
+    // unchanged boss entries retain their prior identities.
+    CHECK(bosses_fingerprint(4)==flag_hash("pyro:1;"));
+    CHECK(bosses_fingerprint(8)==flag_hash("mystique:1;"));
+    CHECK(bosses_fingerprint(32)==flag_hash("marrow:1;"));
+    for(const auto* old:{"dopples:1;","avalanche:2;","shadowking:1;","magneto:1;","blob:1;"}){
+        const std::string previous(old);const auto bit=boss_bit(previous.substr(0,previous.find(':')));
+        const auto effective=bosses(true,bit,bit,0);auto legacy=effective;legacy.values[1]=flag_hash(previous);
+        gameplay_capabilities::record current,older;
+        current.add(gameplay_capabilities::xml1_bosses_id,bosses_revision,effective.values,true);current.finalize();
+        older.add(gameplay_capabilities::xml1_bosses_id,bosses_revision,legacy.values,true);older.finalize();
+        CHECK(current.compare(older.bytes())==gameplay_capabilities::result::value);
+        CHECK(older.compare(current.bytes())==gameplay_capabilities::result::value);
+    }
     CHECK(bosses(true,1,1,0).values[2]==0&&bosses(true,1,1,0).verified);
     CHECK(!bosses(false,1,1,1).verified);   // an unknown name in the list
     CHECK(!bosses(true,1,0,1).verified);    // requested, not installed

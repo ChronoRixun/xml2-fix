@@ -16,6 +16,33 @@
 // A seat whose record leaves, or a stage that outlives its limit, is dropped (the host stops holding the barrier).
 namespace join_in_progress_core
 {
+	// AR5 is independent of the admission/checksum cohort, which can finish before frame 0.
+	enum class restart_execution_phase : std::uint8_t { off, restoring, world_ready };
+	enum class restart_wait_policy : std::uint8_t { native, input_only, unclassified };
+	struct restart_wait {
+		bool readable = false, session = false, loading = false, modal = false;
+		std::uint32_t flags = 0, phase = 0, mode = 0, run_permission = 0;
+	};
+	struct restart_execution {
+		std::uint32_t generation = 0;
+		restart_execution_phase phase = restart_execution_phase::off;
+		bool restored = false, canonical_seen = false;
+		void clear() { phase = restart_execution_phase::off; restored = canonical_seen = false; }
+		void begin(bool late) { clear(); if (late) { ++generation; phase = restart_execution_phase::restoring; } }
+		void image_returned() { if (phase == restart_execution_phase::restoring) restored = true; }
+		void observe_ready(bool valid, bool loading, bool start_menu) {
+			if (phase == restart_execution_phase::restoring && restored && valid && !loading && !start_menu)
+				phase = restart_execution_phase::world_ready;
+		}
+		void canonical() { if (phase != restart_execution_phase::off) canonical_seen = true; }
+		void area_load() { if (phase == restart_execution_phase::world_ready) clear(); }
+		restart_wait_policy classify(const restart_wait& w) const {
+			if (!w.session || phase != restart_execution_phase::world_ready || w.loading || w.modal) return restart_wait_policy::native;
+			if (!w.readable || w.flags != 1 || (w.phase != 1 && w.phase != 2) || w.run_permission)
+				return restart_wait_policy::unclassified;
+			return restart_wait_policy::input_only;
+		}
+	};
 	// Admission policy is a host setup choice, not deterministic simulation state.
 	inline constexpr std::array<std::uint32_t,4> agreement_parameters{{1,4,0,0}};
 	// A release can retain rule 26's spectators/lifecycle without admitting a
@@ -735,4 +762,229 @@ namespace join_in_progress_core
 		if (target_record && target_peer_elsewhere) return mesh_reply::refused; // not this record's participant
 		return mesh_reply::stock;                                          // no record, or one still without a peer
 	}
+
+	// AR6 (fable-ar6): the pause-code guard at the lockstep's controller apply. The record of the first lockstep frames of an
+	// epoch (frame u16 < pause_guard_frames; every epoch starts at frame 0 - session start, every area load, every cohort
+	// restart) is applied WITHOUT UI code 0x13 (the pause code the mapper 0x61a810 raises for action 0x11, ESC/Start). The
+	// controller apply 0x550fb0 copies the record's code mask into cur (+0x2f8) after moving cur to prev (+0x374); the menu
+	// manager (0x5dae30 -> 0x5d4970 -> vt+0x18 0x550b70 = (cur ^ prev) & cur) opens the pause menu on a rising edge of bit
+	// 0x13, and in an online session that is the native online pause 0x60c230(1) (every record Not Ready, released only by
+	// a 0x4b Ready from every participant). live-b2a/060zl/060zn single-lost-newcomer shapes: the lobby guest's frame-0
+	// record carried the bit, the peer FIRST at frame 0 stalled at the gate with the edge latched and paused natively while
+	// the other peer applied frames 0..k back to back and never saw it - a one-sided pause nobody can release. The guard is a
+	// function of the record alone (frame, mask), so every peer applies the same filtered record: consumed inputs, checksums
+	// and the RNG stay equal; the ring slot itself is untouched (delta encoding and resends see the stock bytes). A real
+	// ESC inside the first two frames (67 ms at 30 fps) of an epoch is dropped alike on every peer; its hold reaches frame 2.
+	constexpr unsigned pause_code = 0x13;
+	constexpr std::uint32_t pause_code_bit = 1u << pause_code;
+	constexpr unsigned pause_guard_frames = 2;
+
+	// AR6 Layer 1 (fable-ar6): the sender 0x559700 sends a FULL record (stock kind 0) instead of a delta while the local
+	// block's next frame (+0x317c, reset to 0 at every ring reset: session start, zone load, cohort restart) is below
+	// whole_input_frames. The single-lost-newcomer shape loses the first records to a ~1 s reset skew between the two
+	// survivors (live-b2a/060zl/060zn: ~30 frames): the early resetter's first FULL records are dropped by the late one
+	// (frame < next), and what it sends after are DELTAS the late peer decodes against no resolved previous record (ring
+	// reset cleared +0x3148), building a garbage UI-code mask with bit 0x13 on an uninitialised stack record (live-b2a
+	// O-2a: the host applied the guest index as 0x001af378 while the guest's own index was 0 - candidate A). Keeping the
+	// first ~1 s of records FULL means the late peer always has the real mask, so it cannot decode garbage and both apply
+	// the same inputs. A full record is the stock wire format, so a stock or unpatched peer decodes it unchanged.
+	constexpr unsigned whole_input_frames = 32; // ~1 s at 30 fps, above every observed reset skew
+	enum class send_form { stock, force_full };
+	inline send_form restart_whole_input(unsigned next_frame) { return next_frame < whole_input_frames ? send_form::force_full : send_form::stock; }
+
+	inline std::uint32_t applied_code_mask(std::uint32_t mask, unsigned frame)
+	{
+		return frame < pause_guard_frames ? (mask & ~pause_code_bit) : mask;
+	}
+
+	// AR7 (fable-ar7): the clock step a participant's head record contributes to a lockstep frame (0x559222..0x559268; the
+	// frame's step is the max over the participants, 0x559282, set into the clock at 0x559546). The record's step word is
+	// the producer's frame time in 0.1 ms units capped at 1.0 s (0x2710); bit 15 marks a placeholder record (produced while
+	// the input manager is in placeholder mode, +0xc68b != 0). The stock rule is the SAME on every peer (b2c review, re-read
+	// against the retail bytes): the sender writes the step word [record+2] verbatim for every wire kind (kind 0: 0x5597e9
+	// mov cx,[ebp+2] -> 0x5597fe; deltas 0x559968, 0x559984, 0x5599a5, 0x5599cf, 0x5599f4, 0x559a1a, 0x559a3f, 0x559a5d) -
+	// the `and eax, 0xffff7fff` at 0x5597f1 (and 0x55995f, 0x5599c6, 0x559a1e, 0x559c5b) strips bit 15 of the CODE MASK
+	// dword [record+4], not of the step word; the decoder stores the word unchanged (0x559fd6, 0x55a1f1, 0x55a238); and
+	// the run loop 0x559200..0x559268 applies one rule to every participant's head record with no own-participant test.
+	// So a flagged record counts 0.025 s (0x3ccccccd) on EVERY peer in stock: the step is already symmetric. AR7 FINDINGS 1.4
+	// ("owner-relative") was a misread of 0x5597f1; the X-2a drift it explained was the one-label offset AR8 found.
+	// [Online] SymmetricClockStep (default OFF) only changes what a flagged record counts - its measured frame time, up to
+	// 1.0 s (0.1 s per frame after the 0x46ef25 dt clamp), instead of 0.025 s - on every peer alike: no desync either way,
+	// but with it ON game time runs ahead through a load stall (AI timers, spawns and Blob's limit advance faster). It is
+	// kept as an opt-in experiment only; every peer of a session must still agree (a mixed session would be asymmetric).
+	constexpr std::uint16_t step_placeholder_bit = 0x8000u, step_word_cap = 0x2710u;
+	constexpr float step_placeholder_seconds = 0.025f; // 0x3ccccccd, what a flagged record counts in stock (on every peer)
+	constexpr float step_unit_seconds = 1e-4f;         // 0x680518
+	inline float step_seconds(std::uint16_t word) { return float(word & 0x7fffu) * step_unit_seconds; }
+	inline float stock_clock_step(std::uint16_t word) { return (word & step_placeholder_bit) ? step_placeholder_seconds : step_seconds(word); }
+	inline float symmetric_clock_step(std::uint16_t word) { return step_seconds(word); }
+	// What the wire carries for a record: the step word verbatim (bit 15 included), the code mask with bit 15 stripped.
+	inline std::uint16_t wire_step_word(std::uint16_t word) { return word; }
+	inline std::uint32_t wire_code_mask(std::uint32_t mask) { return mask & 0xffff7fffu; }
+	// Belt (FINDINGS 2.2, [Online] CanonicalClockStep, default OFF): while an online session is live, the frame's step is
+	// 1/N (N = the session's agreed tick, the host's linked rate or the stock 30) whatever the records carry, so game time
+	// is 2.0 + k/N on every peer by construction. A = 1/N is non-zero, so the stock set_one_shot_step(A) still runs.
+	inline float canonical_clock_step(unsigned rate) { return rate ? 1.0f / float(rate) : 0.0f; }
+	constexpr unsigned step_observe_frames = 41; // `jip step:` lines for frames 0..40 of every epoch (JoinDiagnostics=1)
+	constexpr unsigned step_observe_lines = 2048;
+	// The apply's mask argument must be a lockstep ring record's code-mask field (synchronizer 0x79fbb0: four blocks of 0x3184,
+	// 300 slots of 0x28 at +0x268, record bytes at slot +4, frame u16 at record +0, code mask at record +4): the guard reads the
+	// frame at mask - 4 only for such a pointer; any other caller of vt+0x24 (offline play, menus) is left alone.
+	inline bool ring_record_mask(std::uintptr_t mask_at, std::uintptr_t synchronizer = 0x79fbb0u)
+	{
+		if (mask_at < synchronizer + 0x268u + 8u) return false;
+		const auto in_block = (mask_at - synchronizer) % 0x3184u, block = (mask_at - synchronizer) / 0x3184u;
+		if (block >= 4u || in_block < 0x268u + 8u) return false;
+		const auto in_slots = in_block - 0x268u;
+		return in_slots / 0x28u < 300u && in_slots % 0x28u == 8u;
+	}
+
+	// AR8 (fable-ar8): the input-stream epoch marker. A single lockstep record (kinds 1..5, 0x66..0x68, 0x6f) carries NO
+	// frame label on the wire (0x5597db sends mask, axes, step and body only); the receiver 0x559eb0 labels it with the
+	// block's received-record counter (+0x317e, 0x559ee7..0x559f01: label = counter++), which 0x558740 zeroes together with
+	// the ring at every reset. A cohort restart resets each peer's rings at ITS OWN release (0x613f68 -> 0x559150, all four
+	// blocks) and again at its start (0x6140a5 -> 0x559e00). Any record a peer sent between its start and its final reset is
+	// wiped from the sender's own ring but, when the receiver parses it after the receiver's own reset (its parser was busy
+	// loading), it is COUNTED: fable-ar7 X7-2a/X7B-2a/2a2 - the host's block for the guest held one such record at label 0,
+	// so every later record of the guest sat one label late on the host (host label f = guest label f-1), the two PCs applied
+	// the guest's inputs one frame apart and the cohort split at the guest's first stick input (frame 540/570). The marker:
+	// right after each of its two reset sites the sender posts input_epoch_copies records whose code mask is
+	// input_epoch_mark_prefix | nonce through the native lockstep-event path (0x55a370 -> 0x559700: produced into the own
+	// ring, sent at once) and then wipes its own block again (0x558740), so the markers travel in the input stream, ahead of
+	// its first real record, and occupy no label anywhere. The receiver's store hook (0x559560) recognises a marker, resets
+	// that participant's block (stale records dropped, counter back to 0) and stores nothing; a repeated nonce (the extra
+	// copies) only undoes the decoder's counter increment. Every real record after the marker is counted from 0 on every
+	// receiver, exactly as the sender labelled it. The native event codes (0xfff31fff, 0xfff77fe0, 0xfff33fe0, 0xfff11fe0)
+	// and real UI-code masks never carry the 0xfffa prefix. [Online] RestartInputEpoch (sender side); receivers always honour
+	// a marker, so a peer with the key off still accepts one (it then stores no stray record either way).
+	// The nonce is 15 bits: the sender strips bit 15 of the code mask for every wire kind (0x5597f1 `and eax, 0xffff7fff`,
+	// 0x55995f, 0x5599c6, 0x559a1e), so a 16-bit nonce 0x8000 would arrive as 0 (not a marker: stored as a stray label 0)
+	// and 0x8xxx as 0x0xxx; keeping bit 15 clear makes the marker identical in the sender's own ring and on every receiver.
+	constexpr std::uint32_t input_epoch_mark_prefix = 0xfffa0000u;
+	constexpr std::uint16_t input_epoch_nonce_mask = 0x7fffu;
+	constexpr unsigned input_epoch_copies = 2;
+	constexpr std::uint32_t native_event_codes[]{0xfff31fffu, 0xfff77fe0u, 0xfff33fe0u, 0xfff11fe0u};
+	inline bool input_epoch_mark(std::uint32_t mask) { return (mask & 0xffff0000u) == input_epoch_mark_prefix && (mask & 0xffffu) != 0u; }
+	inline std::uint32_t input_epoch_mark_for(std::uint16_t nonce) { const std::uint16_t n = std::uint16_t(nonce & input_epoch_nonce_mask); return input_epoch_mark_prefix | (n ? n : 1u); }
+	inline std::uint16_t input_epoch_nonce(std::uint32_t mask) { return std::uint16_t(mask & input_epoch_nonce_mask); }
+	// A fresh 15-bit nonce for this PC's next epoch: never 0 and never the previous one (a receiver ignores a repeat).
+	inline std::uint16_t next_input_epoch_nonce(std::uint32_t seed, std::uint16_t previous)
+	{
+		std::uint16_t n = std::uint16_t((seed ^ (seed >> 16) ^ 0x5bd1u) & input_epoch_nonce_mask);
+		if (!n || n == previous) n = std::uint16_t((previous + 0x1e37u) & input_epoch_nonce_mask);
+		if (!n || n == previous) n = std::uint16_t(previous == 1u ? 2u : 1u);
+		return n;
+	}
+	// late (b2c-fix-crash, live-b2c X-2c N-2c): a new nonce that reaches the block after this PC's simulation has already
+	// consumed records from it (the ring's read index moved since the block's last reset). The marker says "count my
+	// records from 0 from here", but the consumed record(s) were applied to frames this PC has already run: resetting the
+	// block (read/write/next := 0) would re-label the sender's NEXT record as 0 and misalign every later frame (X-2c: the
+	// guest's frame 0 ran a second before the host's starved pump flushed the start marker; `read 1 write 1 next 1`, reset,
+	// native arbitration dropped the guest 0.13 s later). The marker is ignored instead: the block keeps its records and
+	// labels, the nonce is remembered (its second copy is a repeat), the decoder's counter increment is given back - the
+	// stock labelling for that epoch, never worse. The 300-slot ring's read index is 0 again after exactly 300 consumed
+	// records (10 s at 30 frames); a marker that late has long been overtaken by the native timeouts.
+	enum class input_epoch_action { store, reset, ignore, late };
+	inline input_epoch_action input_epoch_receive(std::uint32_t mask, std::uint16_t last_nonce, std::uint32_t consumed = 0)
+	{
+		if (!input_epoch_mark(mask)) return input_epoch_action::store;
+		if (input_epoch_nonce(mask) == last_nonce) return input_epoch_action::ignore;
+		return consumed ? input_epoch_action::late : input_epoch_action::reset;
+	}
+	// AS (b2c-fix-crash, live-b2c X-4p N-CRASH): the 0x23 mesh-pair report 0x607390(adding, sender) clears the pair's bits
+	// in both records' pending-mesh masks and, when the pair is the one the manager waits for (+0x2220), ends that wait
+	// (+0x2220/+0x2238 := 0, settle timer +0x2228 := now + 1.0). Stock looks neither record up for null. With a record
+	// missing (the seat was removed - p060fix/AR removes a newcomer lost before the restart at once; stock would have waited
+	// for its 10 s watchdog) the stock function runs only when both exist; otherwise the fix applies the same two effects
+	// to the record(s) that exist: nothing of the removed seat is left to clear, the surviving record's bit for it goes
+	// (the manager's own 15 s pending-pair fallback 0x607dc0 would clear it the same way without dropping anyone), and the
+	// manager's wait for exactly this pair ends as it would have a tick earlier. 2- and 3-player sessions never reach the
+	// missing branch (every report in live-b2c arrived while the seat's record existed).
+	enum class mesh_pair_report { stock, partial, none };
+	inline mesh_pair_report mesh_pair_decide(bool a_present, bool b_present)
+	{
+		if (a_present && b_present) return mesh_pair_report::stock;
+		return a_present || b_present ? mesh_pair_report::partial : mesh_pair_report::none;
+	}
+	inline std::uint32_t mesh_pair_mask(std::uint32_t a, std::uint32_t b) { return (1u << (a & 0x1fu)) | (1u << (b & 0x1fu)); } // 0x6073d7/0x6073e0: shl by cl
+	// The handler's index of a payload half (0x604dcf..0x604de4 / 0x604deb..0x604e01): the first set bit of the low 4, else 4.
+	inline std::uint32_t mesh_pair_index(std::uint32_t half)
+	{
+		for (std::uint32_t i = 0; i < 4; ++i) if (half & (1u << i)) return i;
+		return 4;
+	}
+	// The store's kind argument (0x559560's third argument, the decoder 0x559eb0's `push`) says which fields of the decoder's
+	// stack record (label +0, step +2, mask +4, axes +8/+0xa, body +0xc) the decoder wrote for this call; the others hold
+	// whatever the previous decode at the same stack depth left there (the deltas are applied against the previous record
+	// later, 0x558c00). Kinds with a written mask: 0 = a full record (0x559fb8, opcodes 0/1, every record of a batch
+	// 0x55a219, and the caller 0x55a290's own record), 1 = mask only (0x55a1c5, opcodes 3/0x69), 3 = mask + axes01 (0x55a0a6,
+	// opcodes 5/0x6a), 5 = mask + axes23 (0x55a152, opcodes 0x67/0x6c). Kinds 2 (axes01), 4 (axes23), 6 (both axes),
+	// 8 (step only, opcodes 2/7) and 0x10 (body, 0x6f/0x70) never touch the mask slot: a marker mask left there by another
+	// peer's previous message must not be read as this peer's marker (b2c review finding 2: it would wipe this peer's block).
+	// A marker itself is always a full record (kind 0): it is posted right after a ring reset (write - read < 3 at 0x5597d2,
+	// so the sender takes the full path 0x5597db), and AR6 keeps the first 32 frames full anyway.
+	inline bool input_epoch_store_kind_has_mask(std::uint32_t kind) { return kind == 0u || kind == 1u || kind == 3u || kind == 5u; }
+	inline input_epoch_action input_epoch_store_action(std::uint32_t kind, std::uint32_t mask, std::uint16_t last_nonce, std::uint32_t consumed = 0)
+	{
+		if (!input_epoch_store_kind_has_mask(kind)) return input_epoch_action::store;
+		return input_epoch_receive(mask, last_nonce, consumed);
+	}
+	// The receiver's nonce memory (the last accepted nonce per participant index, 0 = none). It must not outlive the blocks
+	// it describes: a stored nonce from an earlier session or an earlier occupant of the index would make a new peer's
+	// marker with the same nonce (1 in 32767) a "repeat" (ignored: no reset, the one-label offset is back). Forgotten at
+	// this PC's every all-blocks ring reset (the release 0x613f68 and the start 0x6140b3 - every cohort restart and every
+	// session start pass one, and a new occupant of an index only arrives through a cohort restart) and at the session's end.
+	struct input_epoch_memory
+	{
+		std::uint16_t last[4]{};
+		void forget() { for (auto& n : last) n = 0; }
+		bool empty() const { for (const auto n : last) if (n) return false; return true; }
+	};
+	// The decoder incremented the block's counter for a single record before the store sees it; an ignored repeat gives it back.
+	inline std::uint16_t input_epoch_counter_after_ignore(std::uint16_t counter) { return counter ? std::uint16_t(counter - 1u) : counter; }
+	// Pending (stored, unconsumed) records of a block from its read/write indices (300-slot ring).
+	inline unsigned input_ring_pending(std::uint32_t read, std::uint32_t write) { return read < 300u && write < 300u ? (write >= read ? write - read : write + 300u - read) : 0u; }
+
+	// b2d-fix-jip (live-b2d N-LATE4 / N-2c-LATE): the restart-release barrier. The marker is one unreliable single record
+	// and the receiver labels single records by arrival, so what a peer stores from P between ITS OWN ring reset and P's
+	// marker fixes P's labels for the whole epoch. A record P sent before its restart, still in flight across the ~1 s
+	// reset skew (X-4p-a: m11 -> host; X-2cR, X-2cR2, X-2cL: host -> guest), was counted as P's label 0, the gate passed
+	// on it and P's marker was then late (ignored) on THAT peer, while the peers whose parsers saw the marker first reset:
+	// the same real record carried label 0 there and label 1 here and the cohort split at frame 30/60 (3 of 3
+	// lost-newcomer restarts of live-b2d). The barrier makes every peer take the same decision: from this PC's own
+	// all-blocks reset, P's records are HELD (copied aside with the decoder's label, not stored) until P's marker, which
+	// drops them (pre-restart records: the block resets and P's real records are counted from 0 on every peer alike) -
+	// or until a cap, after which the held records are stored in the order they came (the stock labelling, as before the
+	// barrier; a marker after that is late, as before). A REAL record can precede P's marker only through the native
+	// reliable resend (0x5c -> 0x5d batches, labelled on the wire: live-b2d P-LJ3, the newcomer's marker 16.6 s behind its
+	// resent frame 0): dropped at a marker inside the cap it is requested again and resent by label; past the cap it is
+	// stored as it came and the late marker is ignored, on every peer alike. Observed start-reset-to-marker skew: 1.0 to
+	// 2.4 s in every live-b2d restart (passed or failed); the cap stays well below the native 10 s-class watchdogs.
+	// Armed only while this PC itself sends markers ([Online] RestartInputEpoch, the shipped default), so the key stays a
+	// complete A/B control; this PC's own index (the own-record store 0x55a2a6) is never held.
+	constexpr unsigned input_epoch_hold_cap_ms = 5000;
+	constexpr unsigned input_epoch_hold_records = 96; // per participant; the pre-restart window is a few records (96 = 3.2 s at 30 fps)
+	constexpr unsigned input_epoch_record_bytes = 0x24; // the decoder's record as the store copies it (0x5595cd: 9 dwords)
+	enum class input_epoch_hold { store, hold, flush };
+	struct input_epoch_barrier
+	{
+		bool expecting[4]{};
+		unsigned held[4]{};
+		std::uint32_t armed_at = 0;
+		void arm(int own, std::uint32_t now) { for (unsigned i = 0; i < 4; ++i) { expecting[i] = int(i) != own; held[i] = 0; } armed_at = now; }
+		void disarm() { for (unsigned i = 0; i < 4; ++i) { expecting[i] = false; held[i] = 0; } }
+		bool any() const { for (const auto e : expecting) if (e) return true; return false; }
+		// A record that is not a marker, for `index`, at `now`: store (not expected), hold (copy it aside, skip the native
+		// store) or flush (the cap passed or the hold is full: store the held records in order, then this one).
+		input_epoch_hold record(std::uint32_t index, std::uint32_t now, unsigned cap_ms = input_epoch_hold_cap_ms, unsigned max_held = input_epoch_hold_records)
+		{
+			if (index > 3 || !expecting[index]) return input_epoch_hold::store;
+			if (now - armed_at >= cap_ms || held[index] >= max_held) { expecting[index] = false; return input_epoch_hold::flush; }
+			++held[index];
+			return input_epoch_hold::hold;
+		}
+		// A new-nonce marker for `index` ends the expectation; the held records are dropped (returns how many).
+		unsigned marker(std::uint32_t index) { if (index > 3 || !expecting[index]) return 0; expecting[index] = false; return take(index); }
+		unsigned take(std::uint32_t index) { if (index > 3) return 0; const auto n = held[index]; held[index] = 0; return n; }
+	};
 }

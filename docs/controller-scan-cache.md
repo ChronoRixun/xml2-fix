@@ -55,7 +55,7 @@ A interface) forwards to the W interface through its vtable, whose slot the fix
 has patched. The worker's raw A scan therefore re-entered the hook on the worker,
 queued a W query only the worker could publish and waited for itself; the game's
 first cold query waited for the worker forever (black screen before any frame,
-every Fix since 1.8.1; `O:/Projects/agent-work/proton-channel-switch/REPORT.md`).
+from 1.8.1 until this fix).
 Three rules now apply:
 
 - **Re-entry.** While a thread runs a cache scan's original enumeration, and on the

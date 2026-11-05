@@ -130,7 +130,7 @@ bool native_queue_open(native_phase role,bool owned) {
 bool native_route_request(const char* name,bool console) {
     if(!name) return true;
     if(!std::strcmp(name,"game_options") && native_flow.phase==native_phase::idle && !custom(which(current()))) options_owner=0;
-    if(native_flow.phase==native_phase::setup && (!std::strcmp(name,"main") || !std::strcmp(name,"online") ||
+    if(native_flow.phase==native_phase::setup && (!std::strcmp(name,"main") || entry_name(name) ||
         !std::strcmp(name,"lc_online") || !std::strcmp(name,"lc_code") || !std::strcmp(name,"lc_browse") || !std::strcmp(name,"campaign_lobby"))) broker_cancel();
     if(!std::strcmp(name,"host")) {
         native_open_token token;
@@ -459,6 +459,7 @@ void native_session_watch() {
     catch(...) { logger::write("online menus: native session end: room leave failed"); }
 }
 bool native_request(const char* name) {
+    if(name && !std::strcmp(name,"game_options")) name=game_options_menu();
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -882,6 +883,10 @@ bool native_flow_tick(screen s) {
         native_dispatcher_line("join start");
     }
     const auto phase=native_flow.phase;
+    if(view.generation==native_flow.ticket && view.error=="version_mismatch" &&
+       (phase==native_phase::tunnel || phase==native_phase::discovery || phase==native_phase::admitting)) {
+        native_flow_error("settings_refused");return false;
+    }
     if(phase==native_phase::setup && s==screen::host && native_flow.departure==screen::none) { broker_cancel();return false; }
     if(phase==native_phase::idle || phase==native_phase::setup) return false;
     if((phase==native_phase::host || phase==native_phase::guest) && native_flow.lobby_active) return false;

@@ -5,6 +5,7 @@
 struct party_fixture_member { unsigned index; const char* name; bool self, host; int phase; int ping; int build; };
 std::vector<party_fixture_member> party_rows;
 bool party_hosting=true,party_session=true;
+bool party_rate_facts=false;
 std::vector<unsigned> party_removed;
 bool party_remove_ok=true;
 int party_native_backs=0;
@@ -14,6 +15,10 @@ bool party_fields_stub(online_menus::lobby_fixture& out) {
         auto& m=out.members[out.count++];m={};
         m.native_index=row.index;std::strncpy(m.name,row.name,31);m.self=row.self;m.host=row.host;m.phase=row.phase;
         m.ping_ms=row.ping;m.build=row.build;m.route=1;
+        if(party_rate_facts) {
+            m.local_fps=row.index==1 ? 30 : 60;m.session_fps=60;
+            m.rate_capacity=row.index==1 ? linked_frame_rate_core::capacity::slow : linked_frame_rate_core::capacity::holding;
+        }
     }
     return true;
 }
@@ -117,6 +122,12 @@ void party_tests(const script_functions_rules::func_entry* registration) {
     assert(host ? (shown("lc_party_propose_soon") && hidden("lc_party_propose_host_only")) : (shown("lc_party_propose_host_only") && hidden("lc_party_propose_soon")));
     assert(off("lc_party_propose") && on("lc_party_invite") && on("lc_rail_quit") && on("lc_rail_resume"));
     assert(hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest") && hidden("lc_party_confirm_kick") && hidden("lc_party_leave_yes") && hidden("lc_party_cancel"));
+    party_rate_facts=true;tick(child.data(),nullptr);
+    assert(texts["lc_p2_fps"]=="30 local / 60 online / slow" && shown("lc_p2_fps") && hidden("lc_p2_hero_fallback") && hidden("lc_p2_same_build"));
+    assert(shown("lc_party_rate_warning") && texts["lc_party_rate_warning"]=="Kitty: Cannot hold 60 fps" && hidden("lc_party_recovery_1"));
+    party_rate_facts=false;tick(child.data(),nullptr);
+    assert(hidden("lc_p2_fps") && hidden("lc_party_rate_warning") && shown("lc_party_recovery_1") && shown("lc_p2_hero_fallback"));
+    std::cout<<"PASS linked rate Party: local/session fields, named measured-slow warning, stale facts cleared\n";
     if(host) {
         // Kick buttons: remote admitted cards only; never the host/own card, never a missing card.
         assert(hidden("lc_p1_kick") && shown("lc_p2_kick") && shown("lc_p3_kick") && hidden("lc_p4_kick") && off("lc_p1_kick") && on("lc_p2_kick") && on("lc_p3_kick"));

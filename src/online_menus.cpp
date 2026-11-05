@@ -1,6 +1,12 @@
 #include "online_menus.hpp"
+#include "display.hpp"
+#include "hold_overlay.hpp"
 #include "online_menus_anchors.hpp"
 #include "lc_fonts.hpp"
+#include "frame_rate.hpp"
+#include "online_text_entry_rules.hpp"
+#include "online_menu_navigation_rules.hpp"
+#include "online_status_core.hpp"
 #include "gameplay_agreement.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
@@ -24,6 +30,8 @@
 #include <fstream>
 #include <ctime>
 #include <map>
+#include <memory>
+#include <new>
 #include <cstdio>
 #include <intrin.h>
 #include <atomic>
@@ -33,6 +41,7 @@
 namespace online_menus {
 namespace {
 using namespace online_menus_rules;
+using online_menus_rules::display;
 template<class T> T at(std::uintptr_t p) { return reinterpret_cast<T>(p); }
 using getter=void*(__cdecl*)();
 using tick_fn=void(__thiscall*)(void*);
@@ -44,7 +53,19 @@ using name_fn=void(__thiscall*)(void*,const char*);
 using command_fn=bool(__thiscall*)(void*,const char*);
 using set_text_fn=void(__cdecl*)(void*,const char*,const char*,...);
 using hide_fn=void(__thiscall*)(void*,const char*,bool);
+bool authored_text(void* menu,const char* name,char (&out)[128]);
 bool ready=false;
+constexpr const char* failure_menu="lc_online_unavailable";
+bool legacy_online_name(const char* name) {
+    if(!name) return false;
+    if(!std::strncmp(name,"live_",5)) return true;
+    for(const auto* value:{"online","campaign_lobby","games_list","game_options","text_entry","player_game_options",
+                          "players_list","hero_list","region","lc_online_entry"})
+        if(!std::strcmp(name,value)) return true;
+    return false;
+}
+bool entry_name(const char* name) { return name && (!std::strcmp(name,"online") || !std::strcmp(name,"lc_online_entry")); }
+
 // The frontend table (602200), separate from W2's zone strings, keeps the
 // retail 1024-slot handle layout and +1008 arena offset. Shared Code focus
 // adds 32 distinct resource names. Retail's 7 KiB arena ran out, published
@@ -107,6 +128,7 @@ struct owned_text {
     void* owner=nullptr;
     unsigned name=0;
     std::array<char,1024> value{};
+    std::array<char,128> prompt_native{};
 };
 std::map<void*,owned_text> owned_texts;
 bool text_identity(void* item,const owned_text& value) {
@@ -120,9 +142,11 @@ const char* owned_value(void* item) {
     const auto found=owned_texts.find(item);
     return found!=owned_texts.end() && text_identity(item,found->second) ? found->second.value.data() : nullptr;
 }
+const char* first_prompt_text(void* item,const char* raw);
+bool bind_prompt_native(void* menu,void* item,const char* name,const char* text);
 const char* __fastcall owned_text_getter(void* item,void*) {
     if(const char* value=owned_value(item)) return value;
-    return at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+    return first_prompt_text(item,at<const char*(__thiscall*)(void*)>(0x5c67f0)(item));
 }
 void forget_text_owner(void* owner) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(owner)) bindings.clear();
@@ -149,7 +173,9 @@ bool assign_owned_text(void* owner,void* item,const char* text) {
     // A real parsed widget has both its owner and interned name. Fixture
     // recorders lacking this identity retain the original binding path.
     if(!name || *reinterpret_cast<void**>(p+4)!=owner) return false;
-    auto& value=owned_texts[item];value.owner=owner;value.name=name;
+    auto& value=owned_texts[item];
+    if(value.owner!=owner || value.name!=name) value.prompt_native.fill(0);
+    value.owner=owner;value.name=name;
     unsigned n=0;while(n<value.value.size()-1 && text[n]) ++n;
     std::memcpy(value.value.data(),text,n);value.value[n]=0;
     return true;
@@ -164,7 +190,9 @@ code_model code;
 name_request name_edit;
 DWORD name_requested_at=0;
 key_edges keyboard_edges;
-input_inbox keyboard_input;
+input_inbox keyboard_input,host_keys;
+bool host_accept_held=false,host_accept_guard=false;
+bool host_input_ticking=false;
 std::optional<std::string> rejoin_seed;
 std::atomic<DWORD> game_thread{0},keyboard_thread{0};
 bool back_held=false;
@@ -358,9 +386,98 @@ bool assets_ready() noexcept {
         cached_asset_generation=generation;return true;
     } catch(...) {
         cached_asset_generation=0;
-        logger::write("online menus: asset check threw; native online entry retained");
+        logger::write("online menus: asset check threw; rebuilt LC failure entry retained");
         return false;
     }
+}
+
+// This variant keeps GAME_OPTIONS_MENU and all native setup services. Retail
+// definitions remain read-only inputs. Missing variants select the plain LC
+// message; they never select the GameSpy-era resource.
+const char* game_options_menu() noexcept {
+    if(!ready || !mod_loader::generation()) return failure_menu;
+    try {
+        const auto root=std::filesystem::path(mod_loader::game_root());
+        const auto exists=[&](const wchar_t* name) {
+            std::error_code error;
+            return std::filesystem::is_regular_file(mod_loader::resolve_file((root/name).wstring()),error);
+        };
+        constexpr char expected[]="lc-online-options/1\n";
+        std::ifstream marker(mod_loader::resolve_file((root/L"Data/lc_online_options.cap").wstring()),std::ios::binary);
+        std::array<char,sizeof(expected)> bytes{};marker.read(bytes.data(),bytes.size());
+        if(marker.gcount()!=sizeof(expected)-1 || std::memcmp(bytes.data(),expected,sizeof(expected)-1)) return failure_menu;
+        for(const auto* file:{L"UI/menus/lc_game_options.XMLB",L"UI/menus/lc_game_options.engb",L"UI/menus/lc_game_options.IGB",
+            L"Packages/generated/maps/package/menus/lc_game_options.PKGB",L"UI/models/lc_o_backdrop_lc_game_options.IGB",L"UI/models/lc_o_field.IGB",
+            L"UI/models/lc_o_focus_0_-192_4144_0.IGB"})
+            if(!exists(file)) return failure_menu;
+        return "lc_game_options";
+    } catch(...) { return failure_menu; }
+}
+
+// Optional native-class scenes. All editing/state/input remains in retail.
+// Check the complete authored dependency set before selecting another name.
+const char* native_skin_menu(const char* name,bool online_editor=false) noexcept {
+    if(!name) return name;
+    if(!std::strncmp(name,"live_",5) || !std::strcmp(name,"players_list") || !std::strcmp(name,"hero_list") || !std::strcmp(name,"region")) return failure_menu;
+    if(!std::strcmp(name,"game_options") || !std::strcmp(name,"lc_game_options")) return game_options_menu();
+    if(!ready || !mod_loader::generation()) return legacy_online_name(name) ? failure_menu : name;
+    struct skin { const char *native,*variant,*capability;std::initializer_list<const char*> models; };
+    const skin skins[]{
+        {"text_entry","lc_text_entry","lc-online-skin/text_entry/1\n",
+            {"lc_o_focus_-200_-208_200_0","lc_o_focus_-488_-224_488_0","lc_o_focus_-528_-224_528_0"}},
+        {"online","lc_other_online","lc-online-skin/online/1\n",
+            {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0","lc_o_picker_focus","lc_o_picker_up","lc_o_picker_down"}},
+        {"campaign_lobby","lc_campaign_lobby","lc-online-skin/campaign_lobby/1\n",{"lc_o_focus_0_-400_4144_0"}},
+        {"games_list","lc_games_list","lc-online-skin/games_list/1\n",{"lc_o_lan_focus","lc_o_picker_up","lc_o_picker_down"}},
+        {"player_game_options","lc_player_game_options","lc-online-skin/player_game_options/1\n",
+            {"lc_o_focus_0_-400_4144_0","lc_o_focus_0_-224_4144_0"}}
+    };
+    const skin* selected=nullptr;
+    for(const auto& candidate:skins) if(!std::strcmp(name,candidate.native) || !std::strcmp(name,candidate.variant)) selected=&candidate;
+    if(!selected) return name;
+    if(!std::strcmp(name,"text_entry") && !online_editor) return failure_menu;
+    try {
+        const auto root=std::filesystem::path(mod_loader::game_root());
+        const auto exists=[&](const std::filesystem::path& file) {
+            std::error_code error;
+            return std::filesystem::is_regular_file(mod_loader::resolve_file((root/file).wstring()),error);
+        };
+        const auto marker="Data/lc_online_skin_"+std::string(selected->native)+".cap";
+        std::ifstream cap(mod_loader::resolve_file((root/marker).wstring()),std::ios::binary);
+        std::array<char,80> bytes{};cap.read(bytes.data(),bytes.size());
+        const auto length=std::strlen(selected->capability);
+        if(cap.gcount()!=static_cast<std::streamsize>(length) || std::memcmp(bytes.data(),selected->capability,length)) return failure_menu;
+        const std::string variant=selected->variant;
+        for(const auto* ext:{".XMLB",".engb",".IGB"}) if(!exists("UI/menus/"+variant+ext)) return failure_menu;
+        if(!exists("Textures/menus/"+variant+".IGB") ||
+           !exists("Packages/generated/maps/package/menus/"+variant+".PKGB") ||
+           !exists("UI/models/lc_o_backdrop_"+variant+".IGB") || !exists("UI/models/lc_o_field.IGB")) return failure_menu;
+        for(const auto* model:selected->models) if(!exists("UI/models/"+std::string(model)+".IGB")) return failure_menu;
+        return selected->variant;
+    } catch(...) { return failure_menu; }
+}
+bool native_online_editor_source(void* menu) {
+    __try {
+        if(!menu) return false;
+        const auto* name=static_cast<const char*>(menu)+0xc;
+        const auto type=*static_cast<const unsigned*>(menu);
+        return (type==0x69f65c && (!std::strcmp(name,"game_options") || !std::strcmp(name,"lc_game_options"))) ||
+            (type==0x69efa4 && (!std::strcmp(name,"online") || !std::strcmp(name,"lc_other_online"))) ||
+            (type==0x69f724 && (!std::strcmp(name,"player_game_options") || !std::strcmp(name,"lc_player_game_options"))) ||
+            (type==0x69f8b4 && (!std::strcmp(name,"games_list") || !std::strcmp(name,"lc_games_list")));
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool legacy_controls_request(const char* name) {
+    if(!name || (std::strcmp(name,"players") && std::strcmp(name,"options_controller"))) return false;
+    auto* source=current_peek();
+    return custom(which(source)) || lobby(which(source)) || native_online_editor_source(source);
+}
+bool online_failure_request(const char* name) {
+    if(legacy_online_name(name) || legacy_controls_request(name)) return true;
+    if(!name) return false;
+    for(const auto* value:{"lc_other_online","lc_campaign_lobby","lc_games_list","lc_game_options","lc_text_entry","lc_player_game_options"})
+        if(!std::strcmp(name,value)) return true;
+    return false;
 }
 
 struct native_engine {
@@ -577,7 +694,7 @@ bool name_native(name_operation operation,name_io& io) {
             at<name_fn>(0x60c710)(request,name_edit.title.data());
             auto* m=*reinterpret_cast<void**>(0x8aff18);
             if(!m || *static_cast<unsigned*>(m)!=0x6a236c) return false;
-            at<request_fn>(0x5d5db0)(m,"text_entry",nullptr);
+            at<request_fn>(0x5d5db0)(m,native_skin_menu("text_entry",true),nullptr);
         } else if(operation==name_operation::poll) {
             io.result=at<bool(__thiscall*)(void*)>(0x60b960)(request);
             io.tag=at<int(__thiscall*)(void*)>(0x60b9a0)(request);
@@ -638,30 +755,30 @@ void request_impl(void* m,const char* name,const char* args) {
     // console_open (openmenu) has already routed this request with console provenance; never route it twice.
     const bool routed=console_routed;console_routed=false;
     if(ready && !routed && !native_route_request(name)) return;
-    pending.clear();keyboard_input.clear();
-    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
+    pending.clear();keyboard_input.clear();host_keys.clear();
+    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
     const auto source_id=reinterpret_cast<std::uintptr_t>(source);
     // The main menu is the root: leaving it with itself still stacked (Hub Back -> main pushed lc_online) would let a
     // later native close (Options Back) pop to the Hub. Same invariant as the custom screens' tick trim.
     if(ready && which(source)==screen::main) native_history_trim(source);
     if(name && std::strcmp(name,"lc_code")) rejoin_seed.reset();
-    if(ready && name && std::strcmp(name,"online")==0 && which(source)==screen::main) {
+    if(ready && entry_name(name) && which(source)==screen::main) {
         // Availability precedes the capture gate: missing/wrong assets always
-        // retain native online, including console requests and delayed queues.
+        // use the plain LC failure page, including console requests and delayed queues.
         if(!assets_ready()) {
             entry.clear();accept_hint(source,true);
-            at<request_fn>(0x5d5db0)(m,name,args);return;
+            at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
         }
         if(entry.waiting(source_id,now_ms())) return;
         if(!accept_fresh(accepted,accepted_at,now_ms())) {
             accepted=-1;
             // Builder owns this localized text. Without a usable prompt item,
-            // fall back natively rather than create a silent main-menu action.
+            // use the failure page rather than create a silent main-menu action.
             if(accept_hint(source,false)) {
                 logger::write("online menus: waiting for real Accept; localized continue prompt shown");return;
             }
-            at<request_fn>(0x5d5db0)(m,name,args);return;
+            at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
         }
         accept_hint(source,true);
         const int p=accepted; accepted=-1;
@@ -672,12 +789,14 @@ void request_impl(void* m,const char* name,const char* args) {
             logger::write("online menus: entry initialized once, controller=%d; Hub requested; no broker operation",p);
             at<request_fn>(0x5d5db0)(m,"lc_online",nullptr);return;
         }
-        logger::write("online menus: native initialization refused; keeping native online entry");
-        entry.clear();
+        logger::write("online menus: native initialization refused; plain LC failure page requested");
+        entry.clear();at<request_fn>(0x5d5db0)(m,failure_menu,nullptr);return;
     } else if(name && which(source)==screen::main && std::strcmp(name,"lc_online")) {
         entry.clear();accept_hint(source,true);
     }
-    at<request_fn>(0x5d5db0)(m,name,args);
+    const char* destination=legacy_controls_request(name) ? failure_menu :
+        native_skin_menu(name,name_edit.owned || native_online_editor_source(source));
+    at<request_fn>(0x5d5db0)(m,destination,destination==failure_menu ? nullptr : args);
 }
 void __fastcall request(void* m,void*,const char* name,const char* args) {
     try {
@@ -685,8 +804,11 @@ void __fastcall request(void* m,void*,const char* name,const char* args) {
         request_impl(m,name,args);
     } catch(...) {
         pending.clear();entry.clear();accepted=-1;
-        logger::write("online menus: request threw; native request retained");
-        try { at<request_fn>(0x5d5db0)(m,name,args); }
+        logger::write("online menus: request threw; online requests fail closed");
+        try {
+            const bool failed_online=online_failure_request(name);
+            at<request_fn>(0x5d5db0)(m,failed_online ? failure_menu : name,failed_online ? nullptr : args);
+        }
         catch(...) { logger::write("online menus: native request threw; frame contained"); }
     }
 }
@@ -700,10 +822,12 @@ int argument(void* args) {
     } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 bool party_expired_confirmation(int action);
+namespace text_entry_ui { bool capture(void* menu,int action); }
 void* __cdecl handler(void* args) {
     if(ready) {
         auto* menu=current();
         const auto value=argument(args);
+        if(text_entry_ui::capture(menu,value)) return nullptr;
         if(value!=int(intent::invalid_key) && live(menu) && !(which(menu)==screen::party && party_expired_confirmation(value))) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
     }
     return nullptr;
@@ -717,6 +841,10 @@ const script_functions_rules::func_entry registration{reinterpret_cast<const voi
 bool party_expired_confirmation(int action);
 bool party_mouse_action(void* menu,void* chosen,int message);
 bool __fastcall queue(void* console,void*,const char* line) {
+    if(ready && line) for(int value=100;value<=140;++value) {
+        char command[48]{};std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
+        if(!std::strcmp(command,line)) return text_entry_ui::capture(current(),value);
+    }
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
     if(ready && line) for(int value=2;value<=int(intent::last);++value) {
@@ -759,6 +887,7 @@ bool bind_text_native(void* menu,const char* item,const char* text) {
         if(!found) return false;
         const auto* vt=*static_cast<const std::uint32_t**>(found);
         if(vt[0x78/4]!=0x5c6850 || *reinterpret_cast<const std::uint32_t*>(static_cast<char*>(found)+0xa0)) return false;
+        if(bind_prompt_native(menu,found,item,text)) return true;
         // Native CText mouse handling reads $MENU prompts directly from +9c.
         // They have a finite authored vocabulary and must keep that token.
         if(!std::strstr(text,"$MENU") && vt[0x7c/4]==reinterpret_cast<std::uintptr_t>(&owned_text_getter) && assign_owned_text(menu,found,text)) {
@@ -915,6 +1044,33 @@ void enable(void* menu,const char* item,bool enabled) {
     if(enable_native(menu,item,enabled,true)) bindings.enabled.insert_or_assign(item,enabled);
 }
 namespace broker = online_browser_core;
+bool text_entry_ticking=false;
+// Sets a ticking flag for one call; cleared on every exit, including a C++
+// exception unwinding out of the base tick.
+struct ticking_scope {
+    bool& flag;
+    ticking_scope(bool& value,bool on=true) : flag(value) { flag=on; }
+    ~ticking_scope() { flag=false; }
+    ticking_scope(const ticking_scope&)=delete;ticking_scope& operator=(const ticking_scope&)=delete;
+};
+bool __fastcall native_navigation(void* mgr,void*,signed char* movement,void* settings) {
+    // The base menu tick calls +0x1f8 before updating the selected item. Zero
+    // button edges alone do not stop its signed axes or held D-pad repeat:
+    // otherwise our focus move is followed by a second native focus move.
+    const auto original=at<bool(__thiscall*)(void*,signed char*,void*)>(0x5da1a0);
+    if(text_entry_ticking || host_input_ticking) {
+        if(!movement) return 0;
+        // Still run the native navigator on a scratch result (it writes bytes
+        // 0..2 only), so its per-direction stick latches and repeat timers stay
+        // current: leaving our screen with the stick held, or opening it with
+        // the stick held, then behaves like retail on the next native menu.
+        signed char scratch[4]{0,0,movement[2],0};original(mgr,scratch,settings);
+        movement[0]=movement[1]=0;movement[2]|=3;return 1;
+    }
+    return original(mgr,movement,settings);
+}
+bool lobby_focus(void* menu,const char* target);
+void* item(void* menu,const char* name);
 bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
@@ -963,7 +1119,15 @@ DWORD last_list_at=0,list_done_at=0;
 bool listed_started=false,list_done=false;
 broker::ticket resolve_ticket{}, remembered_ticket{};
 void native_flow_cancel();
+enum class service_observation { unknown,connected,unavailable };
+service_observation service_seen=service_observation::unknown;
+void observe_service(const broker::client_view& v) {
+    if(v.authenticated) service_seen=service_observation::connected;
+    else if(v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused || (v.state==broker::phase::room && !v.error.empty()))
+        service_seen=service_observation::unavailable;
+}
 void broker_cancel(bool leave_room=false) {
+    if(broker_live()) observe_service(broker_view());
     native_flow_cancel();
     if(!broker_live()) return;
     if(leave_room && broker_calls.leave) broker_calls.leave();
@@ -971,6 +1135,49 @@ void broker_cancel(bool leave_room=false) {
     resolve_edit=0;resolve_ticket={};
 }
 #include "online_native_flow.inl"
+#include "online_ready_roster.inl"
+int lobby_player();
+online_menu_navigation_rules::sample menu_navigation_sample() {
+    __try {
+        auto* mgr=manager();
+        const auto axis=at<float(__thiscall*)(void*,int,bool)>(0x5d4690);
+        online_menu_navigation_rules::sample out{axis(mgr,0,false),axis(mgr,1,false),at<unsigned(__thiscall*)(void*)>(0x5d4830)(mgr)};
+        // 0x61a4c0 drops values <=.75 BEFORE publishing the signed UI axes.
+        // Read the pad slots already polled into the same binding map, before
+        // that cutoff; otherwise .75 flutter looks like a complete release.
+        // Read the SAME controller as the D-pad/button masks (the manager's
+        // active controller, as lobby_player()), not a possibly stale Hub one.
+        // A pad value replaces the native axis only when it is larger, so the
+        // native value (keyboard-bound movement, another device) still works.
+        auto* in=at<getter>(0x551ed0)();
+        const int player=at<int(__thiscall*)(void*,int)>(0x551110)(in,lobby_player());
+        const auto row=*at<const unsigned*>(0xa6ac04);
+        if(player<0 || player>=4 || row>=5) return out;
+        const auto* config=at<const unsigned char* const*>(0xa68f40)[row*4+player];
+        if(!config) return out;
+        const auto* map=config+0x18;
+        if(*reinterpret_cast<const unsigned*>(map)<4) return out;
+        float values[4]{};
+        for(unsigned action=0;action<4;++action) for(unsigned slot=0;slot<4;++slot) {
+            const auto* record=map+4+(action*4+slot)*12;
+            const auto device=*reinterpret_cast<const unsigned*>(record);
+            if(device<3 || device>12) continue;
+            const auto value=*reinterpret_cast<const float*>(record+8);
+            if(std::isfinite(value) && std::abs(value)>values[action]) values[action]=std::abs(value);
+        }
+        const float x=values[3]-values[2],y=values[0]-values[1];
+        if(!std::isfinite(out.x) || std::abs(x)>std::abs(out.x)) out.x=x;
+        if(!std::isfinite(out.y) || std::abs(y)>std::abs(out.y)) out.y=y;
+        return out;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return {}; }
+}
+int text_navigation(online_menu_navigation_rules::direction value) {
+    using namespace online_menu_navigation_rules;
+    return value==left ? online_text_entry_rules::left : value==right ? online_text_entry_rules::right :
+        value==up ? online_text_entry_rules::up : value==down ? online_text_entry_rules::down : 0;
+}
+#include "online_text_entry.inl"
+#include "online_network_status.inl"
 void broker_scope(screen s) {
     if(!broker_live()) return;
     if(broker_screen!=s) {
@@ -1075,6 +1282,7 @@ void host_marker_follow(void* menu) {
 }
 void bind_broker(void* menu,screen s) {
     if(!broker_live()) {
+        service_seen=service_observation::unknown;
         if(!offline_fixture) {
             bind_text(menu,"service","Unavailable");bind_text(menu,"self_state","Unavailable");
             // No service: nothing connected, no error scene for a service that was never asked, and a host card whose
@@ -1089,10 +1297,12 @@ void bind_broker(void* menu,screen s) {
     const auto& v=broker_view();
     const bool waiting=v.state==broker::phase::authenticating || v.state==broker::phase::listing || v.state==broker::phase::hosting || v.state==broker::phase::resolving;
     const bool failed=v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused;
-    const char* service=v.authenticated ? "Connected" : waiting ? "Connecting" : failed ? "Unavailable" : "Not connected";
+    observe_service(v);
+    const bool known_connected=v.authenticated || (!waiting && !failed && v.state!=broker::phase::room && service_seen==service_observation::connected);
+    const char* service=known_connected ? "Connected" : failed || (!waiting && service_seen==service_observation::unavailable) ? "Unavailable" : "Connecting...";
     // A plainly connected service is drawn by the lc_service_ok scene (green diamond + localized word); its text fields
     // stay empty then so the word is never drawn twice. Every other state keeps the neutral text.
-    const bool connected_plain=v.authenticated && !waiting && !failed && v.state!=broker::phase::room;
+    const bool connected_plain=known_connected && !waiting && !failed && v.state!=broker::phase::room;
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "In a room" : service);
@@ -1130,7 +1340,7 @@ void bind_broker(void* menu,screen s) {
     // their step in the copy itself and log the fixed internal reason.
     // Another build: the diagnostic field names both tokens instead (<= 8 allowlisted characters each; the host's token only
     // exists for this failure).
-    std::string diag=!failed ? std::string() : wait ? "Retry in "+std::to_string(wait_seconds(wait))+" s" : diagnostic(operation_name(int(v.action)),v.error);
+    std::string diag=failed && wait ? "Retry in "+std::to_string(wait_seconds(wait))+" s" : std::string();
     if(failed && cause==error_cause::version_mismatch && !v.error_detail.empty()) {
         const auto own=broker_calls.version ? broker_calls.version() : std::string();
         if(!own.empty()) diag=display(v.error_detail,8)+" vs your "+display(own,8);
@@ -1216,36 +1426,36 @@ void bind_broker(void* menu,screen s) {
         const bool present=index<v.rows.size();
         const auto* row=present ? &v.rows[index] : nullptr;
         std::string fields[7];
-        row_status status=row_status::lobby;build_relation build=build_relation::check;bool dim=false;int pips=0;
+        row_status status=row_status::lobby;build_relation build=build_relation::check;bool dim=false;
         if(row) {
             status=classify_row(row->players,row->max_players,row->joinable,row->in_progress);
             build=relate_build(row->version,version);
-            pips=pip_count(row->players);
             dim=status==row_status::full || status==row_status::closed || build==build_relation::other || row->password;
             fields[0]=display(row->name.empty() ? "Unnamed game" : row->name,24);
             fields[1]=display(row->host_name.empty() ? "Unknown" : row->host_name,12);
             fields[2]=display(row->zone.empty() ? "--" : row->zone,17);
             fields[3]=(row->players<0 ? std::string("--") : std::to_string(row->players))+"/"+std::to_string(row->max_players);
             // Status word, ping ("--": the broker sends no measurement and no connection is opened per row) and the
-            // SAME/CHECK words are drawn by the row scenes, so there are no cells [4]/[5]. [6]: only the other build's token.
+            // SAME/CHECK words use a compact DATA label. [6] holds only another build's token.
             fields[6]=build==build_relation::other ? display(row->version,8) : std::string();
         }
+        fields[5]=present ? "--" : "";
         if(broker_calls.room_rtt) {
             // Round 7: column 5 shows a measured RTT only for the room this PC is in (its host tunnel); no
-            // connection is opened per row, so every other row stays the neutral "--" scene.
+            // connection is opened per row, so every other row stays the neutral "--".
             const int rtt=row ? broker_calls.room_rtt(row->code) : -1;
             if(rtt>=0 && rtt<=60000) fields[5]=std::to_string(rtt)+" ms";
-            const auto key="room_"+std::to_string(i)+"_5";
-            bind_text(menu,key.c_str(),fields[5].c_str());
         }
+        bind_text(menu,("room_"+std::to_string(i)+"_5").c_str(),fields[5].c_str());
         for(const unsigned col:{0u,1u,2u,3u,6u}) {
             const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
             bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && rows_enabled);
         }
         const auto id=std::to_string(i);
         for(unsigned k=0;k<std::size(row_status_key);++k) hide(menu,("lc_row"+id+"_st_"+row_status_key[k]).c_str(),!(present && unsigned(status)==k));
-        for(int k=0;k<=4;++k) hide(menu,("lc_row"+id+"_pips_"+std::to_string(k)).c_str(),!(present && pips==k));
-        for(unsigned k=0;k<std::size(build_key);++k) hide(menu,("lc_row"+id+"_build_"+build_key[k]).c_str(),!(present && unsigned(build)==k));
+        const auto build_label="lc_row"+id+"_build";
+        bind_text(menu,build_label.c_str(),present ? (build==build_relation::same ? "SAME" : build==build_relation::check ? "CHECK" : "") : "");
+        hide(menu,build_label.c_str(),!present);
         hide(menu,("lc_row"+id+"_dim").c_str(),!(present && dim));
         const auto key="lc_row"+id+"_selected";hide(menu,key.c_str(),!present || index!=browse_selected);
     }
@@ -1339,7 +1549,12 @@ unsigned lobby_screen_mask(void* menu,unsigned raw) {
     return (lobby_state.role_keyboard || lobby_state.role_key_pending) ? (mapped & ~mask_next) | mask_other : mapped;
 }
 unsigned __fastcall lobby_input(void* mgr,void*) {
+    if(text_entry_ticking || host_input_ticking) return 0;
     unsigned mask=0;lobby_mask(mgr,mask);
+    if(host_accept_guard) {
+        if(!(mask&(0x10|0x100000))) host_accept_guard=false;
+        else mask&=~(0x10|0x100000);
+    }
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
         mask=lobby_screen_mask(lobby_state.owner,mask);
@@ -1506,7 +1721,7 @@ bool lobby_native_activate(void* menu,int argument,unsigned original) {
     if(marked) --refreshing_names;return result;
 }
 bool lobby_exit(void* menu) {
-    __try { at<request_fn>(0x5d5db0)(manager(),"online",nullptr);return true; }
+    __try { at<request_fn>(0x5d5db0)(manager(),failure_menu,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         __try { at<void(__thiscall*)(void*,const char*,int)>(0x5db270)(manager(),static_cast<char*>(menu)+0xc,0);return true; }
         __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -1669,7 +1884,9 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const bool named=broker_live() && broker_view().state==broker::phase::room && !broker_view().room_name.empty();
         if(!named) {
             std::string title="Online game";
-            if(broker_live() && broker_view().state==broker::phase::room && valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            if(valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            native_host_settings settings;
+            if(native_host_read(settings) && settings.name[0]) title=display(settings.name,32);
             bind_text(menu,"lc_room_name",title.c_str());
         }
         // The host knows its own campaign: say what the native Game Options chose. The guest's line is authored text (the host's choice).
@@ -1698,6 +1915,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     }
     std::string shown=code_value ? code_value->substr(0,4)+"-"+code_value->substr(4) : "---- ----";
     const bool room_card_facts=broker_live() && broker_view().state==broker::phase::room; // a room whose members' build facts can arrive
+    const bool lan_lobby=!room_card_facts && !code_value;
     const bool host=which(menu)==screen::lobby_host;
     lobby_native_state native{};const bool native_valid=lobby_state_read(menu,native);
     // Extra Copy never manufactures an Accept or invokes a native action.
@@ -1717,6 +1935,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     if(lobby_state.copied && now_ms()-lobby_state.copied_at>=lobby_copied_ms) lobby_state.copied=false;
     bind_text(menu,"lc_room_code",shown.c_str());
     enable(menu,"lc_copy_code",bool(code_value));
+    for(const auto* key:{"lc_code_label","lc_room_code","lc_copy_code"}) hide(menu,key,!code_value);
+    if(lan_lobby) bind_text(menu,"lc_room_visibility","LAN");
     for(unsigned i=0;i<4;++i) {
         const auto prefix="lc_p"+std::to_string(i+1)+"_";
         const bool member=valid && i<view.count;
@@ -1725,10 +1945,16 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const auto* waiting_member=fixture && pending_slot<extra.pending_count ? &extra.pending[pending_slot] : nullptr;
         const bool card_shown=member || waiting_member;
         hide(menu,(prefix+"card").c_str(),!card_shown);
-        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),card_shown);
+        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"})
+            hide(menu,(prefix+field).c_str(),card_shown || (!code_value && !std::strcmp(field,"empty_help")));
         for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!card_shown);
         hide(menu,(prefix+"pending").c_str(),!waiting_member);
         if(waiting_member) {
+            const bool rate_known=waiting_member->local_fps!=linked_frame_rate_core::unknown_rate && waiting_member->session_fps;
+            const auto rate=rate_known ? (waiting_member->rate_capacity==linked_frame_rate_core::capacity::slow ?
+                linked_frame_rate_core::warning_text(waiting_member->local_fps,waiting_member->session_fps,waiting_member->rate_capacity) :
+                linked_frame_rate_core::rate_text(waiting_member->local_fps,waiting_member->session_fps)) : "Hero assigned at start";
+            bind_text(menu,(prefix+"hero_fallback").c_str(),rate.c_str());
             const auto* raw=waiting_member->name;
             const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string(waiting_member->host ? "Host" : "Player");
             bind_text(menu,(prefix+"name").c_str(),shown_name.c_str());
@@ -1745,7 +1971,6 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             hide(menu,(prefix+"other_build").c_str(),waiting_member->build!=1);
             hide(menu,(prefix+"checking_build").c_str(),waiting_member->build!=0);
             bind_text(menu,(prefix+"phase").c_str(),phase_text(waiting_member->phase));
-            hide(menu,(prefix+"hero_fallback").c_str(),false);
             continue;
         }
         if(!member) {
@@ -1768,11 +1993,18 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             if(data) { data=nullptr;break; }data=&extra.members[j];
         }
         const bool self_row=view.local_known && view.ids[i]==view.local;
+        const bool rate_known=data && data->local_fps!=linked_frame_rate_core::unknown_rate && data->session_fps;
+        const auto rate=rate_known ? (data->rate_capacity==linked_frame_rate_core::capacity::slow ?
+            linked_frame_rate_core::warning_text(data->local_fps,data->session_fps,data->rate_capacity) :
+            linked_frame_rate_core::rate_text(data->local_fps,data->session_fps)) : lan_lobby && frame_rate::session_rate() ?
+            (self_row ? linked_frame_rate_core::rate_text(frame_rate::local_rate(),frame_rate::session_rate()) :
+             std::to_string(frame_rate::session_rate())+" online") : "Hero assigned at start";
+        bind_text(menu,(prefix+"hero_fallback").c_str(),rate.c_str());
         const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && !self_row;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);
         hide(menu,(prefix+"ms").c_str(),!measured);
-        hide(menu,(prefix+"measuring").c_str(),measured || self_row);
+        hide(menu,(prefix+"measuring").c_str(),measured || self_row || lan_lobby);
         hide(menu,(prefix+"to_host").c_str(),!(measured && data->ping_to_host));
         bind_text(menu,(prefix+"route").c_str(),measured ? route_text(data->route) : "");
         // Build: round-7 stage when supplied (0 checking, 1 other, 2 same, 3 agreed), else round 4's same_build.
@@ -1817,9 +2049,19 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     bind_text(menu,"lc_ready_count",row_busy ? "" : std::to_string(valid ? view.ready_count : 0).c_str());
     bind_text(menu,"lc_member_count",row_busy ? "" : std::to_string(valid ? view.count : 0).c_str());
     unsigned waiting=0;while(waiting<view.count && view.ready[waiting]) ++waiting;
-    bind_text(menu,"lc_waiting_name",valid && !row_busy && waiting<view.count ? display(view.names[waiting],31).c_str() : "");
+    std::string waiting_text;
+    if(valid && !row_busy && waiting<view.count) {
+        char translated[128]{};
+        std::string format=authored_text(menu,"lc_ready_waiting",translated) ? translated : "Waiting for %s to get ready.";
+        if(format.find("%s")==std::string::npos) format="Waiting for %s to get ready.";
+        const auto slot=format.find("%s");
+        if(slot!=std::string::npos) {
+            format.replace(slot,2,display(view.names[waiting],31));waiting_text=std::move(format);
+        }
+    }
+    bind_text(menu,"lc_waiting_name",waiting_text.c_str());
     hide(menu,"lc_ready_summary",row_busy);
-    hide(menu,"lc_ready_waiting",row_busy || !valid || waiting==view.count);
+    hide(menu,"lc_ready_waiting",true); // localized template; the full sentence is one DATA field
     hide(menu,"lc_ready_all",row_busy || !valid || waiting!=view.count || view.count<2);
     hide(menu,"lc_ready_solo",row_busy || !valid || view.count!=1 || waiting!=view.count);
     hide(menu,"lc_leave_confirm",!lobby_state.confirm);
@@ -1872,7 +2114,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     lobby_focus_enabled(menu);
     {   // Native focus/description refreshes write behind the bind cache. Restore every owned footer slot after the native tick.
         const char* const prompts[]{host ? "$MENU_BACK Leave" : "",host ? "$MENU_OTHER Kick player" : "$MENU_OTHER Ready / Unready",
-            lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code","","$MENU_ACCEPT Select"};
+            code_value ? (lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code") : "","","$MENU_ACCEPT Select"};
         for(unsigned i=0;i<5;++i) {
             const auto key="desctext"+std::to_string(i+1);
             bindings.text.erase(key);
@@ -2699,7 +2941,9 @@ DWORD party_feedback_at=0;
 DWORD party_departed_at=0;     // a Leave was handed to the native quit; cleared by Back or after party_departed_ms
 constexpr DWORD party_departed_ms=4000;
 constexpr DWORD party_feedback_ms=6000;
-struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1; };
+struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1;
+    unsigned local_fps=linked_frame_rate_core::unknown_rate, session_fps=0;
+    linked_frame_rate_core::capacity rate_capacity=linked_frame_rate_core::capacity::unknown; };
 struct party_snapshot_view { std::vector<party_card> cards; party_roster roster; std::string code; };
 party_snapshot_view party_collect() {
     party_snapshot_view out;
@@ -2719,6 +2963,7 @@ party_snapshot_view party_collect() {
     for(const auto* m:natives) {
         if(out.cards.size()==4) break;
         party_card c;
+        c.local_fps=m->local_fps;c.session_fps=m->session_fps;c.rate_capacity=m->rate_capacity;
         c.row.index=int(m->native_index);c.row.self=m->self;c.row.host=m->host;
         c.row.name=display(std::string(m->name,strnlen(m->name,31)),31);
         if(c.row.name.empty()) c.row.name="Player";
@@ -2729,6 +2974,7 @@ party_snapshot_view party_collect() {
     for(unsigned i=0;i<extra.pending_count && out.cards.size()<4;++i) {
         const auto& m=extra.pending[i];
         party_card c;
+        c.local_fps=m.local_fps;c.session_fps=m.session_fps;c.rate_capacity=m.rate_capacity;
         c.row.pending=true;
         c.row.name=m.name[0] ? display(std::string(m.name,strnlen(m.name,31)),31) : std::string("Player");
         c.ping=m.ping_ms;c.to_host=m.ping_to_host;c.route=m.route;c.build=m.build;c.phase=m.phase;
@@ -2756,7 +3002,7 @@ int party_tone(int phase) {
 void party_focus(void* menu,const std::string& item) { if(!item.empty()) lobby_focus(menu,item.c_str()); }
 void party_frame(void* menu) {
     const auto id=reinterpret_cast<std::uintptr_t>(menu);
-    if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear(); }
+    if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear();host_keys.clear(); }
     if(broker_live() && broker_calls.tick) broker_calls.tick();
     native_note_local_record();
     const auto view=party_collect();
@@ -2830,6 +3076,7 @@ void party_frame(void* menu) {
         for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),present);
         for(const auto* field:{"card","name","slot"}) hide(menu,(prefix+field).c_str(),!present);
         if(!present) {
+            hide(menu,(prefix+"fps").c_str(),true);
             for(const auto* field:{"host","you","hero_fallback","hero_next","ms","measuring","ping","to_host","same_build","checking_build","other_build",
                     "pending","selected","tone_good","tone_warn","tone_idle","kick"}) hide(menu,(prefix+field).c_str(),true);
             enable(menu,(prefix+"kick").c_str(),false);
@@ -2837,13 +3084,17 @@ void party_frame(void* menu) {
             continue;
         }
         const auto& c=view.cards[i];
+        const bool rate_known=c.local_fps!=linked_frame_rate_core::unknown_rate && c.session_fps;
+        const auto rate_status=c.rate_capacity==linked_frame_rate_core::capacity::slow ? " / slow" : c.rate_capacity==linked_frame_rate_core::capacity::holding ? " / holds" : " / measuring";
+        bind_text(menu,(prefix+"fps").c_str(),rate_known ? (linked_frame_rate_core::rate_text(c.local_fps,c.session_fps)+rate_status).c_str() : "");
+        hide(menu,(prefix+"fps").c_str(),!rate_known);
         bind_text(menu,(prefix+"name").c_str(),c.row.name.c_str());
         bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
         hide(menu,(prefix+"host").c_str(),!c.row.host);
         hide(menu,(prefix+"you").c_str(),!c.row.self);
         hide(menu,(prefix+"pending").c_str(),!c.row.pending);
         const bool next=c.phase==4 || c.phase==5;
-        hide(menu,(prefix+"hero_next").c_str(),!next);hide(menu,(prefix+"hero_fallback").c_str(),next);
+        hide(menu,(prefix+"hero_next").c_str(),rate_known || !next);hide(menu,(prefix+"hero_fallback").c_str(),rate_known || next);
         const bool measured=c.ping>=0 && c.ping<=60000 && !c.row.self;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(c.ping).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);hide(menu,(prefix+"ms").c_str(),!measured);
@@ -2851,9 +3102,9 @@ void party_frame(void* menu) {
         hide(menu,(prefix+"to_host").c_str(),!(measured && c.to_host));
         bind_text(menu,(prefix+"route").c_str(),measured ? route_text(c.route) : "");
         const int stage=c.row.self ? 2 : c.build;
-        hide(menu,(prefix+"same_build").c_str(),!(stage==2 || stage==3));
-        hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
-        hide(menu,(prefix+"other_build").c_str(),stage!=1);
+        hide(menu,(prefix+"same_build").c_str(),rate_known || !(stage==2 || stage==3));
+        hide(menu,(prefix+"checking_build").c_str(),rate_known || stage==2 || stage==3 || stage==1);
+        hide(menu,(prefix+"other_build").c_str(),rate_known || stage!=1);
         bind_text(menu,(prefix+"phase").c_str(),phase_text(c.phase));
         const int tone=party_tone(c.phase);
         hide(menu,(prefix+"tone_good").c_str(),tone!=0);hide(menu,(prefix+"tone_warn").c_str(),tone!=1);hide(menu,(prefix+"tone_idle").c_str(),tone!=2);
@@ -2862,6 +3113,17 @@ void party_frame(void* menu) {
         hide(menu,(prefix+"selected").c_str(),!(confirm_kick && !c.row.pending && c.row.index==party_ui.kick_index));
         if(notice_name.empty() && !c.row.self && (c.phase==4 || c.phase==5)) { notice_name=c.row.name;notice_phase=c.phase;notice_percent=c.percent; }
     }
+    std::string rate_warning;
+    // Prefer a sustained capacity failure; otherwise explain an overridden cap.
+    for (bool slow : {true,false}) {
+        for (const auto& c : view.cards) if (c.session_fps && c.local_fps!=linked_frame_rate_core::unknown_rate &&
+            (slow ? c.rate_capacity==linked_frame_rate_core::capacity::slow : c.local_fps!=c.session_fps)) {
+            rate_warning=c.row.name+": "+linked_frame_rate_core::warning_text(c.local_fps,c.session_fps,c.rate_capacity);break;
+        }
+        if (!rate_warning.empty()) break;
+    }
+    bind_text(menu,"lc_party_rate_warning",rate_warning.c_str());hide(menu,"lc_party_rate_warning",rate_warning.empty());
+    hide(menu,"lc_party_recovery_1",!rate_warning.empty());
     // Notice bar: one pending member at a time; its text nodes are hidden with the scene.
     const bool waiting=!notice_name.empty() && notice_phase==4,receiving=!notice_name.empty() && notice_phase==5;
     hide(menu,"lc_party_waiting",!waiting);hide(menu,"lc_party_receiving",!receiving);
@@ -2931,6 +3193,170 @@ void native_history_trim(void* menu) {
     if(dropped>0) logger::write("online menus: native menu history trimmed at %s (%d stale entr%s)",
         static_cast<const char*>(menu)+0xc,dropped,dropped==1 ? "y" : "ies");
 }
+namespace host_controls {
+enum event { up=1,down,left,right,accept,change,back,open };
+constexpr const char* rows[]{"visibility","room_name","campaign","drop_in","open"};
+void* owner=nullptr;unsigned opening=0;int last_row=0;
+online_menu_navigation_rules::navigation navigation;
+void reset() {owner=nullptr;navigation.reset();opening=0;last_row=0;host_keys.clear();}
+bool enabled(void* menu,const char* name) {
+    __try {
+        auto* p=static_cast<unsigned char*>(item_try(menu,name));
+        return p && (p[0x54]&0xc)==8 && !(p[0x54]&0x20);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+int row(void* menu) {
+    auto* selected=focus_of(menu);
+    for(int i=0;i<5;++i) if(selected && selected==item_try(menu,rows[i])) return i;
+    if(selected && selected==item_try(menu,"edit_room")) return 1;
+    if(selected && selected==item_try(menu,"prompt_open")) return 4;
+    return -1;
+}
+void apply(void* menu,int e) {
+    const auto id=reinterpret_cast<std::uintptr_t>(menu);
+    if(e==back) {pending.post(int(intent::back),id,screen::host);return;}
+    if(native_flow.phase!=native_phase::idle) return;
+    int selected=row(menu);if(selected>=0) last_row=selected;
+    if(e==up || e==down) {
+        int i=selected>=0 ? selected : last_row;
+        for(i+=e==up ? -1 : 1;i>=0 && i<5;i+=e==up ? -1 : 1)
+            if(enabled(menu,rows[i])) {lobby_focus(menu,rows[i]);last_row=i;break;}
+        return;
+    }
+    if(pending.action) return; // mouse/usecmd already owns this frame
+    if(e==open) {if(enabled(menu,"open")) {host_accept_guard=true;pending.post(int(intent::open_room),id,screen::host);}return;}
+    if(e==accept && focus_of(menu)==item_try(menu,"retry") && enabled(menu,"retry")) {
+        pending.post(int(intent::retry),id,screen::host);return;
+    }
+    if(e==accept && focus_of(menu)==item_try(menu,"desctext4")) {pending.post(int(intent::back),id,screen::host);return;}
+    if(selected<0) selected=last_row;
+    if(selected<0 || selected>4 || !enabled(menu,rows[selected])) return;
+    if(e!=accept && selected==4) return;
+    const auto action=selected==0 ? intent::visibility : selected==3 ? intent::drop_in : intent::open_room;
+    if(action==intent::open_room) host_accept_guard=true; // no same-edge Post in the native chooser
+    pending.post(int(action),id,screen::host);
+}
+void frame(void* menu,unsigned raw) {
+    const auto sample=menu_navigation_sample();const auto now=now_ms();
+    if(owner!=menu) {owner=menu;navigation.reset(sample,now);opening=raw;last_row=0;}
+    const int selected=row(menu);if(selected>=0) last_row=selected;
+    if(host_keys.source==reinterpret_cast<std::uintptr_t>(menu))
+        for(unsigned i=0;i<host_keys.count;++i) apply(menu,host_keys.values[i]);
+    host_keys.clear();
+    const auto edge=raw&~opening;opening&=raw; // retire only the opening edge; the native mask is already rising edges
+    auto direction=navigation.update(sample,now);
+    // Rows repeat while held; Visibility/Drop-in change once per push (a held
+    // repeat would flip the value at 10 Hz and spam broker set_drop_in).
+    if(navigation.repeat && (direction==online_menu_navigation_rules::left || direction==online_menu_navigation_rules::right))
+        direction=online_menu_navigation_rules::none;
+    const int move=text_navigation(direction);
+    if(edge&0x200000) apply(menu,back);
+    else if(edge&0x100000) apply(menu,open);
+    else if(edge&0x1000000) apply(menu,change); // raw Y, before custom-menu X/Y remapping
+    else {
+        const auto button=online_text_entry_rules::pad(edge);
+        const auto action=button ? button : move;
+        if(action==online_text_entry_rules::accept) apply(menu,accept);
+        else if(action==online_text_entry_rules::up) apply(menu,up);
+        else if(action==online_text_entry_rules::down) apply(menu,down);
+        else if(action==online_text_entry_rules::left) apply(menu,left);
+        else if(action==online_text_entry_rules::right) apply(menu,right);
+    }
+}
+void keyboard(void* menu,unsigned char* state,const std::array<bool,256>& edges,bool modified) {
+    const std::pair<unsigned,int> keys[]{{0xc8,up},{0xd0,down},{0xcb,left},{0xcd,right},{0x1c,accept},{0x9c,accept},{0xd3,change},{1,back}};
+    for(const auto& [scan,e]:keys) {
+        if(!modified && edges[scan]) {host_keys.push(reinterpret_cast<std::uintptr_t>(menu),e);if(e==accept)host_accept_held=true;}
+        state[scan]=0;
+    }
+}
+}
+const char* prompt_key(void* menu,const char* name) {
+    const bool pad=pad_probe && pad_probe(menu_player);
+    if(which(menu)==screen::hub) {
+        if(!std::strcmp(name,"desctext1") || !std::strncmp(name,"lc_hub_select_",14)) return pad ? "A" : "Enter";
+        if(!std::strcmp(name,"desctext2")) return pad ? "B" : "Esc";
+        if(!std::strcmp(name,"desctext3")) return pad ? "X" : "Del";
+        if(!std::strcmp(name,"desctext4") || !std::strcmp(name,"rejoin")) return pad ? "Y" : "F4";
+    }
+    if(which(menu)==screen::host) {
+        if(!std::strcmp(name,"desctext1")) return pad ? "A" : "Enter";
+        if(!std::strcmp(name,"desctext2")) return pad ? "Y" : "Del";
+    }
+    return nullptr;
+}
+bool prompt_identity(void* item,void*& menu,char (&name)[64]) {
+    __try {menu=*reinterpret_cast<void**>(static_cast<char*>(item)+4);engine_name_raw(item,name);return menu && name[0] && !*reinterpret_cast<unsigned*>(static_cast<char*>(item)+0xa0);}
+    __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+const char* first_prompt_text(void* item,const char* raw) {
+    if(!ready || !raw || !std::strstr(raw,"$MENU_")) return raw;
+    void* menu=nullptr;char name[64]{};
+    if(!prompt_identity(item,menu,name)) return raw;
+    const auto* key=prompt_key(menu,name);if(!key) return raw;
+    const char* start=std::strstr(raw,"$MENU_"),*end=std::strchr(start,' ');if(!end) return raw;
+    std::string shown(raw,std::size_t(start-raw));shown+=key;shown+=end;
+    if(!assign_owned_text(menu,item,shown.c_str())) return raw;
+    std::snprintf(owned_texts[item].prompt_native.data(),128,"%s",raw);
+    return owned_value(item);
+}
+bool bind_prompt_native(void* menu,void* item,const char* name,const char* text) {
+    if(!prompt_key(menu,name)) return false;
+    const char* raw=at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+    auto old=owned_texts.find(item);
+    const char* saved=old!=owned_texts.end() && text_identity(item,old->second) && old->second.prompt_native[0] ? old->second.prompt_native.data() : nullptr;
+    if(!saved && (!raw || !std::strstr(raw,"$MENU_"))) return false;
+    char token[128]{};std::snprintf(token,sizeof token,"%s",saved ? saved : raw);
+    if(!assign_owned_text(menu,item,text)) return false;
+    std::snprintf(owned_texts[item].prompt_native.data(),128,"%s",token);
+    // Display labels are owned; native hit/hover routing still reads $MENU at +9c.
+    at<set_text_fn>(0x5adcf0)(menu,name,"%s",text[0] ? token : "");return true;
+}
+void device_prompt(void* menu,const char* key,const char* words,const char* palette=nullptr) {
+    char current[128]{},colors[128]{};const bool readable=authored_text(menu,key,current);
+    if(!palette || !authored_text(menu,palette,colors)) std::memcpy(colors,current,sizeof colors);
+    const auto prefix=[](const char* value) {
+        unsigned n=0;
+        while(value[n]=='~' && value[n+1]>='0' && value[n+1]<='9') {
+            ++n;while(value[n]>='0' && value[n]<='9') ++n;
+        }
+        return n;
+    };
+    const char* body=current+prefix(current);
+    std::string text;
+    if(*words) {
+        // Replace only a known binding prefix, preserving authored translations.
+        const char* suffix=nullptr;
+        for(const char* key_prefix:{"$MENU_ACCEPT ","$MENU_BACK ","$MENU_OTHER ","$MENU_NEXT ",
+                "[Enter] ","[Esc] ","[Del] ","[KP4] ","[KP6] ","[KP5] ","Enter ","Esc ","Del ","F4 ","A ","B ","X ","Y "}) {
+            const auto n=std::strlen(key_prefix);
+            if(!std::strncmp(body,key_prefix,n)) {suffix=body+n;break;}
+        }
+        text.assign(colors,prefix(colors));
+        if(suffix) {const auto space=std::strchr(words,' ');text.append(words,space ? std::size_t(space-words)+1 : std::strlen(words));text+=suffix;}
+        else text+=*body ? body : words;
+    }
+    const auto cached=bindings.text.find(key);
+    if(cached!=bindings.text.end() && cached->second==text && (!readable || text==current)) return;
+    bindings.text.erase(key);bind_text(menu,key,text.c_str());
+}
+void screen_device_prompts(void* menu,screen s) {
+    const bool pad=pad_probe && pad_probe(menu_player);
+    if(s==screen::hub) {
+        int hover=-1;hover_index(hover);
+        device_prompt(menu,"desctext1",pad ? "A Select" : "Enter Select",hover==0 ? "lc_hub_select_hover" : "lc_hub_select_normal");
+        device_prompt(menu,"desctext2",pad ? "B Back" : "Esc Back",hover==1 ? "lc_hub_select_hover" : "lc_hub_select_normal");
+        device_prompt(menu,"desctext3",pad ? "X Change name" : "Del Change name");
+        device_prompt(menu,"desctext4",pad ? "Y Rejoin" : "F4 Rejoin");
+        device_prompt(menu,"rejoin",pad ? "Y Rejoin" : "F4 Rejoin");
+    } else if(s==screen::host) {
+        const int row=host_controls::row(menu);
+        const int selected=row>=0 ? row : host_controls::last_row;
+        const bool change=selected<4 && native_flow.phase==native_phase::idle && host_controls::enabled(menu,host_controls::rows[selected]);
+        device_prompt(menu,"desctext1",pad ? "A Select" : "Enter Select");
+        device_prompt(menu,"desctext2",!change ? "" : pad ? "Y Change" : "Del Change");
+    }
+}
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         if(native_guest_end_pending && which(menu)!=screen::hub && native_guest_return()) {
@@ -2940,10 +3366,12 @@ void tick_impl(void* menu,bool& native_called) {
         }
         // The native mask is rising-edge input (controller +2f8 XOR +374).
         // Keyboard text already posted by DirectInput wins over X/Y bindings.
-        const auto mask=screen_mask(input_mask());
+        const auto raw_mask=input_mask();
+        const auto mask=screen_mask(raw_mask);
         if(!(mask&0x200000)) back_held=false;
         const auto s=which(menu);
-        if(!pending.action && !keyboard_input.count) {
+        if(s==screen::host) host_controls::frame(menu,raw_mask);
+        if(s!=screen::host && !pending.action && !keyboard_input.count) {
             int shortcut=0;
             if(s==screen::code) {
                 if(mask&0x400000) shortcut=int(intent::paste); // MENU_NEXT: pad Y (screen_mask), RT, keyboard KP5
@@ -2964,9 +3392,9 @@ void tick_impl(void* menu,bool& native_called) {
         }
     }
     native_called=true;
-    at<tick_fn>(0x5aaeb0)(menu);
+    {ticking_scope scope(host_input_ticking,ready && live(menu) && which(menu)==screen::host);at<tick_fn>(0x5aaeb0)(menu);}
     if(tick_fault) tick_fault();
-    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
+    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();host_keys.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
     if(s==screen::party) { native_history_trim(menu);party_frame(menu);return; }
     native_history_trim(menu);
@@ -2987,7 +3415,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(s==screen::hub && int(action) && action!=intent::rejoin) rejoin_seed.reset();
     if(s==screen::code && action!=intent::back && keyboard_input.source==reinterpret_cast<std::uintptr_t>(menu))
         for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
-    keyboard_input.clear();
+    keyboard_input.clear();host_keys.clear();
     const char* destination=nullptr;
     if(s==screen::hub && !int(action) && broker_live() && broker_calls.take_preset) {
         broker::launch_preset preset;
@@ -3008,10 +3436,12 @@ void tick_impl(void* menu,bool& native_called) {
     case intent::other: if(s==screen::hub && !modal) destination="online"; break;
     case intent::back:
         if(s==screen::hub && host_left_state.active) host_left_state.dismiss();
-        else if(s==screen::code && !code.text.empty()) { code.erase(); error_visible=false; }
         else destination=s==screen::hub ? "main" : "lc_online";
         break;
-    case intent::edit_name: if(s==screen::hub && !modal && begin_name()) return; break;
+    case intent::edit_name:
+        if(s==screen::host) host_controls::apply(menu,focus_of(menu)==item_try(menu,"desctext1") ? host_controls::accept : host_controls::change);
+        else if(s==screen::hub && !modal && begin_name()) return;
+        break;
     case intent::paste: case intent::erase: case intent::clear: case intent::done: case intent::invalid_key:
         if(s==screen::code) code_input(int(action));break;
     case intent::rejoin: if(s==screen::hub && recent && !modal) {
@@ -3075,11 +3505,11 @@ void tick_impl(void* menu,bool& native_called) {
     if(destination) {
         if(s==screen::hub) host_left_state.dismiss(); // leaving the Hub by any route (a launcher preset included) ends the panel
         if(s==screen::code) { code.close(); fixture_ticket=0; }
-        pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
+        pending.clear();keyboard_input.clear();host_keys.clear();error_visible=false;accepted=-1;
         if(!abandon_name()) { show_notice(menu);return; }
         // Original manager request deliberately bypasses our Online interception:
-        // Other ways opens the full native name/profile/Host/Join chain.
-        at<request_fn>(0x5d5db0)(manager(),destination,nullptr);
+        // Other ways selects verified LC scenes with native name/profile/Host/Join services.
+        at<request_fn>(0x5d5db0)(manager(),native_skin_menu(destination),nullptr);
         return; // never bind after requesting a transition
     }
     const auto name=display(local_name,31);
@@ -3106,6 +3536,9 @@ void tick_impl(void* menu,bool& native_called) {
         const bool pad=pad_probe && pad_probe(menu_player);
         bind_text(menu,"desctext3",pad ? "Y Paste" : "Ctrl+V Paste");
         bind_text(menu,"desctext4",pad ? "X Clear" : "Shift+Del Clear");
+        bind_text(menu,"desctext5",pad ? "" : "Del Delete");
+        enable(menu,"desctext5",!pad);hide(menu,"desctext5",pad);
+        if(pad && focus_of(menu)==item_try(menu,"desctext5")) lobby_focus(menu,"key_31");
     }
     if(s==screen::hub && removed_notice) {
         // The kicked guest's Hub: a plain notice (lc_notice_removed), no host-left panel; the Hub stays fully usable.
@@ -3153,16 +3586,19 @@ void tick_impl(void* menu,bool& native_called) {
     bind_broker(menu,s);
     compact_focus_follow(menu,s);
     compact_footer_follow(menu,s);
+    screen_device_prompts(menu,s);
 }
 void __fastcall tick(void* menu,void*) {
     bool native_called=false;
     if(!input_thread("tick",false)) { at<tick_fn>(0x5aaeb0)(menu);return; }
     try { tick_impl(menu,native_called); }
     catch(...) {
-        pending.clear();keyboard_input.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
+        host_input_ticking=false;
+        pending.clear();keyboard_input.clear();host_keys.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
         feedback.clear();error_visible=true;
         logger::write("online menus: UI update threw; frame contained");
         if(!native_called) {
+            ticking_scope scope(host_input_ticking,ready && live(menu) && which(menu)==screen::host);
             try { at<tick_fn>(0x5aaeb0)(menu); }
             catch(...) { logger::write("online menus: native tick threw; frame contained"); }
         }
@@ -3170,9 +3606,10 @@ void __fastcall tick(void* menu,void*) {
 }
 void deactivate_state(void* menu,bool departure) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
-    pending.clear();keyboard_input.clear();
+    pending.clear();keyboard_input.clear();host_keys.clear();
     if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
     const auto s=which(menu);
+    if(s==screen::host) host_controls::reset();
     if(s==screen::hub) hub_footer_visual(menu,-1);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
@@ -3201,6 +3638,18 @@ std::uint32_t __fastcall join_text_close(void* menu,void*) {
 }
 }
 
+bool text_entry_active() { return ready && text_entry_ui::live(current_peek()); }
+bool text_entry_character(unsigned character,unsigned scan) {
+    if(!text_entry_active()) return false;
+    if(game_thread.load()!=GetCurrentThreadId()) return true; // never mutate input off its owner thread
+    auto* menu=current_peek();
+    if(text_entry_ui::edit.owner==menu && text_entry_ui::request_tag()==text_entry_ui::edit.tag) {
+        if(keyboard_note) keyboard_note();
+        text_entry_ui::character(character,scan);
+    }
+    return true;
+}
+
 void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;
     // Diagnostics must also work before the first custom-menu tick. This
@@ -3211,8 +3660,12 @@ void keyboard(unsigned char* state) {
     escape_down=down;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
-    if(!state) { keyboard_edges.reset();keyboard_input.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
+    if(!state) { text_entry_ui::reset_input();keyboard_edges.reset();keyboard_input.clear();host_keys.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
+    if(host_accept_held) {
+        if(!((state[0x1c]|state[0x9c])&0x80)) host_accept_held=false;
+        else if(which(current_peek())!=screen::host) state[0x1c]=state[0x9c]=0;
+    }
     if(pause_accept_held) {
         if(!((state[0x1c]|state[0x9c])&0x80)) pause_accept_held=false;
         state[0x1c]=state[0x9c]=0;
@@ -3239,6 +3692,7 @@ void keyboard(unsigned char* state) {
             }
         }
     }
+    if(text_entry_ui::keyboard(menu,state,edges)) return;
     const auto s=which(menu);
     if(s==screen::main && native_guest_end_pending) native_guest_return();
     // mainmenuexit 1 completes asynchronously. Show the pending panel as soon
@@ -3253,6 +3707,8 @@ void keyboard(unsigned char* state) {
     const auto address=reinterpret_cast<std::uintptr_t>(menu);
     const bool control=(state[0x1d]|state[0x9d])&0x80;
     const bool alt=(state[0x38]|state[0xb8])&0x80;
+    if(s==screen::host) {host_controls::keyboard(menu,state,edges,alt || control);return;}
+    if(s==screen::hub && !alt && !control && edges[0x3e]) {pending.post(int(intent::rejoin),address,s);state[0x3e]=0;return;}
     if(s==screen::party) {
         if(!alt && !control && edges[1]) {
             pending.post(int(intent::back),address,s);
@@ -3302,6 +3758,7 @@ void keyboard(unsigned char* state) {
 
 bool requested() { return enabled(ini::text(L"Online",L"Menus")); }
 bool installed() { return ready; }
+const void* display_name_getter() { return reinterpret_cast<const void*>(&participant_display_name); }
 unsigned session_clear_count() { return session_clears; }
 void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
 void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height)) { pointer_probe=probe; }
@@ -3317,6 +3774,13 @@ bool pad_prompt_scope() {
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";
+    static const char lan_row_format[]="%s (%s)\t%s [%d/%d]";
+    c.writes.push_back(patch_transaction::relocation(0x5b9b1c,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(lan_row_format)),0,"LAN game name and difficulty spacing"));
+    ready_roster::contribute(c);
+    text_entry_ui::contribute(c);
+    c.writes.push_back(patch_transaction::relocation(0x6a2564,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&native_navigation)),0,"custom grid and Host own navigation"));
     c.writes.push_back(patch_transaction::relocation(0x609ad9,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_refusal_bridge)),1,"started-session refusal from the proven host"));
     for(const auto& g:online_menus_guards::guards)
@@ -3410,13 +3874,13 @@ void install(HMODULE game,const install_hooks* hooks) {
     if(ready || !requested()) return;
     // The co-op screens are authored for the private Barlow family only (live 060p f03: with
     // LegendsClassicFonts=0 the hub opened in the classic font with overlapping rows). Without the
-    // committed font capability, Play Online stays the game's own menu.
+    // committed font capability, the rebuilt entry stays on its plain LC message.
     if(!lc_fonts::active()) {
-        logger::write("online menus: [Game] LegendsClassicFonts is not active (off or refused); native online entry retained"); return;
+        logger::write("online menus: [Game] LegendsClassicFonts is not active (off or refused); rebuilt LC failure entry retained"); return;
     }
     if(reinterpret_cast<std::uintptr_t>(game)!=0x400000 ||
         !registration_fits(script_function_overflow::table(),script_functions::capacity())) {
-        logger::write("online menus: registration/capacity refused; native online entry retained"); return;
+        logger::write("online menus: registration/capacity refused; rebuilt LC failure entry retained"); return;
     }
     if(hooks) {
         offline_fixture=hooks->broker==nullptr;
@@ -3438,7 +3902,7 @@ void install(HMODULE game,const install_hooks* hooks) {
     const auto result=tx.commit(hooks ? hooks->transaction : nullptr);
     if(result==patch_transaction::outcome::rollback_failed) game_version::refuse_startup();
     if(result!=patch_transaction::outcome::committed) {
-        logger::write("online menus: %s; native online entry retained",tx.report().c_str()); return;
+        logger::write("online menus: %s; rebuilt LC failure entry retained",tx.report().c_str()); return;
     }
     // Installation runs before game registration on a single thread; capacity
     // was reserved above. Publish the function only after every hook readback.
@@ -3448,6 +3912,8 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability);
+    logger::write("online menus: lc-online-no-gamespy/1; rebuilt entry and failed optional scenes use the plain LC message");
+    ::display::set_network_overlay(&network_status_ui::draw);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s; drop-in API=%s; host input API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability,drop_capability,host_input_capability);
 }
 }
