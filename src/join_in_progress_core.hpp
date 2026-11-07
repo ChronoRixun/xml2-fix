@@ -322,6 +322,7 @@ namespace join_in_progress_core
 	struct admission_losses
 	{
 		std::uint8_t announced = 0, lost = 0;
+		std::uint8_t restarting = 0; // notice only: admitted this cycle, until its first shared frame
 		std::uint32_t lost_at = 0;
 		unsigned owed_attempts = 0;
 		void clear() { *this = {}; }
@@ -335,6 +336,16 @@ namespace join_in_progress_core
 				if (st.index == index && (st.at == stage::adding || st.at == stage::streaming || st.at == stage::starting)) return true;
 			return false;
 		}
+		// Preserve the admission across restart entry even if a loaded seat is later cleared from the machine.
+		// This mask selects only the host's local notice; removal agreement and timing still use the existing paths.
+		void restart_entry(const machine& m)
+		{
+			std::uint8_t mask = 0;
+			for (int i = 1; i < 4; ++i) if (newcomer(m, i) && !(lost & bit(i))) mask |= bit(i);
+			clear(); restarting = mask;
+		}
+		bool restart_newcomer(int index) const { return (restarting & bit(index)) != 0; }
+		void shared_start() { restarting = 0; }
 		// The newcomers still joining besides `except` (and those already decided lost).
 		std::uint8_t remaining(const machine& m, int except) const
 		{

@@ -1,4 +1,5 @@
 #include "gns_transport_core.hpp"
+#include "join_in_progress_core.hpp"
 #include "network_validation.hpp"
 #include "gns_transport_rules.hpp"
 #include "gameplay_capabilities.hpp"
@@ -586,7 +587,34 @@ int main(int argc, char** argv)
 		static_assert(gns_transport_rules::host_removal_reason(true) == 0x1107 && gns_transport_rules::host_removal_reason(false) == 0x10cd);
 		check(gns_transport_rules::host_removal_reason(true) == gns_transport_rules::removal_left && gns_transport_rules::host_removal_reason(false) == gns_transport_rules::removal_dropped,
 		      "b3: the host removes a lost newcomer with 0x1107 (has left the game) and an abrupt loss in play with 0x10cd (dropped)");
-		// The production call sites: the lost-newcomer branch passes the 'left' reason, every other hand_over the default.
+		// A loaded newcomer can leave the machine before the first shared frame. Keep the admission's mask,
+		// including multiple newcomers, but never an old player, a pending future admission or one already removed.
+		join_in_progress_core::machine cohort;
+		join_in_progress_core::admission_losses admission;
+		using join_in_progress_core::stage;
+		cohort.seats[0] = {nullptr, 1, stage::joined, 0}; // old player
+		cohort.seats[1] = {nullptr, 2, stage::starting, 0};
+		cohort.seats[2] = {nullptr, 3, stage::pending, 0}; // future admission
+		admission.announced = 1u << 2;
+		check(gns_transport_rules::host_removal_reason(admission.newcomer(cohort, 2)) == 0x1107,
+		      "hold: an admitted newcomer uses the left notice before restart");
+		admission.restart_entry(cohort);
+		cohort.seats[1] = {}; // loaded and retired from admission bookkeeping, still no shared frame
+		check(admission.announced == 0 && admission.lost == 0 && admission.restart_newcomer(2) &&
+		      gns_transport_rules::host_removal_reason(admission.restart_newcomer(2)) == 0x1107 &&
+		      !admission.restart_newcomer(1) && !admission.restart_newcomer(3),
+		      "restart before frame 0: only the current admission newcomer keeps the left notice after seat retirement");
+		admission.shared_start();
+		check(gns_transport_rules::host_removal_reason(admission.restart_newcomer(2)) == 0x10cd,
+		      "in play: a former newcomer lost after the first shared frame keeps the dropped notice");
+		admission.announced = (1u << 2) | (1u << 3); admission.decided(2, 1);
+		admission.restart_entry(cohort);
+		check(!admission.restart_newcomer(2) && admission.restart_newcomer(3) &&
+		      !admission.restart_newcomer(0) && !admission.restart_newcomer(4),
+		      "restart snapshot excludes a newcomer already removed and invalid indices");
+		admission.clear();
+		check(!admission.restart_newcomer(3), "session end clears the unplayed newcomer notice mask");
+		// Production wiring: the hold branch passes 'left'; the cut-frame branch checks restart membership.
 		std::string root(__FILE__); // a test executable keeps its full source path (/d1trimfile applies to libraries only)
 		root.erase(root.find_last_of("/\\") + 1); // .../test/
 		std::ifstream source(root + "../src/gns_transport.cpp", std::ios::binary);
@@ -594,8 +622,8 @@ int main(int argc, char** argv)
 		std::size_t left = 0, plain = 0;
 		for (std::size_t at = text.find("hand_over(l, index, as_host"); at != std::string::npos; at = text.find("hand_over(l, index, as_host", at + 1))
 			(text.compare(at, 55, "hand_over(l, index, as_host, host_removal_reason(true))") == 0 ? left : plain) += 1;
-		check(!text.empty() && left == 1 && plain == 2 && text.find("native_lost)(s, r, removal_reason, 0)") != std::string::npos && text.find("native_lost)(s, r, 0x10cd") == std::string::npos,
-		      "b3: one hand_over (the host's lost-newcomer decision) passes 0x1107; the abrupt-loss and cut-frame hand_overs keep 0x10cd; the host removal uses the passed reason");
+		check(!text.empty() && left == 1 && plain == 2 && text.find("hand_over(l, index, as_host, host_removal_reason(join_in_progress::restart_newcomer(l.lost_index)))") != std::string::npos && text.find("native_lost)(s, r, removal_reason, 0)") != std::string::npos && text.find("native_lost)(s, r, 0x10cd") == std::string::npos,
+		      "b3: one hand_over (the host's lost-newcomer decision) passes 0x1107; the cut-frame hand_over selects by unplayed restart membership; ordinary abrupt loss keeps 0x10cd; the host removal uses the passed reason");
 	}
     {
         const std::uint32_t frame[]{0x6133ce,0,0x10cc,0x1106,1,0,0,0x6149a7};

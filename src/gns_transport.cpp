@@ -1354,7 +1354,7 @@ namespace gns_transport
 				int index = -1;
 				bool as_host = false;
 				const std::string who = text(l.address, l.port);
-				if (!hand_over(l, index, as_host))
+				if (!hand_over(l, index, as_host, host_removal_reason(join_in_progress::restart_newcomer(l.lost_index))))
 				{
 					if (participant_index(l) < 0)
 					{
