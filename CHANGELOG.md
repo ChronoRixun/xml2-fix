@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add the companion parser adapter for Legends Classic's original randomized control durations. The builder's
+  new application gates fix permanent Jubilee/Frost confusion; `[Game] MindControlLife=xml1` keeps XML1 duration
+  ranges on the native powerup template so XML2 samples them once. Requires matching rebuilt content.
+
 ## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2)
 
 ### 1.11.0-beta.2

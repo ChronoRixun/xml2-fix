@@ -32,6 +32,7 @@
 #include "world_backfaces_rules.hpp"
 #include "double_heal.hpp"
 #include "combo_heads.hpp"
+#include "control_life.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
@@ -527,6 +528,7 @@ namespace
 				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
 				npc_semi_auto::detail());
 		stun_rule::install(game);
+		control_life::install(game);
 		shared_handlers::install(game);
 		if (shared_handlers::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
