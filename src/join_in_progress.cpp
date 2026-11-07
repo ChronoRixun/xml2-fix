@@ -492,7 +492,7 @@ namespace join_in_progress
 			ring_trace_budget = 12; ring_trace_frame0_at = 0; ring_trace_flushed = false; // AR6 observer: per restart
 			if (admission.lost) logger::write("join in progress: the cohort restart goes on without %d newcomer(s) lost before it (mask 0x%x)",
 				int(((admission.lost >> 1) & 1) + ((admission.lost >> 2) & 1) + ((admission.lost >> 3) & 1)), unsigned(admission.lost));
-			admission.clear();
+			admission.restart_entry(machine);
 			// p060fix/AQ: the restart replaces the held world; the hold ends here on every role (first, before any native call).
 			hold_end(join_in_progress_core::join_hold::event::restart);
 			mesh_newcomers = 0;
@@ -672,6 +672,7 @@ namespace join_in_progress
 		void __cdecl frame_gate_reseed()
 		{
             frame_rate::shared_frame_started();
+			admission.shared_start(); // a passed gate starts play, including when canonical resets are disabled
 			hold_playing = true; // AQ3: a running cohort, after initial/restart loading; its next area boundary exchanges decisions
 			probe_frame_camera(); // probe only; every gated frame
 			if (execution_observer && ring_trace_budget && (restart.armed || restart_frame0_seen))
@@ -2776,6 +2777,7 @@ namespace join_in_progress
 	bool pending_player(const void* record) { return installed() && machine.pending(record); }
 	// p060fix/AR (gns_transport.cpp host_newcomer_decision / carry_decisions / vanished_links)
 	bool admission_newcomer(int index) { return installed() && epoch.active && admission.newcomer(machine, index); }
+	bool restart_newcomer(int index) { return installed() && admission.restart_newcomer(index); }
 	std::uint8_t admission_remaining(int lost) { return installed() ? admission.remaining(machine, lost) : std::uint8_t(0); }
 	void newcomer_lost_decided(int index) { if (installed()) admission.decided(index, GetTickCount()); }
 	bool restart_begun() { return installed() && join_in_progress_core::restart_removal_held(epoch.active, epoch.announced, epoch.requested, epoch.started); }

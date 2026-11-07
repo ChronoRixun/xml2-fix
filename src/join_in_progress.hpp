@@ -27,6 +27,8 @@ namespace join_in_progress
 	// (seats adding/streaming/starting, the announced boundary mask, newcomers already decided lost); the restart's
 	// window on every role (from its 0x26 until its own restart load was seen: no removal inside it).
 	bool admission_newcomer(int index);
+	// Notice only: admitted in this restart and no shared frame has run yet.
+	bool restart_newcomer(int index);
 	unsigned char admission_remaining(int lost);
 	void newcomer_lost_decided(int index);
 	bool restart_begun();

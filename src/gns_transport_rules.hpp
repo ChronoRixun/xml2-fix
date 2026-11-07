@@ -38,9 +38,10 @@ namespace gns_transport_rules
 	// b3: the reason the host's own removal 0x612c40 shows. 0x612c40 reads it only to pick the text (0x612e2b..0x612f32,
 	// 0x1102 is its one special case): 0x10cd "Player(s) have been dropped from the game." for a participant lost
 	// mid-play (the watchdog's own choice), 0x1107 "%s has left the game." for a newcomer that left during its admission
-	// hold - the text every other peer already shows for it (they carry out the host's 0x2b with 0x1107).
+	// hold or restart before the first shared frame - the text every other peer already shows for it
+	// (they carry out the host's 0x2b with 0x1107).
 	constexpr std::uint32_t removal_dropped = 0x10cd, removal_left = 0x1107;
-	constexpr std::uint32_t host_removal_reason(bool newcomer_before_restart) { return newcomer_before_restart ? removal_left : removal_dropped; }
+	constexpr std::uint32_t host_removal_reason(bool unplayed_newcomer) { return unplayed_newcomer ? removal_left : removal_dropped; }
 	// Their entries are filtered (one path for every loss, rule 25 revision 4): the first six bytes run in the bridge.
 	constexpr std::uint32_t notice_resume = 0x611556, lost_resume = 0x612c46;
 	inline constexpr std::array<unsigned char, 6> notice_original{0x83,0xec,0x20,0x55,0x8b,0xe9};
