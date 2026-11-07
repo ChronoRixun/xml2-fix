@@ -69,9 +69,12 @@ void bind(void* menu) {
             bindings.text.insert_or_assign(key,value);
         }
         enable(menu,key,enabled);hide(menu,key,!enabled);
-        std::snprintf(key,sizeof(key),"lc_text_key_bg%02d",i+1);
-        hide(menu,key,!enabled);
     }
+    // Optional grouped models in the LC skin: the remaining five keys,
+    // Backspace and Done have permanent boxes. Older skins lack these names.
+    hide(menu,"lc_text_keys_6_11",count<11);
+    hide(menu,"lc_text_keys_12_36",count<36);
+    hide(menu,"lc_text_keys_name_tools",edit.tag==3);
 }
 void focus(void* menu,int key) {
     char name[32]{};

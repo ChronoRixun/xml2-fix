@@ -118,7 +118,8 @@ namespace join_in_progress
 			checksum_compare_at = checksum_compare_resume, campaign_receive_at = campaign_receive_resume,
 			campaign_begin_at = campaign_begin_resume, game_getter_at = game_getter, broadcast_at = broadcast_resume,
 			seats_at = seats_getter, record_seats_resume_at = record_seats_resume, record_seats_exit_at = record_seats_exit,
-			set_flags_at = set_flags, ready_clear_resume_at = ready_clear_resume, ready_clear_skip_at = ready_clear_skip, clear_flags_at = clear_flags;
+			set_flags_at = set_flags, ready_clear_resume_at = ready_clear_resume, ready_clear_skip_at = ready_clear_skip, clear_flags_at = clear_flags,
+			message_show_at = message_show;
 
 		template<class T> T& at(const void* base, std::uint32_t offset) { return *reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(base) + offset); }
 		template<class F> F fn(std::uint32_t va) { return reinterpret_cast<F>(static_cast<std::uintptr_t>(va)); }
@@ -362,12 +363,46 @@ namespace join_in_progress
 
 		bool __cdecl checksum_hold() { return state.load() == 1 && epoch.active; }
 
+		// b3: the native 4057 "Online play has lost synchronization." (0x606c97 frame gate, 0x614e62 checksum compare).
+		// Both sites queue it BEFORE the arbitration 0x614810, which checksum_hold() already turns into `ret 0`, so
+		// inside a cohort restart the notice announces a drop that never happens (live b2g LOSTNEW: shown up to three
+		// times after the hold). Outside the hold the native message and arbitration run, but the notice is queued once:
+		// the 3-slot queue would otherwise keep up to three equal-priority copies and re-arm each in turn (0x60a6fa).
+		unsigned lost_sync_suppressed = 0;
+		bool __stdcall lost_sync_message_filter(void* network, const char* text, std::uint32_t caller) // true = queue it natively
+		{
+			if (checksum_hold())
+			{
+				// The frame gate site fires every frame of a hold (live b3 LN1: ~30 per second), so only counts 1, 2, 4, 8, ... are logged.
+				const unsigned n = ++lost_sync_suppressed;
+				if ((n & (n - 1)) == 0)
+					logger::write("join in progress: native 'lost synchronization' notice from 0x%08X not shown - the cohort checksum hold is on and its arbitration 0x614810 is held too (%u so far this restart)",
+						unsigned(caller), n);
+				return false;
+			}
+			__try
+			{
+				for (std::uint32_t i = 0; i < message_slot_count; ++i)
+				{
+					const char* queued = at<const char*>(network, message_slots_at + i * message_slot_bytes);
+					if (queued && text && (queued == text || std::strcmp(queued, text) == 0))
+					{
+						logger::write_capped("jip-lost-sync-dup", "join in progress: native 'lost synchronization' notice from 0x%08X already queued - shown once", unsigned(caller));
+						return false;
+					}
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) {}
+			return true;
+		}
+
 		void __cdecl campaign_notice(const void* event)
 		{
 			if (at<std::uint8_t>(event, 0) != opcode_prepare) return;
 			const void* body = at<const void*>(event, 4);
 			if (!body || at<std::uint32_t>(body, 0) != 2) return;
 			epoch.begin();
+			lost_sync_suppressed = 0;
 			existing_cohort_member = machine.started;
 			late_restart = join_in_progress_core::prepare_is_late_restart(body, join_in_progress_core::prepare_body_size);
 			void* m = manager();
@@ -1678,6 +1713,25 @@ namespace join_in_progress
 				jmp dword ptr [checksum_compare_at]
 			}
 		}
+		// b3: replaces the CALL 0x60a600 at both 4057 sites. Entry is 0x60a600's thiscall: ecx = network, [esp] = the
+		// site's return, +4 text, +8 priority, +0xc seconds. Kept: the native call with the same stack; dropped: `ret 0xc`
+		// as 0x60a600 itself returns (both sites re-set ecx before 0x614810 and read no result).
+		__declspec(naked) void lost_sync_message_bridge()
+		{
+			__asm {
+				pushad
+				push dword ptr [esp + 0x20]
+				push dword ptr [esp + 0x28]
+				push ecx
+				call lost_sync_message_filter
+				test al, al
+				popad
+				jz skip
+				jmp dword ptr [message_show_at]
+			skip:
+				ret 0xc
+			}
+		}
 		__declspec(naked) void campaign_receive_bridge()
 		{
 			__asm {
@@ -1927,6 +1981,16 @@ namespace join_in_progress
 			std::memcpy(out.data() + 1, &relative, 4);
 			return out;
 		}
+		// b3: the two 4057 notice CALLs (lost_sync_message_bridge) and the lone-host close-on-release count (imm8 1 -> 0
+		// at the PDA and Team Management pause updates); installed with the rest of the JIP transaction.
+		std::vector<xml1_hook_transaction::patch> polish_patches()
+		{
+			return {
+				{lost_sync_message_calls[0], bytes(lost_sync_message_originals[0]), rel(0xe8, lost_sync_message_calls[0], reinterpret_cast<const void*>(&lost_sync_message_bridge), 5)},
+				{lost_sync_message_calls[1], bytes(lost_sync_message_originals[1]), rel(0xe8, lost_sync_message_calls[1], reinterpret_cast<const void*>(&lost_sync_message_bridge), 5)},
+				{solo_release_counts[0], bytes(solo_release_original), bytes(solo_release_patched)},
+				{solo_release_counts[1], bytes(solo_release_original), bytes(solo_release_patched)}};
+		}
 #include "join_in_progress_execution.inl"
 		// AR6 (fable-ar6): the pause-code guard at the controller apply 0x550fb0 (join_in_progress_core::applied_code_mask).
 		// The bridge runs before the stock prologue with the caller's arguments intact: [esp+4] index, [esp+8] = the record's
@@ -2078,7 +2142,17 @@ namespace join_in_progress
 				if (!session_object) return;
 				const int index = fn<int(__thiscall*)(void*)>(local_participant_index)(session_object);
 				if (index < 0 || index > 3) return;
-				input_epoch_hold.arm(index, GetTickCount()); // b2d-fix-jip: every other participant's records are held until its marker (or the cap)
+				// Snapshot the listed native participant indices at BOTH reset sites. Count is not an index range: a removed
+				// seat leaves a hole, and its old record memory is no longer occupied. A later newcomer must not inherit an
+				// expectation from an empty seat at lobby START (and log a cap with 0 held records long after the reset).
+				std::uint32_t occupied = 0;
+				for (void* n = first(session_object); n; n = at<void*>(n, node_next))
+					if (void* record = at<void*>(n, node_record))
+					{
+						const int participant = index_of(record);
+						if (participant >= 0 && participant < 4) occupied |= 1u << participant;
+					}
+				input_epoch_hold.arm(index, occupied, GetTickCount());
 				void* synchronizer = fn<getter_t>(gns_transport_rules::input_sync)();
 				if (!synchronizer) return;
 				input_epoch_nonce_sent = join_in_progress_core::next_input_epoch_nonce(GetTickCount() ^ std::uint32_t(reinterpret_cast<std::uintptr_t>(&index) * 2654435761u), input_epoch_nonce_sent);
@@ -2451,6 +2525,7 @@ namespace join_in_progress
 			{slow_drop_call, bytes(slow_drop_original), rel(0xe8, slow_drop_call, reinterpret_cast<const void*>(&slow_drop_bridge), slow_drop_original.size())}};
         for (std::size_t i = 0; i < ready_calls.size(); ++i)
             writes.push_back({ready_calls[i], bytes(ready_originals[i]), rel(0xe8, ready_calls[i], reinterpret_cast<const void*>(&ready_bridge), 5)});
+		for (auto& w : polish_patches()) writes.push_back(std::move(w));
 		if (!composed_receiver) writes.push_back({campaign_receive, bytes(campaign_receive_original), rel(0xe9, campaign_receive, reinterpret_cast<const void*>(&campaign_receive_bridge), campaign_receive_original.size())});
 		// The canonical cohort restart: the pristine camera image can only be taken at the singleton's construction.
 		{
@@ -2511,6 +2586,8 @@ namespace join_in_progress
 		writes.push_back({mesh_pair_site, bytes(mesh_pair_original), rel(0xe9, mesh_pair_site, reinterpret_cast<const void*>(&mesh_pair_bridge), mesh_pair_original.size())}); // AS: 0x23 mesh-pair report with a removed seat (always)
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
+			logger::write("join in progress: b3 - the native 'lost synchronization' notice (0x%06X, 0x%06X) is not shown while the cohort checksum hold is on and is queued once otherwise; a lone online host's pause (0x%06X) and Team Management (0x%06X) close on release like two players'",
+				unsigned(lost_sync_message_calls[0]), unsigned(lost_sync_message_calls[1]), unsigned(solo_release_counts[0]), unsigned(solo_release_counts[1]));
 			logger::write("join in progress: AS 0x23 mesh-pair guard at 0x%06X - a mesh report that names a seat without a participant record (removed before the restart) no longer reads null+0x60 (live-b2c X-4p host crash); the pair's bits are cleared on the record(s) left and the manager's wait for that pair ends as stock would", unsigned(mesh_pair_site));
 			if (input_epoch) logger::write("join in progress: AR8 input epoch marker ON ([Online] RestartInputEpoch=1) - after each ring reset of a cohort restart (the release 0x613f68 and the start 0x6140b3) this PC posts %u marker record(s) (mask 0xfffa|nonce) ahead of its first real record, so every peer counts its records from 0 at the marker instead of from a stale pre-reset record (the one-label-late guest stream of fable-ar7 X7-2a); markers are honoured by every peer of this build", join_in_progress_core::input_epoch_copies);
 			else logger::write("join in progress: AR8 input epoch marker sender OFF ([Online] RestartInputEpoch=0) - a stale pre-reset record can still be counted as a peer's label 0 after a cohort restart; this PC still honours a marker from a peer that sends one (store 0x%06X)", unsigned(input_epoch_store_site));

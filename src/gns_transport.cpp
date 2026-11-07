@@ -896,15 +896,15 @@ namespace gns_transport
 		using notice_t = void(__thiscall*)(void* session, std::int32_t index, std::uint32_t lost, std::uint32_t others, std::uint32_t flag);
 		// Set while hand_over itself calls the native notice/removal: the removal filters below let those through.
 		bool own_removal = false;
-		bool hand_over_now(link& l, int& index, bool& as_host);
-		bool hand_over(link& l, int& index, bool& as_host)
+		bool hand_over_now(link& l, int& index, bool& as_host, std::uint32_t removal_reason);
+		bool hand_over(link& l, int& index, bool& as_host, std::uint32_t removal_reason = host_removal_reason(false))
 		{
 			own_removal = true;
-			const bool done = hand_over_now(l, index, as_host);
+			const bool done = hand_over_now(l, index, as_host, removal_reason);
 			own_removal = false;
 			return done;
 		}
-		bool hand_over_now(link& l, int& index, bool& as_host)
+		bool hand_over_now(link& l, int& index, bool& as_host, std::uint32_t removal_reason)
 		{
 			__try
 			{
@@ -923,7 +923,7 @@ namespace gns_transport
 					if (as_host)
 					{
 						e4_observe::native_call("gns:drop notice", [&] { reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0); });
-						e4_observe::native_call("gns:host removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0); });
+						e4_observe::native_call("gns:host removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, removal_reason, 0); });
 						return true;
 					}
 					if (index == 0) return false; // the host: the native watchdog and its "lost connection to the host" dialog
@@ -1286,8 +1286,8 @@ namespace gns_transport
 					int index = -1;
 					bool as_host = false;
 					if (participant_index(l) < 0) { l.vanished = true; logger::write("online: participant %d - already removed from the session here; the restart goes on without it", l.lost_index); continue; }
-					if (!hand_over(l, index, as_host)) continue; // not in a running zone yet: tried again next tick
-					l.vanished = true;
+					if (!hand_over(l, index, as_host, host_removal_reason(true))) continue; // not in a running zone yet: tried again next tick
+					l.vanished = true; // b3: the host's own line reads "<name> has left the game." (0x1107), as on every other peer
 					logger::write("online: participant %d (%s) removed now by the host before the cohort restart (lockstep frame %u) - no cut frame: every peer restarts from the one image without it",
 						index, text(l.address, l.port).c_str(), unsigned(seen_frame));
 					continue;

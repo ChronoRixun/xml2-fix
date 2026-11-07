@@ -269,6 +269,15 @@ and the Mystique boss. Online, a player whose controller has no hero in the zone
   0x612d92); with rule 26 the host removes only that player and keeps the session, so a replacement can drop in.
 * The native slow-player guard (0x559190, counters at 0x79fb80, a drop at 900 slow frames) only resets its counters
   after a drop; they are cleared when a restored cohort is synchronized.
+* Pause and Team Management alone (b3): the PDA pause update (0x5ce7f0) and the Team Management update (0x5e6700)
+  take their online close-on-release branch only for more than one participant (`call 0x6110b0; cmp eax,1; jle` at
+  0x5ce822/0x5e6721, both behind the online-pause byte 0x60b420). A lone host's Ready (B) still released the native
+  pause (the host scheduler sees every participant ready), but the menu never saw its own 0xfff33fe0 / 0xfff11fe0 event
+  and stayed open with "B Ready" over the running world until a second B. The imm8 at 0x5ce829/0x5e6728 is 0 with
+  JoinInProgress, so one participant takes exactly the branch two take (0 still skips it; offline never reaches it).
+  B is not handled twice: the PDA's B handler (0x5ce770) does not read the count - the first B sends the 0x4b ready
+  and sets the "ready" flag (0x5cdac0(1)), a second B closes through the base handler as before - and the update's
+  online branch only reads the host un-ready button (flag set, release not yet run) and the closing event.
 
 ## Slow players stay (rule 26 revision 6)
 
@@ -577,6 +586,21 @@ ignores the decision or times out by itself). The model's frame 0 and host-left 
 restart, restart entry (its bounded wait), the restart window and session end; the transport half (the decision on
 the wire, carrying it out, the queued resend) has no fixture and is checked live.
 
+### No "lost synchronization" for a restart that never drops anyone (b3)
+
+Live b2g LOSTNEW (Owen's hand test 11-05 00:33): after a newcomer quit during the hold, "Online play has lost
+synchronization." (string 4057, 0xfd9) showed up to three times on the host right after the hold. Both native sites
+queue it at priority 0x23 BEFORE their arbitration 0x614810 - the frame gate 0x606c97 (5 s) when a remote record's next
+frame differs from the local one, the checksum compare 0x614e62 (8 s) - and the 3-slot message queue (0x60a600) keeps
+up to three equal-priority copies and re-arms each in turn (0x60a6fa). checksum_hold() already turns 0x614810 into
+`ret 0` while a cohort restart epoch is active, so inside that window the notice announced a drop that never happened
+(the hashes match afterwards). Both CALLs go through `lost_sync_message_bridge`: while the hold is on the notice is
+not queued (logged `native 'lost synchronization' notice from <caller> not shown` at counts 1, 2, 4, 8, ...: the frame gate fires every held frame); otherwise the native message and
+arbitration run unchanged, but a 4057 already queued in any slot is not queued again. The host's own removal of such
+a newcomer now reads "<name> has left the game." (0x1107, the text every other peer shows), not "Player(s) have been
+dropped from the game." (0x10cd, kept for an abrupt loss in play). Tests: `xml2_join_in_progress_boundary_test
+lost-sync` (bridge, stack, the three slots, fallback, the transaction), `xml2_gns_transport_test` (the removal reasons).
+
 ### A mesh report about the removed seat (b2c-fix-crash, AS)
 
 Live b2c X-4p (host + two lobby guests + a newcomer killed 1 ms after the host's image): the host carried out its
@@ -635,17 +659,24 @@ reliable resend (`0x5c` -> `0x5d` batches, whose records carry their label on th
 marker 16.6 s behind its resent frame 0): dropped at a marker inside the cap it is requested again and resent by label;
 past the cap it is stored as it came and the late marker is ignored, on every peer alike. The hold is armed only while
 this PC itself sends markers (`[Online] RestartInputEpoch`, default on), never for its own index, and disarmed at the
-session's end. Logged: `... record(s) arrive before its epoch marker ... held, not stored`, the reset line's `(N held
+session's end. Each reset snapshots the occupied native indices from the session's participant list, including sparse
+rosters; empty seats and removed records outside that list are not expected. The start reset replaces the release
+snapshot and clears its old held records. This prevents a seat empty at lobby START from retaining an expectation
+until a later newcomer's first input logs a false cap (for example, 62 s later with 0 held records).
+Logged: `... record(s) arrive before its epoch marker ... held, not stored`, the reset line's `(N held
 pre-marker record(s) dropped)`, and `... sent no epoch marker within the cap ... held record(s) stored in the order they
 came`. Residual: a marker LOST (not late) on one peer that holds a stale record gives that peer the stock labelling at the
 cap - the b2d outcome, never worse. No wire change: rule 26 stays at revision 7.
 
 Tests: `xml2_join_in_progress_test` (the barrier's rules; a label model of 2/3/4-player cohorts: on-time marker, the
 X-4p-a split with the b2d build as a control, the X-2cR shape, late on every peer, marker lost on every peer / on one
-peer, P-LJ3's resent frame 0 past the cap, a resent record inside the cap, per-participant holds);
+peer, P-LJ3's resent frame 0 past the cap, a resent record inside the cap, per-participant holds, sparse/empty/own-only
+rosters and replacement of a departed participant's hold);
 `xml2_join_in_progress_boundary_test <retail> input-epoch` (the production store hook against the retail store 0x559560 of
 the mapped image: hold, drop at the marker, label 0 afterwards, the cap's in-order replay through the retail store and the
-late marker after it, a full hold, own records, disarmed = stock).
+late marker after it, a full hold, own records, disarmed = stock; both production marker-reset callbacks with sparse
+and changed native lists, removed stale objects, an empty seat's first record 62 s later without a false cap log,
+own-only/empty lists and the disabled control).
 
 ### A removal decision ahead of the native add (b2d-fix-jip, live-b2d N-STALL4)
 

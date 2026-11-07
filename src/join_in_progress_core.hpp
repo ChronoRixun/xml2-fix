@@ -961,7 +961,8 @@ namespace join_in_progress_core
 	// stored as it came and the late marker is ignored, on every peer alike. Observed start-reset-to-marker skew: 1.0 to
 	// 2.4 s in every live-b2d restart (passed or failed); the cap stays well below the native 10 s-class watchdogs.
 	// Armed only while this PC itself sends markers ([Online] RestartInputEpoch, the shipped default), so the key stays a
-	// complete A/B control; this PC's own index (the own-record store 0x55a2a6) is never held.
+	// complete A/B control; only indices occupied at this reset are expected, and this PC's own index (the own-record
+	// store 0x55a2a6) is never held. An empty seat must not keep an expectation until a newcomer later fills it.
 	constexpr unsigned input_epoch_hold_cap_ms = 5000;
 	constexpr unsigned input_epoch_hold_records = 96; // per participant; the pre-restart window is a few records (96 = 3.2 s at 30 fps)
 	constexpr unsigned input_epoch_record_bytes = 0x24; // the decoder's record as the store copies it (0x5595cd: 9 dwords)
@@ -971,7 +972,7 @@ namespace join_in_progress_core
 		bool expecting[4]{};
 		unsigned held[4]{};
 		std::uint32_t armed_at = 0;
-		void arm(int own, std::uint32_t now) { for (unsigned i = 0; i < 4; ++i) { expecting[i] = int(i) != own; held[i] = 0; } armed_at = now; }
+		void arm(int own, std::uint32_t occupied, std::uint32_t now) { for (unsigned i = 0; i < 4; ++i) { expecting[i] = (occupied & (1u << i)) && int(i) != own; held[i] = 0; } armed_at = now; }
 		void disarm() { for (unsigned i = 0; i < 4; ++i) { expecting[i] = false; held[i] = 0; } }
 		bool any() const { for (const auto e : expecting) if (e) return true; return false; }
 		// A record that is not a marker, for `index`, at `now`: store (not expected), hold (copy it aside, skip the native

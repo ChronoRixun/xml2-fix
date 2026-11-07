@@ -126,6 +126,7 @@ cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "admission
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "refusal-transport"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "e4-guards"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "lost-sync"]) # b3: the 4057 notice bridge and the lone-host release count
 # AE's canonical restart and xml1-turrets composition modes, and p060fix/AI's ActorPools=124 composition mode.
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "restart"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "turrets"])

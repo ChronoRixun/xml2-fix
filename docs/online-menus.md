@@ -2338,3 +2338,13 @@ sources say Back. The on-screen Delete grid cell remains available on pad.
 These content changes require regenerating the companion menus together with
 the DLL; they add no release or gameplay identity. No full owned-input build or
 game launch is part of the offline fixtures.
+
+The text-entry skin's variable key boxes use three model groups:
+`lc_text_keys_6_11`, `lc_text_keys_12_36` and `lc_text_keys_name_tools`.
+The DLL hides them according to the active native request and character page.
+Enter IP retains only eleven character boxes, Backspace and Done; Symbols
+retains five character boxes and its four tools. The groups start loaded so
+native model hide/unhide preserves their resources. Rebuild the LC skin with
+the matching DLL: the owned text-entry menu uses 153 of the native 175 items,
+including both backdrops. The 512-anchor capability does not raise that item
+limit. No engine patch, wire change or identity assignment is added.
