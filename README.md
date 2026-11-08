@@ -38,10 +38,10 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.11.0-beta.3**, paired with Legends Classic 0.6.0-beta.3 (content 32 / catalogue 8 / LC42).
-Update both parts on Ultimate Legends' Beta channel and Rebuild. Beta.3 fixes the false lost-sync notice for a lost
-newcomer, solo-host pause closing and empty Enter IP keys; the builder adds an optional Classic conversation box.
-See [beta notes](packaging/release-notes/v1.11.0.md) for checks and remaining limitations.
+**Beta: XML2 Fix 1.11.0-beta.4**, paired with Legends Classic 0.6.0-beta.4 (content 33 / catalogue 8 / LC43).
+Update both parts on Ultimate Legends' Beta channel and Rebuild. Beta.4 fixes the companion's Arbiter progression
+blockers, temporary control effects, loaded service menus and lost-newcomer restart wording.
+See [beta notes](packaging/release-notes/v1.11.0.md) for evidence and remaining limitations.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
