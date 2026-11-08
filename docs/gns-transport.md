@@ -10,6 +10,12 @@ certificates, ICE and relay fallback; room connections carry both pre-admission 
 Legends Classic 0.3.0 enables drop-in by default (rule 26 revision 6). Local three-player abrupt-drop tests passed;
 owner 030e three-PC/hotspot acceptance remains pending; four-player WAN coverage is not certified. A lost host ends the session; no host migration.
 
+A newcomer lost during its admission hold or the following restart, before the
+first shared frame, uses the same departure notice on the host as on guests.
+The host retains the admission membership for this notice through restart entry
+and clears it at the first shared frame or session end. A loss after play begins
+keeps the ordinary dropped-player notice. Removal timing and agreement are unchanged.
+
 ## What stays stock
 
 The game's UDP socket, the OpenSpy/GameSpy listing, NAT negotiation, the join request, admission (0x18 -> 0x1a ->

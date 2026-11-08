@@ -112,6 +112,7 @@ add_library(xml2_fix SHARED
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
+	src/control_life.cpp
 	src/shared_handlers.cpp
 	src/shared_handlers_c.cpp
 	src/danger_room_party.cpp
@@ -555,6 +556,9 @@ add_executable(xml2_plugin_scan_test test/plugin_scan_test.cpp src/plugin_scan.c
 target_include_directories(xml2_plugin_scan_test PRIVATE src)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
+add_executable(xml2_control_life_test test/control_life_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/control_life.cpp)
+target_include_directories(xml2_control_life_test PRIVATE src)
+target_link_options(xml2_control_life_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_shared_handlers_test test/shared_handlers_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers.cpp)
 target_include_directories(xml2_shared_handlers_test PRIVATE src)
 target_link_options(xml2_shared_handlers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
