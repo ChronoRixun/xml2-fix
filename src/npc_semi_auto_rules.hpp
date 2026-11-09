@@ -44,6 +44,12 @@ namespace npc_semi_auto_rules
  inline bool continuous(const weapon& w) { return (w.flags & flag_continuous) != 0; }
  inline bool default_handler(const weapon& w) { return (w.flags & flag_default_handler) != 0; }
  inline bool bullet(const weapon& w) { return (w.flags & type_mask) == type_bullet; }
+ inline bool nonbullet_trace(const weapon& w)
+ {
+  const auto type = w.flags & type_mask;
+  return (type == type_beam || type == type_flame) && w.tracetime_bits != 0;
+ }
+ inline constexpr char trace_capability[] = "lc-npc-beam-trace/1";
  inline std::optional<weapon> parse(std::string_view text)
  {
   det_math::fp_env fp;
@@ -103,6 +109,10 @@ namespace npc_semi_auto_rules
    out.insert(out.end(), w.actor.begin(), w.actor.end());
    for (const u32 value : {w.recoil_bits, w.range_bits, w.burst_bits, w.leader, w.warmup_bits, w.flags, w.tracetime_bits, w.accuracy_bits}) put(value);
   }
+  // Keep schema-4 rows and bullet-only agreement unchanged. A table that uses
+  // the new gate must disagree with an old DLL even when its rows are identical.
+  if (std::any_of(weapons.begin(), weapons.end(), nonbullet_trace))
+   out.insert(out.end(), std::begin(trace_capability), std::end(trace_capability));
   return out;
  }
  inline std::array<std::uint8_t, 32> table_digest(const std::vector<weapon>& weapons)
@@ -128,6 +138,17 @@ namespace npc_semi_auto_rules
    s.last = now;
   }
   return true; // a negative last timestamp bypasses without updating it
+ }
+ inline bool nonbullet_trace_gate(trace_state& s, std::uintptr_t actor, u32 token, float now, const weapon& w)
+ {
+  if ((w.flags & type_mask) == type_flame) return trace_gate(s, actor, token, now, w.tracetime_bits);
+  det_math::fp_env fp;
+  if (s.actor != actor || s.token != token) s = {actor, token, 0};
+  // XML1 beam 0xbac35 compares directly, including a negative last timestamp;
+  // unlike bullet/flame it always updates last after an admitted trace.
+  if (double(now) - double(s.last) < double(std::bit_cast<float>(w.tracetime_bits))) return false;
+  s.last = now;
+  return true;
  }
  // next = the recoil deadline (original actor+0x498), warm = the warm-up deadline
  // (actor+0x49c; zero = not started, as the original tests it against 0.0).

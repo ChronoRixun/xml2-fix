@@ -31,4 +31,24 @@ void trace_gate_cases()
   check(equal && env.last == 1.f && x87_control_word() == cw && _mm_getcsr() == csr, "trace gate fixes and restores caller FP environment");
   _controlfp_s(&ignored, saved, _MCW_PC | _MCW_RC); _mm_setcsr(original_csr);
  }
+ weapon beam; beam.flags = type_beam | flag_continuous; beam.tracetime_bits = 0x3f19999a;
+ trace_state beam_timer{}, other{};
+ check(!nonbullet_trace_gate(beam_timer, 100, 1, .6f - .0001f, beam), "beam initial before boundary blocked");
+ check(nonbullet_trace_gate(beam_timer, 100, 1, .6f, beam), "beam binary32 equality admits");
+ check(!nonbullet_trace_gate(beam_timer, 100, 1, 1.2f - .0001f, beam), "beam before next interval blocked");
+ check(nonbullet_trace_gate(beam_timer, 100, 1, 1.2f, beam), "beam next binary32 equality admits");
+ check(nonbullet_trace_gate(other, 200, 2, 1.2f, beam), "independent actors have independent traces");
+ beam_timer.last = .2f;
+ check(!nonbullet_trace_gate(beam_timer, 100, 1, .8f, beam), "beam subtracts widened binary32 values, not a rounded float delta");
+ check(nonbullet_trace_gate(beam_timer, 100, 1, std::nextafter(.8f, 2.f), beam), "beam admits at next representable timestamp");
+ beam_timer.last = -1;
+ check(!nonbullet_trace_gate(beam_timer, 100, 1, -.5f, beam) && beam_timer.last == -1,
+       "beam has no bullet/flame negative bypass");
+ check(nonbullet_trace_gate(beam_timer, 100, 1, 0.f, beam) && beam_timer.last == 0,
+       "admitted beam updates even a negative last timestamp");
+ beam_timer.last = 9;
+ check(!nonbullet_trace_gate(beam_timer, 100, 1, 0.f, beam) && beam_timer.last == 9, "beam clock reset does not rearm");
+ check(!nonbullet_trace_gate(beam_timer, 100, 0x401, 0.f, beam) && beam_timer.last == 0, "beam new token resets last to zero");
+ beam.flags = type_flame | flag_continuous; beam_timer.last = -1;
+ check(nonbullet_trace_gate(beam_timer, 100, 0x401, -.5f, beam) && beam_timer.last == -1, "flame retains original negative bypass");
 }

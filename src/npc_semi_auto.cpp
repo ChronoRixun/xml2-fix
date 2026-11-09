@@ -318,13 +318,15 @@ namespace npc_semi_auto
        {0x519e3a, &sight_hook, false, 7},
        {0x4dcfe0, &bullet_event, false, 6},
        {0x452225, &bullet_muzzle_hook, false, 7},
-       {0x452350, &bullet_collision_hook, false, 5}}) {
+       {0x452350, &bullet_collision_hook, false, 5},
+       {0x452e5c, &weapon_presentation_hook, false, 7}}) {
    const auto* p = reinterpret_cast<const std::uint8_t*>(site);
    patches.push_back({site, {p, p + length}, stun_rules::branch(site, target, call, length)});
   }
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, patches, &safe);
   if (!applied) { if (!safe) game_version::refuse_startup(); fail("guarded transaction failed"); return; }
+  logger::write("NPC beam/flame trace capability: %s", trace_capability);
   logger::write("NPC semi-auto: guarded weapon brain (held fire, empty-query branches, bullet line of sight) and input gate (recoil, warm-up, continuous), %zu source actors, fingerprint %08X; rule 16 revision %u words 2-3", weapons.size(), fingerprint(weapons), unsigned(npc_power::revision));
  }
 }

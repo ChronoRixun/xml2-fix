@@ -98,6 +98,107 @@ void bullet_trace_cases()
  bullet_frame_function = saved_frame; bullet_contact_function = saved_contact;
 }
 
+// The event fixture consumes damage before the post-aim hook, and retains the
+// stock multi-target query and presentation whenever a trace is admitted.
+unsigned weapon_draws = 0, weapon_presentations = 0, weapon_contacts = 0;
+npc_semi_auto::point weapon_endpoint{};
+bool __fastcall nonbullet_native_event(void*, void*, void* context)
+{
+ using namespace npc_semi_auto;
+ ++weapon_draws;
+ std::array<std::byte, 0x270> frame{};
+ field<u32>(frame.data(), 0x228) = 77;
+ field<point>(frame.data(), 0x110) = {10, 20, 30};
+ field<point>(frame.data(), 0x50) = {0, 1, 0};
+ field<point>(frame.data(), 0xb8) = {10, 60, 30}; // native admitted contact, extent 40
+ auto* actor = field<void*>(context, 0);
+ const bool muzzle_skip = begin_bullet_trace(actor, frame.data());
+ const bool collision_skip = skip_bullet_collision(actor, frame.data());
+ check(muzzle_skip == collision_skip, "nonbullet rejection bypasses both queries");
+ check(field<u32>(frame.data(), 0x228) == 77, "nonbullet keeps native tracer arguments");
+ if (!collision_skip) weapon_contacts += 3; // native piercing flame keeps all contacts
+ finish_weapon_trace(actor, frame.data());
+ weapon_endpoint = field<point>(frame.data(), 0xb8);
+ ++weapon_presentations;
+ return true;
+}
+void nonbullet_trace_cases()
+{
+ using namespace npc_semi_auto;
+ const auto save_weapons = weapons; const auto save_applied = applied;
+ const auto save_event = event_function; const auto save_clock = clock_function;
+ const auto save_states = trace_states;
+ const auto save_presentations = beam_presentations;
+ std::array<std::byte, 0x800> actor{}; std::array<std::byte, 0x500> stats{};
+ std::array<std::byte, 0x50> event{}; std::array<void*, 6> context{};
+ std::memcpy(stats.data() + 0x150, "traceguard", 11);
+ field<void*>(actor.data(), 0x35c) = stats.data(); field<u32>(actor.data(), 0x1c) = 0x123;
+ context[0] = actor.data(); field<void*>(event.data(), 0x14) = reinterpret_cast<void*>(1);
+ field<u32>(event.data(), 0x3c) = 0x7ffd7ffd;
+ const auto original_event = event;
+ applied = true; event_function = reinterpret_cast<event_t>(&nonbullet_native_event); clock_function = &trace_clock;
+ for (const auto kind : {type_beam, type_flame}) {
+  weapons = {*parse("traceguard|3e23d70a|44098000|3fc00000|00000000|00000000|00000013|3f400000|00000000")};
+  weapons[0].flags = kind | flag_continuous;
+  trace_states = {}; beam_presentations = {}; weapon_draws = weapon_presentations = weapon_contacts = 0; trace_calls.clear();
+  for (const float time : {.5f, .75f, .85f, 1.5f}) {
+   fixture_time = time; bullet_event(event.data(), nullptr, context.data());
+   check(weapon_endpoint.y == (kind == type_beam && time == .5f ? 20.f : 60.f),
+         "rejected beam uses cached extent; initial zero is preserved, admitted contacts refresh it");
+  }
+  check(weapon_contacts == 6 && weapon_draws == 4 && weapon_presentations == 4,
+        "beam/flame gate suppresses collision only, after all damage draws, retaining native multi-target and effects");
+  check(trace_calls == "cccc", "beam/flame consumes no bullet spread RNG or bullet geometry");
+  auto& state = trace_states[timer_slot(0x123)]; state.last = -1;
+  fixture_time = -.5f; weapon_contacts = 0;
+  bullet_event(event.data(), nullptr, context.data());
+  check(weapon_contacts == (kind == type_beam ? 0u : 3u) && state.last == -1,
+        "beam compares a negative last time; flame bypasses without updating");
+  fixture_time = 0; bullet_event(event.data(), nullptr, context.data());
+  check(state.last == (kind == type_beam ? 0.f : -1.f), "admitted beam updates a negative timestamp");
+  state.last = 10; fixture_time = 1; weapon_contacts = 0;
+  bullet_event(event.data(), nullptr, context.data());
+  check(weapon_contacts == 0 && state.last == 10, "clock rewind preserves original trace deadline");
+  field<u32>(actor.data(), 0x1c) = 0x523; fixture_time = .5f;
+  bullet_event(event.data(), nullptr, context.data());
+  check(trace_states[timer_slot(0x523)].last == 0, "reused actor slot starts at original zero timestamp");
+  field<u32>(actor.data(), 0x1c) = 0x123;
+ }
+ weapons[0].flags = type_beam | flag_continuous; weapons[0].tracetime_bits = 0x3f19999a;
+ for (unsigned stream = 0; stream != 3; ++stream) {
+  trace_states = {}; weapon_draws = weapon_presentations = weapon_contacts = 0;
+  if (stream == 2) trace_states[timer_slot(0x123)] = {reinterpret_cast<std::uintptr_t>(actor.data()), 0x123, 9.8f};
+  const std::array<float,7> clustered{10.f, 10.112f, 10.224f, 10.352f, 10.464f, 10.592f, 10.704f};
+  for (unsigned call = 0; call != 7; ++call) {
+   context[1] = reinterpret_cast<void*>(std::uintptr_t(call & 1)); // alternating move
+   context[2] = reinterpret_cast<void*>(std::uintptr_t(call + 10)); // alternating target
+   fixture_time = stream == 1 ? float(10 + call) : clustered[call];
+   bullet_event(event.data(), nullptr, context.data());
+  }
+  check(weapon_draws == 7 && weapon_presentations == 7 && weapon_contacts == (stream == 1 ? 21u : stream == 2 ? 3u : 6u),
+        "clustered/spaced/previous-move streams admit 2/7/1 full traces while consuming all seven damage draws and effects");
+ }
+ for (unsigned control = 0; control != 7; ++control) {
+  auto candidate = event; applied = true;
+  weapons[0].flags = type_beam | flag_continuous; weapons[0].tracetime_bits = 0x3f400000;
+  weapons[0].actor = "traceguard";
+  if (control == 0) field<u32>(candidate.data(), 0x3c) = 0;
+  if (control == 1) field<unsigned char>(candidate.data(), 0x45) = 1;
+  if (control == 2) applied = false;
+  if (control == 3) weapons[0].flags = type_bullet;
+  if (control == 4) weapons[0].actor = "otherguard";
+  if (control == 5) weapons[0].tracetime_bits = 0; // discrete nullifier remains native
+  if (control == 6) field<void*>(candidate.data(), 0x14) = nullptr;
+  trace_calls.clear(); weapon_contacts = 0; fixture_time = .1f;
+  bullet_event(candidate.data(), nullptr, context.data());
+  check(weapon_contacts == 3 && trace_calls.empty(), "unmarked/split/OFF/bullet/unlisted/zero-trace/nonactor stays native");
+ }
+ check(event == original_event && current_bullet == nullptr, "beam/flame events stay immutable and scopes unwind");
+ weapons = save_weapons; applied = save_applied; event_function = save_event; clock_function = save_clock;
+ trace_states = save_states;
+ beam_presentations = save_presentations;
+}
+
 void* trace_expected_frame = nullptr;
 bool __cdecl trace_noisy_begin(void* actor, void* frame)
 {
@@ -114,6 +215,13 @@ bool __cdecl trace_noisy_skip(void* actor, void* frame)
  __asm { fld1 }
  __asm { xorps xmm0, xmm0 }
  return forced_result != 0;
+}
+void __cdecl trace_noisy_finish(void* actor, void* frame)
+{
+ check(actor == fixture_ai && frame == trace_expected_frame, "presentation bridge forwards native actor/frame");
+ __asm { fninit }
+ __asm { fld1 }
+ __asm { xorps xmm0, xmm0 }
 }
 u32 trace_argument = 0;
 void* trace_bridge_return_address = nullptr;
@@ -147,6 +255,7 @@ __declspec(naked) void invoke_trace_bridge(void*)
   mov trace_bridge_return_address, offset trace_bridge_return
   mov edi, [esp + 0x294]
   mov byte ptr [esp + 0x238], 0
+  mov dword ptr [esp + 0x228], 77
   mov eax, 12345678h
   mov ebx, 22334455h
   mov ecx, 34567890h
@@ -208,6 +317,18 @@ void bullet_bridge_cases()
  }
  begin_trace_function = save_begin; skip_trace_function = save_skip;
  muzzle_resume = save_mr; muzzle_skipped = save_ms; collision_resume = save_cr; collision_skipped = save_cs;
+ const auto save_finish = finish_trace_function; const auto save_pr = presentation_resume;
+ finish_trace_function = &trace_noisy_finish;
+ presentation_resume = u32(reinterpret_cast<std::uintptr_t>(&trace_native_continue));
+ bridge = reinterpret_cast<void*>(&weapon_presentation_hook);
+ __asm { fninit }
+ __asm { fld1 }
+ __asm { pcmpeqd xmm0, xmm0 }
+ invoke_trace_bridge(fixture_ai);
+ auto expected = before; expected[1] = 77; // displaced ESI load
+ check(after == expected && fp_before == fp_after, "presentation bridge preserves registers/flags/FP except displaced ESI load");
+ __asm { fninit }
+ finish_trace_function = save_finish; presentation_resume = save_pr;
 }
 
 void source_trace_rows(const char* path)
@@ -320,11 +441,14 @@ void native_rejected_trace(const char* path)
   }
  }
  patch(0x452225, &bullet_muzzle_hook, 7); patch(0x452350, &bullet_collision_hook, 5);
- patch(0x452e5c, &fragment_done, 7);
+ patch(0x452e5c, &weapon_presentation_hook, 7);
+ patch(0x452e63, &fragment_done, 5);
  std::memcpy(code, body.data(), body.size()); FlushInstructionCache(GetCurrentProcess(), code, body.size());
  const auto mr = muzzle_resume, ms = muzzle_skipped, cr = collision_resume, cs = collision_skipped;
+ const auto pr = presentation_resume;
  muzzle_resume = address(0x45222c); muzzle_skipped = address(0x45230b);
  collision_resume = address(0x452355); collision_skipped = address(0x4528a9);
+ presentation_resume = address(0x452e63);
  const auto clock_saved = clock_function; const auto random_saved = random_function; const auto tracer_saved = tracer_function;
  const auto frame_saved = bullet_frame_function;
  const auto contact_saved = bullet_contact_function;
@@ -353,9 +477,25 @@ void native_rejected_trace(const char* path)
   check(endpoint.x == 560 && endpoint.y == 20 && endpoint.z == 30, "executed native endpoint math agrees with the early tracer's stack fields");
   check(field<u32>(frame.data(), 0x228) == 0, "executed native tail receives no duplicate tracer");
  }
+ for (const auto kind : {type_beam, type_flame}) {
+  auto weapon = row; weapon.flags = kind | flag_continuous; weapon.tracetime_bits = 0x3f400000;
+  bullet_scope scope{actor.data(), &weapon}; current_bullet = &scope;
+  trace_states = {}; fixture_time = .1f; trace_calls.clear();
+  beam_presentations[timer_slot(0x123)] = {reinterpret_cast<std::uintptr_t>(actor.data()), 0x123, 123.f};
+  field<point>(frame.data(), 0x110) = field<point>(frame.data(), 0x44) = {10,20,30};
+  field<point>(frame.data(), 0x50) = {1,0,0};
+  field<point>(frame.data(), 0x8c) = {}; // native empty contact normal
+  field<u32>(frame.data(), 0x228) = 77;
+  check(safe_trace_fragment(actor.data(), frame.data()), "rejected beam/flame executes owned native tail and presentation bridge");
+  check(scope.skip && !scope.pending && trace_calls == "c", "rejected nonbullet consumes no spread RNG and executes no collision");
+  check(field<u32>(frame.data(), 0x228) == 77, "owned nonbullet tail retains native tracer argument");
+  check(field<point>(frame.data(), 0xb8).x == (kind == type_beam ? 133.f : 560.f),
+        "owned native tail presents cached beam extent and ordinary flame extent");
+ }
  current_bullet = previous; clock_function = clock_saved; random_function = random_saved; tracer_function = tracer_saved;
  bullet_frame_function = frame_saved;
  bullet_contact_function = contact_saved;
  muzzle_resume = mr; muzzle_skipped = ms; collision_resume = cr; collision_skipped = cs;
+ presentation_resume = pr;
  VirtualFree(code, 0, MEM_RELEASE);
 }

@@ -236,7 +236,8 @@ start at zero. The MP5's source row appends `3f000000|00000000` (0.5 s, zero acc
 The builder marks converted bullet events with `split_count="0"` and
 `split_damage="32766 32766"`. PC stores the latter as two literal signed 16-bit
 values at event +0x3c; the zero split count makes those damage values inert in
-stock execution. Ordinary beams, flames and projectile events carry no marker.
+stock execution. Ordinary beams and projectile events carry no marker. Converted positive-trace
+beam/flame weapons use the separate contract below.
 Both direct weapon-fire replacements and inherited named weapon events carry
 it. Bullet sound/muzzle triggers precede their beam at the same authored time.
 
@@ -318,3 +319,43 @@ A should remove the every-shot damage excess; residual distance-dependent misses
 and the separate damage-per-hit discrepancy require independent measurement.
 For the 300-unit cells the requested live acceptance is **0.71-0.76 hits per
 admitted trace**. This code-only fixture work does not establish that live rate.
+
+
+## Converted beam/flame trace gate
+
+Converted beam and flame weapon events with a positive source binary32
+`tracetime` carry `split_damage="32765 32765"`, `split_count="0"`. These values
+are inert on retail (zero split rays) and distinct from the bullet marker.
+The event hook requires the exact pair, zero count, an installed weapon rule,
+and a matching source beam/flame actor row. Missing markers, unrelated beams,
+OFF mode and zero-trace weapons (including the discrete nullifier) keep native
+behavior. The existing bullet marker, spread draws and character ray are unchanged.
+
+At the guarded post-aim site, after native event damage RNG consumption, the
+adapter admits collision using the same actor/incarnation timestamp table as
+bullets. A miss spends admission. Moves, targets, input and warm-up do not reset
+it. New incarnations start at zero; a rewound clock retains the original deadline.
+Flame retains bullet's negative-last bypass without an update. Beam compares a
+negative last value directly and updates on admission (XML1 0xbac35..0xbacd1).
+The subtraction widens stored binary32 timestamps and interval under the fixed
+FP environment. No nonbullet spread draws or bullet geometry are introduced.
+
+Admitted calls run the native muzzle and collision path, preserving piercing
+flame contacts. Rejected calls bypass both queries and their disposal while
+retaining effects and sounds. The guarded tracer-tail bridge at 0x452e5c keeps
+beam presentation at the last admitted extent (XML1 actor +0x4a8, 0xbaf54), applied
+to the current direction; flame retains its native presentation. This cache is
+also keyed by actor and full token, initially zero. Events remain immutable.
+Every hook participates in the existing all-or-nothing transaction.
+
+The companion exposes the exact terminated `lc-npc-beam-trace/1` capability.
+LC requires it for marked output, validates source holders and all authored
+primary/crouched/burst/tagged/inherited calls, and cannot bypass the check via
+its old-fix warning path. Schema-4 rows do not change. For a table containing
+positive-trace beam/flame rows, canonical agreement bytes append that terminated
+capability after the rows. Thus old and new semantics disagree even for identical
+rows; bullet/projectile/zero-trace-only tables retain their existing digest.
+No numbered rule revision, release version, or content identity is assigned by
+this implementation; coordinated release/content identity remains an integration
+step. Matching new peers agree in native tests; live host/guest cadence and old
+save loading still require acceptance testing.

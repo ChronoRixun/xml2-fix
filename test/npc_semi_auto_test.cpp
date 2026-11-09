@@ -689,6 +689,7 @@ int main(int argc, char** argv)
  if (argc >= 4) source_trace_rows(argv[3]);
  trace_gate_cases();
  bullet_trace_cases();
+ nonbullet_trace_cases();
  npc_semi_auto::install(reinterpret_cast<HMODULE>(1));
  check(!npc_semi_auto::requested() && !npc_semi_auto::installed() && npc_semi_auto::verified(),
        "absent option returns before inspecting or writing even an invalid image");
@@ -754,6 +755,23 @@ int main(int argc, char** argv)
  b=a;b[0].flags^=flag_continuous;check(fingerprint(a)!=fingerprint(b), "weapon flags participate in agreement");
  b=a;b[0].tracetime_bits^=1;check(table_digest(a)!=table_digest(b), "trace time participates in full agreement");
  b=a;b[0].accuracy_bits^=1;check(table_digest(a)!=table_digest(b), "accuracy participates in full agreement");
+ {
+  auto rows = std::vector<weapon>{*parse("traceguard|3e23d70a|44098000|3fc00000|00000000|00000000|00000013|3f19999a|00000000")};
+  auto bytes = canonical_bytes(rows);
+  const auto modern = table_digest(rows);
+  bytes.resize(bytes.size() - sizeof(trace_capability));
+  const auto legacy = sha256_fips::digest(bytes.data(), bytes.size());
+  gameplay_capabilities::record current, same_rules, old_rules;
+  current.add(16, npc_power::revision, {1,1,1,0}, true, &modern);
+  same_rules.add(16, npc_power::revision, {1,1,1,0}, true, &modern);
+  old_rules.add(16, npc_power::revision, {1,1,1,0}, true, &legacy);
+  current.finalize(); same_rules.finalize(); old_rules.finalize();
+  check(current.compare(same_rules.bytes()) == gameplay_capabilities::result::match,
+        "host and guest with beam/flame trace semantics agree");
+  check(current.compare(old_rules.bytes()) != gameplay_capabilities::result::match &&
+        old_rules.compare(current.bytes()) != gameplay_capabilities::result::match,
+        "identical schema4 tables with legacy trace semantics are refused both ways");
+ }
  for (const auto badbits : {"7fc00000", "7f800000", "bf800000", "80000000", "43b48000"}) {
   check(!parse(std::string("guard|3e23d70a|44098000|3fc00000|00000000|00000000|00000020|") + badbits + "|00000000"), "invalid trace time refused");
   check(!parse(std::string("guard|3e23d70a|44098000|3fc00000|00000000|00000000|00000020|00000000|") + badbits), "invalid accuracy refused");
