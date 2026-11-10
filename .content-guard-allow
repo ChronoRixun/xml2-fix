@@ -166,3 +166,4 @@ DISASM src/join_in_progress_execution.inl # AR5 (beta.2): authored register/FPU-
 DISASM src/online_text_entry.inl # Online screens part 2 (beta.2): authored input-context adapters call our editor_name() and resume at the native yes/no targets; no extracted game listing.
 DISASM test/join_in_progress_execution_fixture.inl # AR5 (beta.2): authored ABI probe and synthetic caller frames for the bridges; owned retail bytes are read locally at runtime, never embedded.
 DISASM test/online_ready_fixture.inl # Online screens (beta.2): authored stack/register shims invoking our font measure adapters; no extracted game listing.
+DISASM test/npc_weapon_contact_test.hpp # Authored synthetic x86 ABI callers marshal invented victim/attack arguments; native event/copy/filter bytes are loaded from the owned PE at runtime, with no extracted game body or listing.
