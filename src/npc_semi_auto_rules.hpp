@@ -49,7 +49,8 @@ namespace npc_semi_auto_rules
   const auto type = w.flags & type_mask;
   return (type == type_beam || type == type_flame) && w.tracetime_bits != 0;
  }
- inline constexpr char trace_capability[] = "lc-npc-beam-trace/1";
+ inline bool weapon_contacts(const weapon& w) { return bullet(w) || nonbullet_trace(w); }
+ inline constexpr char trace_capability[] = "lc-npc-beam-trace/2";
  inline std::optional<weapon> parse(std::string_view text)
  {
   det_math::fp_env fp;
@@ -109,9 +110,9 @@ namespace npc_semi_auto_rules
    out.insert(out.end(), w.actor.begin(), w.actor.end());
    for (const u32 value : {w.recoil_bits, w.range_bits, w.burst_bits, w.leader, w.warmup_bits, w.flags, w.tracetime_bits, w.accuracy_bits}) put(value);
   }
-  // Keep schema-4 rows and bullet-only agreement unchanged. A table that uses
-  // the new gate must disagree with an old DLL even when its rows are identical.
-  if (std::any_of(weapons.begin(), weapons.end(), nonbullet_trace))
+  // ID-zero contacts change bullets too, even with zero trace time. Separate
+  // both pre-gate and /1 semantics without changing the source schema/rows.
+  if (std::any_of(weapons.begin(), weapons.end(), weapon_contacts))
    out.insert(out.end(), std::begin(trace_capability), std::end(trace_capability));
   return out;
  }
@@ -192,7 +193,7 @@ namespace npc_semi_auto_rules
  constexpr u32 candidate_allow = 0x50fe94, candidate_deny = 0x50ff65;
  constexpr u32 default_vtable = 0x692f4c, default_entry = 0x4fbdd0;
  constexpr u32 resolve_action = 0x427c80, clock = 0x45fe60;
- inline constexpr std::array<limits_rules::guard, 85> guards{{
+ inline constexpr std::array<limits_rules::guard, 88> guards{{
   {0x4e6e3b, "8b9cc7a8070000", "primary weapon model slot +0x7a8"},
   {0x4e6e53, "ff9288010000", "actor model reference slot +0x188"},
   {0x4e6e88, "ff5208", "weapon model resource slot +8"},
@@ -224,6 +225,9 @@ namespace npc_semi_auto_rules
   {0x4dd43a, "5f884645", "zero split-count marker field"},
   {0x4dd45c, "8d4e3ce83ceaffff", "split damage parser field"},
   {0x452225, "389c24380200000f85d9000000", "beam muzzle-query branch"},
+  {0x452338, "8d8c24b8000000518b8c241002000083c140ff152cfa6700", "per-call attack argument before endpoint write"},
+  {0x45249a, "8b8c240c020000518d8c2420010000e8022ffeff", "all piercing contacts copy this call attack"},
+  {0x435113, "8b4e28894828", "native attack copy retains duplicate ID at +0x28"},
   {0x452350, "8d542450528d8c248c010000ff15e0f86700", "beam collision entry"},
   {0x451d1e, "8b1554fa6700528d8c2490000000899c2480000000ff15e0f96700", "initial empty beam normal"},
   {0x4528a9, "8d8c2410010000518d9424b0000000528d8c24c0000000ff150cfa6700", "beam presentation tail after query disposal"},

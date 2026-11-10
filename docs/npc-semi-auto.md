@@ -348,14 +348,35 @@ to the current direction; flame retains its native presentation. This cache is
 also keyed by actor and full token, initially zero. Events remain immutable.
 Every hook participates in the existing all-or-nothing transaction.
 
-The companion exposes the exact terminated `lc-npc-beam-trace/1` capability.
-LC requires it for marked output, validates source holders and all authored
+For each marked bullet or supported beam/flame call, the post-aim bridge copies
+all `0x6c` native attack bytes into its event scope and sets duplicate ID `+0x28`
+to zero. The native stack argument points to this copy before endpoint writes,
+so every piercing contact uses it until the native call returns. Damage, type,
+modifiers and native geometry remain intact; caller-owned attack bytes and the
+victim's remembered ID are never cleared. XML1's shared weapon-fire dispatcher
+constructs ID zero before dispatching all three weapon types; XML2's ordinary
+move-base plus event Index would suppress a second contact on the same victim.
+Unmarked, OFF, mismatched, split and zero-trace nonbullet events stay native.
+
+The companion exposes the exact terminated `lc-npc-beam-trace/2` capability.
+LC requires it for bullet tables (even with zero trace time) and positive-trace
+beam/flame tables, validates source holders and all authored
 primary/crouched/burst/tagged/inherited calls, and cannot bypass the check via
 its old-fix warning path. Schema-4 rows do not change. For a table containing
-positive-trace beam/flame rows, canonical agreement bytes append that terminated
+bullet or positive-trace beam/flame rows, canonical agreement bytes append that terminated
 capability after the rows. Thus old and new semantics disagree even for identical
-rows; bullet/projectile/zero-trace-only tables retain their existing digest.
+rows, including the previous `/1` companion. Projectile-only and zero-trace
+nonbullet-only tables retain their existing digest.
 No numbered rule revision, release version, or content identity is assigned by
 this implementation; coordinated release/content identity remains an integration
 step. Matching new peers agree in native tests; live host/guest cadence and old
 save loading still require acceptance testing.
+
+The owned-input contact regression executes native event ID construction,
+post-aim beam enumeration/attack copying, the contact, character and physical
+duplicate predicates, and remembered-ID writes. Invented query services feed
+synthetic vulnerable victims; their HP subtraction is a test sink, not the full
+retail damage calculation. Repeated tagged events in one move deliver both
+admitted contacts, rejected calls deliver none, admitted misses spend the timer,
+and both flame victims receive both contacts. Retail/OFF/split controls keep
+native duplicate rejection. This does not certify live geometry or damage rolls.

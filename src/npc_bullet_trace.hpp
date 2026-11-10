@@ -15,6 +15,9 @@ struct bullet_scope {
  bullet_frame ray_frame{};
  point direction{};
  bool collision_done = false;
+ // One native call's attack, alive until event_native returns (including all
+ // piercing contacts). Never rewrite the event/caller's attack or victim IDs.
+ alignas(4) std::array<std::byte, 0x6c> attack{};
 };
 thread_local bullet_scope* current_bullet = nullptr;
 using event_t = bool(__thiscall*)(void*, void*);
@@ -76,6 +79,12 @@ bool __cdecl begin_bullet_trace(void* actor, void* frame) noexcept
  auto* scope = current_bullet;
  if (!scope || !scope->row || scope->actor != actor || !scope->pending) return false;
  scope->pending = false;
+ // XML1 Fire constructs ID zero before dispatching bullet/flame/beam. XML2
+ // instead supplies actor move-base + event Index. Copy before the native
+ // endpoint write at 0x452338; every subsequent contact reads this argument.
+ std::memcpy(scope->attack.data(), field<void*>(frame, 0x20c), scope->attack.size());
+ field<u32>(scope->attack.data(), 0x28) = 0;
+ field<void*>(frame, 0x20c) = scope->attack.data();
  if (!bullet(*scope->row)) {
   det_math::fp_env fp;
   const auto token = field<u32>(actor, 0x1c);

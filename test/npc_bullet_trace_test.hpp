@@ -36,6 +36,8 @@ bool __fastcall trace_native_event(void*, void*, void* context)
 {
  using namespace npc_semi_auto;
  std::array<std::byte, 0x270> frame{};
+ std::array<std::byte, 0x6c> event_attack{};
+ field<void*>(frame.data(), 0x20c) = event_attack.data();
  field<point>(frame.data(), 0x110) = {10, 20, 30};
  field<point>(frame.data(), 0x50) = {1, 0, 0};
  field<point>(frame.data(), 0x98) = {-99, -99, -99}; // output scratch, not the direction
@@ -107,6 +109,8 @@ bool __fastcall nonbullet_native_event(void*, void*, void* context)
  using namespace npc_semi_auto;
  ++weapon_draws;
  std::array<std::byte, 0x270> frame{};
+ std::array<std::byte, 0x6c> event_attack{};
+ field<void*>(frame.data(), 0x20c) = event_attack.data();
  field<u32>(frame.data(), 0x228) = 77;
  field<point>(frame.data(), 0x110) = {10, 20, 30};
  field<point>(frame.data(), 0x50) = {0, 1, 0};
@@ -359,6 +363,7 @@ trace_point* __fastcall fragment_sub(trace_point* self, void*, trace_point* out,
 trace_point* __fastcall fragment_copy(trace_point* self, void*, const trace_point* rhs) { *self = *rhs; return self; }
 float __fastcall fragment_length(trace_point* self, void*) { return self->x*self->x + self->y*self->y + self->z*self->z; }
 void* trace_fragment = nullptr; void* trace_frame_copy = nullptr;
+void* trace_fragment_manager = nullptr;
 __declspec(naked) void fragment_done() { __asm { jmp dword ptr [trace_bridge_return_address] } }
 __declspec(naked) void invoke_trace_fragment(void*, void*)
 {
@@ -375,6 +380,7 @@ __declspec(naked) void invoke_trace_fragment(void*, void*)
   mov ecx, 0x9c
   rep movsd
   mov edi, edx
+  mov ebp, trace_fragment_manager
   xor ebx, ebx
   mov trace_bridge_return_address, offset fragment_return
   jmp dword ptr [trace_fragment]
@@ -470,10 +476,12 @@ void native_rejected_trace(const char* path)
  for (const auto [time, admitted] : {std::pair<float, bool>{.49f, false}, {.5f, true}, {.66f, false}}) {
   bullet_scope scope{actor.data(), &row}; current_bullet = &scope;
   fixture_time = time; trace_calls.clear(); field<u32>(frame.data(), 0x228) = 77;
+  field<void*>(frame.data(), 0x20c) = native_move.data(); // fresh native call argument
   check(safe_trace_fragment(actor.data(), frame.data()), "native fragment executes without exception");
   check(scope.skip == !admitted && !scope.pending && trace_calls == (admitted ? "rrrtcq" : "rrrtc"),
         "executed native beam emits presentation then invokes only the admitted character ray");
-  const auto endpoint = field<point>(native_move.data(), 0x40);
+  const auto endpoint = field<point>(scope.attack.data(), 0x40);
+  check(field<point>(native_move.data(), 0x40).x == 0, "native endpoint writes preserve caller attack");
   check(endpoint.x == 560 && endpoint.y == 20 && endpoint.z == 30, "executed native endpoint math agrees with the early tracer's stack fields");
   check(field<u32>(frame.data(), 0x228) == 0, "executed native tail receives no duplicate tracer");
  }
@@ -486,6 +494,7 @@ void native_rejected_trace(const char* path)
   field<point>(frame.data(), 0x50) = {1,0,0};
   field<point>(frame.data(), 0x8c) = {}; // native empty contact normal
   field<u32>(frame.data(), 0x228) = 77;
+  field<void*>(frame.data(), 0x20c) = native_move.data();
   check(safe_trace_fragment(actor.data(), frame.data()), "rejected beam/flame executes owned native tail and presentation bridge");
   check(scope.skip && !scope.pending && trace_calls == "c", "rejected nonbullet consumes no spread RNG and executes no collision");
   check(field<u32>(frame.data(), 0x228) == 77, "owned nonbullet tail retains native tracer argument");

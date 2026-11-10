@@ -176,7 +176,9 @@ void owned_bullet_direction(const char* path, const char* pc_path)
    point original{};
    invoke_source_bullet_aim(actor.data(), &prototype, const_cast<point*>(&frame.muzzle), const_cast<point*>(&frame.forward), &original);
    pc_seed = seed; pc_count = 0; fixture_time = 1; trace_states = {};
-   std::array<std::byte, 0x270> beam{}; bullet_scope scope{actor.data(), &row}; current_bullet = &scope;
+   std::array<std::byte, 0x270> beam{}; std::array<std::byte, 0x6c> attack{};
+   field<void*>(beam.data(), 0x20c) = attack.data();
+   bullet_scope scope{actor.data(), &row}; current_bullet = &scope;
    begin_bullet_trace(actor.data(), beam.data());
    check(pc_count == 3 && same_point(original, field<point>(beam.data(), 0x50)),
          "production spread matches executed XBE aim with three actual PC RNG draws, bit for bit");
