@@ -156,8 +156,19 @@ int main()
 		// Direct preservation tests: the final writer requires a fully decoded current container.
 		CHECK(preserve_newer(p,src,error) && get(p+".newer") == src && get(p) == src);
 		CHECK(preserve_newer(p,src,error));
-		CHECK(!preserve_newer(p,different,error) && get(p+".newer") == src && get(p) == src);
-		std::filesystem::remove(p+".newer");
+		// A different original takes the next free name; it never replaces the first copy, and is reused after.
+		CHECK(preserve_newer(p,different,error) && get(p+".newer") == src && get(p+".newer.2") == different && get(p) == src);
+		CHECK(preserve_newer(p,different,error) && preserve_newer(p,src,error) && !std::filesystem::exists(p+".newer.3"));
+		// Every name taken by different bytes: refuse, nothing replaced.
+		for (int n = 3; n <= protected_copy_names; ++n) put(protected_copy_path(p,n), fixture(kind, writer_version(2,n,0,writer_kind_fix)));
+		const auto tenth = fixture(kind, writer_version(3,0,0,writer_kind_fix));
+		CHECK(!preserve_newer(p,tenth,error) && error.find("every name") != std::string::npos);
+		CHECK(get(p+".newer") == src && get(p+".newer.2") == different && !std::filesystem::exists(p+".newer.10"));
+		for (int n = 1; n <= protected_copy_names; ++n) std::filesystem::remove(protected_copy_path(p,n));
+		// A stale scratch file for the first free name still refuses until removed.
+		put(p+".newer.tmp", different);
+		CHECK(!preserve_newer(p,src,error) && !std::filesystem::exists(p+".newer"));
+		std::filesystem::remove(p+".newer.tmp");
 		for (auto point : {failure_point::create, failure_point::write, failure_point::flush, failure_point::verify, failure_point::newer_publish})
 		{
 			CHECK(!preserve_newer(p,src,error,point));
@@ -165,7 +176,8 @@ int main()
 		}
 		CHECK(preserve_newer(p,src,error));
 		put(p,different);
-		CHECK(!preserve_newer(p,different,error) && get(p) == different && get(p+".newer") == src);
+		CHECK(preserve_newer(p,different,error) && get(p) == different && get(p+".newer") == src && get(p+".newer.2") == different);
+		std::filesystem::remove(p+".newer"); std::filesystem::remove(p+".newer.2");
 	}
 	for (const auto kind : {kind_campaign, kind_profile})
 	{
@@ -192,9 +204,11 @@ int main()
 		CHECK(write_lc_atomically(p,current,error));
 		CHECK(get(p+".newer") == newer && get(p+".bak") == current);
 		put(p,newer_incompatible);
-		CHECK(!write_lc_atomically(p,current,error)); // collision with the earlier intact newer source
-		CHECK(get(p) == newer_incompatible && get(p+".newer") == newer);
-		std::filesystem::remove(p+".newer");
+		// A second, different newer source keeps the first copy and takes the next name (formerly a refusal).
+		CHECK(write_lc_atomically(p,current,error));
+		CHECK(get(p) == current && get(p+".newer") == newer && get(p+".newer.2") == newer_incompatible);
+		std::filesystem::remove(p+".newer"); std::filesystem::remove(p+".newer.2");
+		put(p,newer_incompatible);
 		CHECK(write_lc_atomically(p,current,error) && get(p+".newer") == newer_incompatible);
 		std::filesystem::remove(p+".newer");
 		for (auto point : {failure_point::create, failure_point::write, failure_point::flush, failure_point::verify,
@@ -222,6 +236,35 @@ int main()
 			CHECK(write_lc_atomically(p,current,error) && get(p+".newer") == later_build);
 			CHECK(write_lc_atomically(p,current,error) && get(p+".newer") == later_build);
 		}
+		// Preview carry-over (0.6.0-beta.6): destination AND .bak both from a preview identity (content 76 against
+		// this build's lower content), different from each other; Owen's state also had .newer == destination already.
+		for (const bool newer_already : {false, true})
+		{
+			for (int n = 1; n <= protected_copy_names; ++n) std::filesystem::remove(protected_copy_path(p,n));
+			const auto stamp = [&](std::vector<std::uint8_t> b, std::uint32_t content, std::uint32_t sequence)
+			{
+				std::memcpy(b.data()+0x28,guard_fixture::le32(content).data(),4);
+				std::memcpy(b.data()+0x3c,guard_fixture::le32(sequence).data(),4);
+				std::memcpy(b.data()+0x84,guard_fixture::le32(crc32(b.data(),0x84)).data(),4);
+				return b;
+			};
+			const auto preview = stamp(current,76,8), preview_older = stamp(current,76,7);
+			const auto release = stamp(current,35,0);
+			CHECK(inspect(preview.data(),preview.size(),0).status == file_status::ok && preview != preview_older);
+			put(p,preview); put(p+".bak",preview_older);
+			if (newer_already) put(p+".newer",preview);
+			for (int round = 0; round < 3; ++round)
+			{
+				CHECK(write_lc_atomically(p,release,error));
+				CHECK(get(p) == release && get(p+".newer") == preview && get(p+".newer.2") == preview_older);
+				CHECK(get(p+".bak") == (round == 0 ? preview : release) && !std::filesystem::exists(p+".newer.3"));
+			}
+			// A later release save of a different state still writes and adds no further copies.
+			auto release_later = stamp(current,35,1);
+			CHECK(write_lc_atomically(p,release_later,error) && get(p) == release_later && get(p+".bak") == release);
+			CHECK(!std::filesystem::exists(p+".newer.3") && !std::filesystem::exists(p+".newer.tmp") && !std::filesystem::exists(p+".newer.2.tmp"));
+		}
+		for (int n = 1; n <= protected_copy_names; ++n) std::filesystem::remove(protected_copy_path(p,n));
 		// Recover protection when an earlier writer left a newer original only in .bak.
 		std::filesystem::remove(p+".newer");
 		put(p,current); put(p+".bak",newer);

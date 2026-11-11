@@ -126,32 +126,50 @@ namespace save_guard_rules
 		return ok;
 	}
 
-	// Collision policy: identical .newer is reused; different bytes refuse, never replace it. A stale .newer.tmp
-	// also refuses until inspected/removed. CREATE_NEW and a rename without REPLACE prevent racing publishers.
+	// Protected copies: <file>.newer, then <file>.newer.2 .. .newer.9. A copy with identical bytes under any of these
+	// names is reused; a different original takes the first free name and never replaces an existing copy. A save
+	// whose destination AND rotated .bak are both protected (two different files from a preview or newer build, such
+	// as a carried-over profile) needs two names; with one name every later save refused (0.6.0-beta.6 carry-over).
+	// The names are bounded: when all hold different bytes the write refuses. A stale <name>.tmp also refuses until
+	// inspected/removed. CREATE_NEW and a rename without REPLACE prevent racing publishers.
+	constexpr int protected_copy_names = 9;
+	inline std::string protected_copy_path(const std::string& path, const int index)
+	{ return path + ".newer" + (index <= 1 ? std::string() : "." + std::to_string(index)); }
+
 	inline bool preserve_newer(const std::string& path, const std::vector<std::uint8_t>& original,
 							   std::string& error, failure_point fault = failure_point::none)
 	{
 		error.clear();
-		const auto protected_path = path + ".newer";
 		std::vector<std::uint8_t> check;
-		if (exists(protected_path))
+		std::string free_path;
+		for (int index = 1; index <= protected_copy_names; ++index)
 		{
-			if (save_format_rules::read_file(protected_path, check, error) && check == original) return true;
-			error = "a different or unreadable " + protected_path + " already exists; original kept";
+			const auto candidate = protected_copy_path(path, index);
+			if (exists(candidate))
+			{
+				std::string read_error;
+				if (save_format_rules::read_file(candidate, check, read_error) && check == original) return true;
+			}
+			else if (free_path.empty()) free_path = candidate;
+		}
+		if (free_path.empty())
+		{
+			error = "different or unreadable protected copies already use every name " + protected_copy_path(path, 1) +
+			        " to " + protected_copy_path(path, protected_copy_names) + "; original kept";
 			return false;
 		}
-		const auto tmp = protected_path + ".tmp";
+		const auto tmp = free_path + ".tmp";
 		if (!durable_scratch(tmp, original, error, fault, CREATE_NEW)) return false;
 		if (injected(fault, failure_point::newer_publish, error) ||
-			!MoveFileExA(tmp.c_str(), protected_path.c_str(), MOVEFILE_WRITE_THROUGH))
+			!MoveFileExA(tmp.c_str(), free_path.c_str(), MOVEFILE_WRITE_THROUGH))
 		{
-			if (error.empty()) error = "can't publish " + protected_path + " (error " + std::to_string(GetLastError()) + ")";
+			if (error.empty()) error = "can't publish " + free_path + " (error " + std::to_string(GetLastError()) + ")";
 			DeleteFileA(tmp.c_str());
 			return false;
 		}
-		if (!save_format_rules::read_file(protected_path, check, error) || check != original)
+		if (!save_format_rules::read_file(free_path, check, error) || check != original)
 		{
-			error = "protected original did not verify at " + protected_path;
+			error = "protected original did not verify at " + free_path;
 			return false;
 		}
 		return true;
