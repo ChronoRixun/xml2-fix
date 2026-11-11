@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 namespace shared_handlers {
-constexpr std::uint16_t revision=1;
+std::uint16_t revision();
 void install(HMODULE game);
 bool requested();
 bool installed();

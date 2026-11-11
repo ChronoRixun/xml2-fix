@@ -562,7 +562,7 @@ namespace
 		control_life::install(game);
 		shared_handlers::install(game);
 		if (shared_handlers::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision(),
 				shared_handlers::values(), shared_handlers::verified());
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())

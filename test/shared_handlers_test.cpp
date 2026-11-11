@@ -320,6 +320,7 @@ void abi_tests() {
  shared_handler_bridges::charge_event_resume=0x4ec037;
 }
 }
+#include "skate_exit_test.hpp"
 int main(int argc,char** argv) {
  std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("native fixture exception %08lX at %p EAX=%08lX ECX=%08lX ESI=%08lX ESP=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Esi,e->ContextRecord->Esp);return EXCEPTION_CONTINUE_SEARCH;});
@@ -357,7 +358,7 @@ int main(int argc,char** argv) {
  if(owned_query){entity_capacity::owner_site=0x4ab960;entity_capacity::owner_target=0x10001230;jump(0x4ab960,reinterpret_cast<void*>(0x10001230));}
  shared_handlers::install(GetModuleHandleW(nullptr));check(shared_handlers::installed()&&shared_handlers::verified()&&shared_handlers::values()[0]==mask,"selected rules install atomically and advertise the exact effective mask");
  using namespace shared_handler_bridges;
- const shared_handler_rules::targets callbacks{&teleport_land,&popup_decision,&charge_enter,&charge_exit,&charge_input,&charge_update,&charge_event_bridge,&nightcrawler_bridge,&gambit_bridge};
+ const shared_handler_rules::targets callbacks{&teleport_land,&popup_decision,&charge_enter,&charge_exit,&charge_input,&charge_update,&charge_event_bridge,&nightcrawler_bridge,&gambit_bridge,&skating_continue};
  auto expected_image=baseline;
  if(owned_query)std::copy_n(at(0x4ab960),5,expected_image.begin()+0x4ab960-0x401000);
  const auto writes=shared_handler_rules::patches(mask,callbacks);
@@ -365,10 +366,19 @@ int main(int argc,char** argv) {
  check(std::equal(expected_image.begin(),expected_image.end(),at(0x401000)),"production transaction has exactly the declared write footprint");
  gameplay_capabilities::record off,on,other;check(off.finalize(),"OFF agreement finalizes without new entry");
  check(gameplay_capabilities::shared_handlers_id==42,"shared handlers use coordinator-assigned rule ID 42");
- check(on.add(gameplay_capabilities::shared_handlers_id,1,shared_handlers::values(),shared_handlers::verified())&&on.finalize()&&on.compare(off.bytes())!=gameplay_capabilities::result::match,"selected handler rules refuse an OFF peer");
+ check(on.add(gameplay_capabilities::shared_handlers_id,shared_handlers::revision(),shared_handlers::values(),shared_handlers::verified())&&on.finalize()&&on.compare(off.bytes())!=gameplay_capabilities::result::match,"selected handler rules refuse an OFF peer");
  gameplay_capabilities::record former_id;
  check(former_id.add(31,1,shared_handlers::values(),true)&&former_id.finalize()&&former_id.compare(on.bytes())!=gameplay_capabilities::result::match,"rule 31 reserved for IGBCache cannot negotiate as shared-handler rule 42");
- check(other.add(gameplay_capabilities::shared_handlers_id,1,{mask^127u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different selected handler masks refuse online");
+ check(other.add(gameplay_capabilities::shared_handlers_id,shared_handlers::revision(),{mask^127u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different selected handler masks refuse online");
+ gameplay_capabilities::record legacy;
+ check(legacy.add(42,1,shared_handlers::values(),true)&&legacy.finalize(),"released shared-handler agreement fixture finalizes");
+ const bool skating_selected=(mask&1)!=0;
+ check((on.compare(legacy.bytes())==gameplay_capabilities::result::match)==!skating_selected &&
+       (legacy.compare(on.bytes())==gameplay_capabilities::result::match)==!skating_selected,
+       "old/new skating peers refuse in both directions; non-skating peers still match");
+ gameplay_capabilities::record refused;
+ check(!refused.add(42,shared_handlers::revision(),shared_handlers::values(),false)&&!refused.finalize(),
+       "an unverified skating install cannot produce an admissible agreement");
  if(mask!=127){std::printf("shared handlers mask %u: %d checks, %d failures\n",mask,checks,failures);return failures?1:0;}
  // Load only functions executed by this fixture, from the user's read-only
  // binaries at runtime. No game assets, original instruction bodies or DLLs ship.
@@ -376,11 +386,11 @@ int main(int argc,char** argv) {
  x1.load(0xd91e0,0x303,x1_bias);x1.load(0x3c6de4,4,x1_bias);x1.load(0x3dd054,4,x1_bias);x1.load(0xdbc05,0x84,x1_bias);x1.load(0xdb70a,0x192,x1_bias);x1.load(0x3caa50,4,x1_bias);
  // Unchanged retail bodies around the patches were not part of the minimal
  // guard seed. Reload them and reapply the already-reviewed patch bytes.
- pc.load(0x4ec870,0x165);pc.load(0x4ecf80,0x70);pc.load(0x4f0fa0,0x45);pc.load(0x41d0d0,7);x1.load(0x2e290,7,x1_bias);
+ pc.load(0x4ec870,0x165);pc.load(0x4ecf80,0x70);pc.load(0x4eca0a,0x15);pc.load(0x4eca77,0x17);pc.load(0x4f0fa0,0x45);pc.load(0x41d0d0,7);x1.load(0x2e290,7,x1_bias);
  for(const auto& p:writes)std::memcpy(at(p.address),p.after.data(),p.after.size());
  bind_helpers();
  const auto* cadence=x1.read(0x3d635c,4);check(cadence&&std::equal(cadence,cadence+4,pc.read(0x68012c,4)),"original and retained PC charge contact cadence is exactly 1.0 binary32");
- std::puts("popup");popup_tests();std::puts("landing");landing_tests(pc,x1);std::puts("skating");skating_tests();std::puts("charge");charge_tests();std::puts("nightcrawler");night_tests();std::puts("gambit");gambit_tests();abi_tests();
+ std::puts("skating continuation");skating_continuation_tests();std::puts("popup");popup_tests();std::puts("landing");landing_tests(pc,x1);std::puts("skating");skating_tests();std::puts("charge");charge_tests();std::puts("nightcrawler");night_tests();std::puts("gambit");gambit_tests();abi_tests();
  check(!game_version::refused,"ordinary guard refusals do not terminate startup");
  std::printf("shared handlers: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }
