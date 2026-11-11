@@ -1,14 +1,38 @@
 # LC save protection and supported content
 
-The LC writer uses save_guard_rules.hpp; ledger/import writes retain the generic save_format_rules writer.
+The LC writer uses save_guard_rules.hpp. A canonical destination path selects a persistent `<file>.lock` lease,
+opened OPEN_ALWAYS with zero sharing and an exclusive byte lock. The handle is held across the original-file
+compatibility preflight, reread, protected-copy selection, backup rotation, publication/readback and in-memory
+save-state commit. Another participating process waits at most three seconds, then refuses with an actionable
+"another writer is saving this file" message; retrying is safe. Closing the handle (including process death)
+releases ownership. The empty lease file stays in place; deleting it while writers run would split ownership.
+Locking/canonicalization failures refuse before writing. Both sharing and the byte lock are required: an
+unsupported Wine/Proton/filesystem locking operation never falls back to an unlocked save. Actual Wine/Proton
+runtime behavior remains unverified.
+
+Primary, backup and protected-copy scratch files have unique writer-owned names, reserved with CREATE_NEW,
+flushed and byte-verified. Cleanup touches only scratch this transaction successfully created; foreign or
+crash-left scratch is never truncated/deleted. A final destination comparison remains as a defense against
+nonparticipating tools/older DLLs, and published bytes must match before the caller advances retained state
+or sequence. The lease serializes participating writers; it cannot make an arbitrary external editor cooperate.
+
+Automatic legacy import acquires the same lease after conversion and rechecks that both primary and `.bak`
+are absent. If another process filled the selected slot, import records "waiting" and writes nothing there.
+Ledger and debug-dump writes retain the generic save_format_rules writer.
 Before replacing a newer writer/content/catalogue original, it publishes a flushed, byte-verified .newer through a non-replacing,
 write-through rename. An identical protected copy (under any of .newer, .newer.2 .. .newer.9) is reused; a different
-original takes the first free name and never replaces an existing copy. The write refuses only when all nine names hold
-different/unreadable bytes, or a stale <name>.tmp exists for the free name. A newer original found only in .bak is also
+original takes the first free name and never replaces an existing copy. Protected-copy selection refuses when all nine names hold
+different/unreadable bytes, or a legacy <name>.tmp exists for the free name. A newer original found only in .bak is also
 protected before backup rotation; when the destination is protected too (a carried-over preview profile whose file and
 .bak are both preview writes), the two land under two names instead of refusing every save (0.6.0-beta.6 carry-over).
-The destination stays in place until the final rename; create/write/flush/verify/publication/replacement failures
-keep its bytes and pathname. Content/catalogue rollback protection also applies when the DLL semver did not change. Normal intact files rotate .bak; a damaged file cannot replace a good backup.
+The destination stays in place until the final rename; failures before publication keep its bytes and pathname.
+A failed readback after publication refuses success without committing in-memory state; it does not roll back
+over an external writer. Content/catalogue rollback protection also applies when the DLL semver did not change.
+Normal intact files rotate .bak; a damaged file cannot replace a good backup.
+
+If saving refuses because protected names or legacy scratch need inspection, close all writers and copy the
+whole SaveLC folder somewhere safe first. Retain suspect scratch/protected files for inspection; do not blindly
+delete the protected originals. New crash-left unique scratch does not claim another writer's scratch name.
 
 Campaign and profile refusal latches are independent and keyed by destination. Failed reads and preflight of
 existing files protect unresolved identities, damaged originals without a usable backup, wrong kinds and
@@ -48,6 +72,9 @@ These guards do not install a registry capacity expansion.
 Run xml2_save_guards_test, xml2_save_content_guards_test and xml2_test --game-version-rules/
 --save-format-rules. The synthetic tests cover preservation collisions, both save kinds, two writes, existing
 newer backups, injected failure points, cosmetic/bound overlays, keyrefs and actual socket exclusion.
+`xml2_save_transaction_test` adds barrier-controlled processes for the shared-scratch race (both save kinds,
+existing/missing primary, relative/case aliases), lease timeout/crash release, independent destinations,
+owned cleanup, external mutation/readback refusal and an automatic importer waiting behind a normal writer.
 The LC device-info campaign count at 0x55f190 counts LC primary/backup slots rather than retail Save/*.save.
 This prevents an existing LC campaign from being hidden behind the native NO SAVE DATA popup. Refused files
 and recoverable backups stay visible; .newer and profiles do not add campaign slots. Readiness/import notices

@@ -58,10 +58,14 @@ the fix's own methods, with the same arguments and the same stack cleanup the re
 | +0x2c | profile exists (device) | whether `profile.lcsave` (or its backup) exists |
 | +0x74 | message text (code, device, argument) | the game's own text, then the reason the last read, write or delete was refused |
 
-**Writing** follows the spec's procedure: the file is built in memory and re-read through the reader, written to
-`<name>.tmp`, flushed, re-read and compared, the previous file kept as `<name>.bak` when it is intact (deleted when
-it isn't), then moved into place with write-through. A crash leaves the old file, or the backup plus a `.tmp`, or
-the new file. **Overwriting** a slot: the game's save sequence deletes the slot (card vt+0x70, the call at
+**Writing** holds a canonical-path, cross-process lease through compatibility preflight, publication/readback
+and the in-memory state commit. Contention refuses after three seconds. The file is built in memory and re-read
+through the reader, written to a unique CREATE_NEW scratch owned by this writer, flushed, re-read and compared,
+the previous file kept as `<name>.bak` when intact (a damaged primary never replaces a good backup), then moved
+into place with write-through and byte-verified again. Newer sources keep their bounded `.newer` copies.
+A crash leaves the old file, or the backup plus owned scratch, or the new file; the OS releases the lease.
+See [save protection](save-guards.md) for ownership, refusal and recovery details.
+**Overwriting** a slot: the game's save sequence deletes the slot (card vt+0x70, the call at
 0x4b1612) before it serializes and writes it; that one delete is told apart by its return address and removes nothing,
 so the write keeps the old file as `<name>.bak` and a complete file is on disk at every moment (also when the write is
 refused). The menu's own Delete still deletes the file and its backup. **Reading** uses the backup when the file is damaged (size, magic, a CRC, the structure) and says so

@@ -573,7 +573,7 @@ namespace save_format
 					logger::write("save format: import: ERROR: the converted %s doesn't pass the reader", name.c_str());
 					continue;
 				}
-				if (!write_atomically(target, result.bytes, why))
+				if (!save_guard_rules::import_lc_if_absent(target, result.bytes, why))
 				{
 					entry.result = "waiting";
 					entry.detail = "not written: " + why;
@@ -1257,7 +1257,16 @@ namespace save_format
 				refuse(path + ": " + (latched.empty() ? runtime : latched));
 				return false;
 			}
-			const auto previous = load_lc(path,kind);
+			// Hold the same per-destination lease across preflight, publication/readback and the state commit.
+			// In particular, another process cannot swap the original after this compatibility check.
+			std::string error;
+			save_guard_rules::destination_lease lease;
+			if (!lease.acquire(path,error))
+			{
+				refuse("writing " + path + " failed: " + error);
+				return false;
+			}
+			const auto previous = load_lc(lease.path(),kind);
 			if (previous.exists)
 			{
 				std::string why;
@@ -1340,8 +1349,7 @@ namespace save_format
 				refuse("the file about to be written doesn't pass the reader (" + info.why + "); nothing was written");
 				return false;
 			}
-			std::string error;
-			if (!save_content_guards::verify_keys(result.bytes,error) || !save_guard_rules::write_lc_atomically(path, result.bytes, error))
+			if (!save_content_guards::verify_keys(result.bytes,error) || !save_guard_rules::write_lc_under_lease(lease, result.bytes, error))
 			{
 				// I/O can be retried; existing-file identity refusals remain latched by preflight/read.
 				refuse("writing " + path + " failed: " + error);

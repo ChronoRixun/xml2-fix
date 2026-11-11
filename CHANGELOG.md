@@ -1,6 +1,38 @@
 # Changelog
 
-## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2 / beta.3 / beta.4 / beta.5 / beta.6)
+## 1.11.0 - 2026-11-18
+
+The first stable release since 1.8.2, the engine half of Legends Classic 0.6.0 (content 35 / catalogue 8 / `LC45`,
+the same game as 0.6.0-beta.6). `dinput.dll` is the 1.11.0-beta.5 sources plus the fixes below (numeric
+VERSIONINFO 1.11.0; no gameplay rule changes). Use XML2 Fix 1.11.0 with Legends Classic 0.6.0 and matching
+settings. Earlier gameplay contracts are refused. Stable keeps beta.6's LC45 and beta.5's gameplay agreement;
+mixed beta.5/stable play has not been verified.
+It gathers 1.9.0-beta.1 / beta.2, 1.10.0-beta.1 and 1.11.0-beta.1 to beta.5 (below): online co-op from the game's own
+screens with drop-in at the next area, the first game's items, shops and drops (rule 52), the W2 save format
+(rule 47; 1.8.x cannot load a W2 save), the first game's bosses, moves, grabs and damage rounding, Phoenix's
+telekinesis and the flying carry, the converted weapons on the first game's trace timer with one count per contact,
+the story fixes of 1.11.0-beta.4, and the raised engine limits. 1.8.1's controller scan cache and 1.8.2's
+Wine / Proton default are included. Plain-language notes: [v1.11.0](packaging/release-notes/v1.11.0.md).
+
+- **DirectInput heap slack** (`src/dinput_heap_slack.cpp`, fix/boot-crash 0287447): the rare pre-menu crash at
+  `dinput.dll+0x1a353` was DirectInput 7 overreading its HID list on PCs with exactly 16 or 32 HID devices; the system
+  dinput.dll's allocations get a zeroed margin (log `dinput heap slack: on`, `HID list N of M`). Native test
+  `xml2_dinput_heap_slack_test` ([details](docs/dinput-heap-slack.md)).
+- **Serialize saves shared by multiple processes**: each LC destination has a crash-released lease held from
+  original-file preflight through published-byte verification and the in-memory save commit. Contention refuses
+  after three seconds. Writers reserve unique CREATE_NEW scratch and clean up only their own files. Automatic
+  legacy import joins the lease and refuses if primary or backup appeared after slot selection. Save format,
+  `.bak`/`.newer` names and gameplay agreement are unchanged; ledger/debug dumps retain their existing writer.
+  Native regression: `xml2_save_transaction_test` ([details](docs/save-guards.md)).
+- **Protected save copies no longer block saving** (`src/save_guard_rules.hpp`, fix/save-preview-carryover 5675e07):
+  a save whose file and `.bak` both came from a newer or preview build (content above this build's) kept one
+  protected `.newer` copy and then refused every later save of that file. Protected copies now use `.newer`, then
+  `.newer.2` to `.newer.9`; an identical copy under any name is reused, a different original takes the first free
+  name and never replaces a copy; all nine names taken by different bytes, or a stale scratch file, still refuse.
+  `xml2_save_guards_test`: 228 checks ([details](docs/save-guards.md)).
+
+### Beta by beta
+
 
 ### 1.11.0-beta.5
 
