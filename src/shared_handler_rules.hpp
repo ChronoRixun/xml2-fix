@@ -11,8 +11,19 @@ using placement_crush_rules::parse_rule;
 using placement_crush_rules::rule;
 inline constexpr std::array<const wchar_t*,7> keys{L"SkatingRule",L"TeleportLandingRule",L"PopupRule",L"PopupLandRule",L"ChargeRule",L"NightcrawlerRule",L"GambitRule"};
 enum part : u32 { skating=1,teleport_landing=2,popup=4,popup_land=8,charge=16,nightcrawler=32,gambit=64,all=127 };
+// Physical traversal state affects future jumps on every lockstep peer.
+// Other selected handlers keep their released revision and OFF digest.
+constexpr std::uint16_t revision_for(u32 requested) { return requested&skating ? 2 : 1; }
 struct dependency { u32 parts;limits_rules::guard bytes;bool capacity_owned=false; };
 inline constexpr dependency guards[]{
+ {1,{0x4ec9e0,"538b5c240c568b74240c5753568bf9e81c040100","skating continuation actor/handler frame"}},
+ {1,{0x4ec9f8,"8b8e780300008b0156ff500c84c08bce74156a1ee86fb2f3ff5f8986bc0300005eb0015bc20800","skating held-power continuation and ret 8"}},
+ {1,{0x4eca67,"8b8e780300008b0156ff500c84c074176a1e8bcee800b2f3ff5f8986bc0300005eb0015bc20800","skating held-jump continuation and ret 8"}},
+ {1,{0x693228,"b0cf4e00","skating exit callback"}},
+ {1,{0x693234,"e0c94e00","skating input callback"}},
+ {1,{0x4ecfb0,"568b7424088b560483e2fb8bce895604e87b2ef7ff8a8e6507000033c080e1fbc786780200000000803f898698070000888e65070000","skating exit traversal flags and timer cleanup"}},
+ {1,{0x4ecfec,"5ec20400","skating exit thiscall ret 4"}},
+ {1,{0x427c80,"8b4424048b91780300005150","skating actor action resolver"}},
  {1,{0x693220,"80cf4e00","skating entry registration"}},
  {1,{0x69322c,"70c84e00","skating update registration"}},
  {2,{0x6937f0,"10004f00","teleport landing entry registration"}},
@@ -98,7 +109,7 @@ inline std::vector<unsigned char> branch(u32 site,const void* target,std::size_t
  const auto rel=static_cast<u32>(reinterpret_cast<std::uintptr_t>(target))-(site+5);std::memcpy(b.data()+1,&rel,4);return b;
 }
 inline constexpr float forward=400.f,lower=36.f,upper_lower=48.f;
-struct targets { const void *landing,*popup,*charge_enter,*charge_exit,*charge_input,*charge_update,*charge_event,*nightcrawler,*gambit; };
+struct targets { const void *landing,*popup,*charge_enter,*charge_exit,*charge_input,*charge_update,*charge_event,*nightcrawler,*gambit,*skating_continue; };
 inline std::vector<xml1_hook_transaction::patch> patches(u32 mask,const targets& t) {
  std::vector<xml1_hook_transaction::patch> out;
  auto write=[&](u32 a,std::vector<unsigned char> after){out.push_back({a,retail(a,after.size()),std::move(after)});};
@@ -106,6 +117,7 @@ inline std::vector<xml1_hook_transaction::patch> patches(u32 mask,const targets&
  auto jump=[&](u32 a,const void* p,std::size_t n){write(a,branch(a,p,n));};
  auto operand=[&](u32 a,std::size_t n,std::size_t offset,const void* p){auto b=retail(a,n);const auto v=xml1_hook_transaction::pointer_bytes(p);std::copy(v.begin(),v.end(),b.begin()+offset);write(a,b);};
  if(mask&skating) {
+  jump(0x4eca0a,t.skating_continue,7);jump(0x4eca77,t.skating_continue,9);
   nop(0x4ec874,3);jump(0x4ec87f,reinterpret_cast<void*>(0x4ec8cd),6);
   operand(0x4ec8fd,5,1,&forward);operand(0x4ec943,6,2,&upper_lower);operand(0x4ec984,6,2,&lower);
   write(0x4ec96b,{0xc7,0,0,0,0x40,0xc2});write(0x4ec99d,{0xc7,0,0,0,0x40,0x42});

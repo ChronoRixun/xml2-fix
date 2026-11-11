@@ -8,7 +8,7 @@ actor's content origin. Enable them only for an XML1 campaign/profile.
 
 | Key; mask bit | Handler and PC sites | XML1 behavior restored | Live acceptance check |
 |---|---|---|---|
-| `SkatingRule`; 1 | `ch_skating`, `4ec870`, `4ecf80` | Forward 400; vertical correction +/-48; lower thresholds 36/48, ceiling 120. Bypass PC's low-speed/time exit and its elapsed-time accumulation. Remove the PC entry/exit writes to coefficient `+434`. Constants are private operands, never edits to shared retail float data. | Iceman ice slide and Magma traversal: sustained low-speed traversal, speed and height correction near ledges/uneven ground; enter/exit repeatedly. |
+| `SkatingRule`; 1 | `ch_skating`, `4ec870`, `4ecf80` | Forward 400; vertical correction +/-48; lower thresholds 36/48, ceiling 120. Bypass PC's low-speed/time exit and its elapsed-time accumulation. Remove the PC entry/exit writes to coefficient `+434`. When either held-input continuation (`4eca0a`, `4eca77`) resolves null or a move whose handler differs, run the native skating exit before storing the result; preserve self-loops. Constants are private operands, never edits to shared retail float data. | Iceman ice slide and Magma traversal: sustained low-speed traversal, speed and height correction near ledges/uneven ground; enter/exit repeatedly. |
 | `TeleportLandingRule`; 2 | `ch_move_tele_land`, `4f0010` | Always choose among four animations, regardless of actor name. Match XML1 animation **names** `ea_power2/3/4/6`: XBE IDs `87/89/8a/8d` map to PC `75/78/79/7e`. PC's old `7c/7e/7f` choices have different names. | Nightcrawler teleport-jump landings, all four variants, including copied/shared styles on another actor. Confirm converted skeletons have the original named animations. |
 | `PopupRule`; 4 | `ch_popup` and `ch_air_spin`, shared decision `4f0f00` | No-op decision, preserving PC callback's two stack arguments. Remove PC's rising-above-72 vertical velocity correction. | Shared popup/air-spin launches and falling arcs, especially a victim rising above 72 units. |
 | `PopupLandRule`; 8 | `ch_popup_land`, `4f0fb5` | Unconditionally reset actor `+278` to 1. No stats pointer or bit-80 gate. Preserve native landing flags. | Land after popup/air-spin with a hero and NPC; verify movement returns to normal, including actors whose stats have `+2ae` bit 80. |
@@ -23,11 +23,30 @@ rollback refuses startup. Trace entry guards accept retail bytes or only the
 exact target published by the entity-capacity installer, so raised query owners
 remain usable and foreign hooks refuse.
 
-Online agreement rule **42**, revision **1**, records `{installed_mask,0,0,0}`.
+Online agreement rule **42** records `{installed_mask,0,0,0}`. It uses revision **2** when `SkatingRule` is requested and revision **1** for other selections. Revision 2 repairs continuation exit dispatch: physical flag 4 affects later jump and attack decisions, so this is simulation state. Revision-1 skating peers are refused in both directions, even with the same mask. There is no new release or protocol identity.
 It registers only if one of these keys requests XML1 or is invalid. Absence/native
 therefore preserves the released OFF digest. Both peers must select the same
 mask and have a verified installation. ID 42 is coordinator-assigned; IDs 31..41
 are assigned or reserved for other work.
+
+## Skating continuation contract
+
+The hook is installed only with `SkatingRule=xml1`, at the two `ch_skating`
+continuation request sites. No other handler is intercepted. Each request keeps
+native `samepowerhold` resolution. Null or a next node with a different handler
+runs the current handler's exit (`vt+0xc`, native `4ecfb0`) exactly once, preserving
+the result pointer across the call. The exit clears physical flag 4, the actor's
+traversal bit and the elapsed timer, and resets the jump coefficient. A next node
+with the same handler performs the original store without exit/re-entry changes.
+Native XML2 skating self-loops therefore retain their behavior; absent/`xml2`
+selection leaves both sites untouched. Like the other shared-handler keys,
+selection is the installation marker; no actor-name heuristic is used.
+
+This pairs with the companion converter's `move` to `samepowerhold` chains for
+counter-capped Iceman/Magma skating. The converter change alone can exhaust the
+counter through a jump fallback while leaving physical flag 4 set. The hook
+also covers the held-power branch, though the live jump-entry harness exercises
+the held-jump branch. The native regression executes both branches.
 
 ## Native verification
 
@@ -36,6 +55,8 @@ Build with MSVC Win32 Release, below normal priority, then run:
 ```powershell
 build/bin/Release/xml2_shared_handlers_test.exe <retail-XMen2.exe> <original-default.xbe>
 ```
+
+The continuation regression executes both production tails with synthetic actor state and native exit code: null, other handler (including a shared vtable), and self-loop. It checks the exact actor mutation, one exit, resolved pointer, ret-8 stack balance, nonvolatile registers and x87/SSE sentinels. The suite also checks mixed-revision refusal in both directions and preservation of revision 1 without skating.
 
 The test requires these SHA-256 identities:
 
