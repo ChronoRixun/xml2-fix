@@ -2,8 +2,11 @@
 
 The LC writer uses save_guard_rules.hpp; ledger/import writes retain the generic save_format_rules writer.
 Before replacing a newer writer/content/catalogue original, it publishes a flushed, byte-verified .newer through a non-replacing,
-write-through rename. An identical protected copy is reused; a different/unreadable .newer or a stale
-.newer.tmp refuses the write. A newer original found only in .bak is also protected before backup rotation.
+write-through rename. An identical protected copy (under any of .newer, .newer.2 .. .newer.9) is reused; a different
+original takes the first free name and never replaces an existing copy. The write refuses only when all nine names hold
+different/unreadable bytes, or a stale <name>.tmp exists for the free name. A newer original found only in .bak is also
+protected before backup rotation; when the destination is protected too (a carried-over preview profile whose file and
+.bak are both preview writes), the two land under two names instead of refusing every save (0.6.0-beta.6 carry-over).
 The destination stays in place until the final rename; create/write/flush/verify/publication/replacement failures
 keep its bytes and pathname. Content/catalogue rollback protection also applies when the DLL semver did not change. Normal intact files rotate .bak; a damaged file cannot replace a good backup.
 
