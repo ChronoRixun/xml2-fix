@@ -53,6 +53,7 @@ with_exe = {
     "xml2_pool_counter_observers_test", "xml2_particle_scratch_test", "xml2_effect_templates_test", "xml2_effect_pools_test", "xml2_fight_moves_host",
     "xml2_power_pools_host", "xml2_balance_parity_test", "xml2_e4_observe_host",
     "xml2_pad_hotplug_test",
+    "xml2_dinput_heap_slack_test",
     "xml2_pad_hotplug_live_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
