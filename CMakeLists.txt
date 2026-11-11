@@ -68,6 +68,7 @@ target_link_libraries(xml2_economy_rules_test PRIVATE lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/dinput_heap_slack.cpp
 	src/e4_core.cpp
 	src/mold_beam.cpp
 	src/mold_controller.cpp
@@ -550,6 +551,12 @@ target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBAS
 add_executable(xml2_receive_validation_test test/receive_validation_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/receive_validation.cpp src/patch_transaction.cpp)
 target_include_directories(xml2_receive_validation_test PRIVATE src)
 target_link_options(xml2_receive_validation_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# Windows' DirectInput 7 HID list walk reads past its list: the padded allocator, the walk over page-end blocks,
+# and this PC's own system dinput.dll in child processes, without and with the hook.
+add_executable(xml2_dinput_heap_slack_test test/dinput_heap_slack_test.cpp src/dinput_heap_slack.cpp src/iat_hook.cpp)
+target_include_directories(xml2_dinput_heap_slack_test PRIVATE src)
+target_link_libraries(xml2_dinput_heap_slack_test PRIVATE dxguid)
 
 # Alchemy plugin enumeration of the drive root: the rule, and the guard hooked into this test's own FindFirstFileA import.
 add_executable(xml2_plugin_scan_test test/plugin_scan_test.cpp src/plugin_scan.cpp src/iat_hook.cpp)
