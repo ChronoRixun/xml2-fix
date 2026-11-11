@@ -352,6 +352,10 @@ target_link_libraries(lcsave_durable_parity PRIVATE lcsave)
 add_executable(xml2_save_guards_test test/save_guard_rules_test.cpp)
 target_include_directories(xml2_save_guards_test PRIVATE src)
 
+# Barrier-controlled cross-process LC save publication and lease failure paths.
+add_executable(xml2_save_transaction_test test/save_transaction_test.cpp)
+target_include_directories(xml2_save_transaction_test PRIVATE src)
+
 # Effective mod winners and unsupported keyrefs, using original synthetic files.
 add_executable(xml2_save_content_guards_test test/save_content_guards_test.cpp
     src/save_content_guards.cpp src/mod_loader.cpp src/iat_hook.cpp src/ini.cpp src/log.cpp src/game_version.cpp)

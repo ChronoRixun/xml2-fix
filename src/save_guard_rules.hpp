@@ -66,6 +66,108 @@ namespace save_guard_rules
 
 	enum class failure_point { none, create, write, flush, verify, newer_publish, backup_publish, replace };
 
+	// Observers are for native barriers/fault probes; normal callers leave this null.
+	enum class transaction_step { lease_wait, lease_acquired, scratch_verified, before_replace, published };
+	using transaction_observer = void (*)(transaction_step, void*);
+	inline void observe(transaction_observer after, transaction_step step, void* context)
+	{ if (after) after(step, context); }
+	constexpr DWORD save_lease_wait_ms = 3000;
+
+	// Resolve aliases before choosing the lease. For a new file, resolve its existing parent directory instead.
+	// Use the resolved path for ALL subsequent I/O, so a changed directory junction cannot redirect the transaction.
+	inline bool canonical_destination(const std::string& path, std::string& canonical, std::string& error)
+	{
+		const DWORD needed = GetFullPathNameA(path.c_str(), 0, nullptr, nullptr);
+		if (!needed) { error = "can't resolve save path"; return false; }
+		std::vector<char> full(needed);
+		const auto length = GetFullPathNameA(path.c_str(), needed, full.data(), nullptr);
+		if (!length || length >= needed)
+		{ error = "can't resolve save path"; return false; }
+		std::string absolute(full.data()), leaf;
+		HANDLE h = CreateFileA(absolute.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		                      nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (h == INVALID_HANDLE_VALUE)
+		{
+			const auto code = GetLastError();
+			if (code != ERROR_FILE_NOT_FOUND)
+			{ error = "can't resolve save destination (error " + std::to_string(code) + ")"; return false; }
+			const auto slash = absolute.find_last_of("\\/");
+			if (slash == std::string::npos || slash + 1 == absolute.size())
+			{ error = "save destination has no filename"; return false; }
+			leaf = absolute.substr(slash + 1);
+			// Ordinary Win32 paths silently trim these characters; refuse ambiguous/extended spellings.
+			if (leaf.back() == '.' || leaf.back() == ' ' || leaf.find(':') != std::string::npos)
+			{ error = "ambiguous save filename; replacement refused"; return false; }
+			h = CreateFileA(absolute.substr(0, slash + 1).c_str(), FILE_READ_ATTRIBUTES,
+			                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+			                FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+			if (h == INVALID_HANDLE_VALUE)
+			{ error = "can't resolve save directory (error " + std::to_string(GetLastError()) + ")"; return false; }
+		}
+		const auto size = GetFinalPathNameByHandleA(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+		std::vector<char> resolved(size ? size + 1 : 1);
+		const auto got = size ? GetFinalPathNameByHandleA(h, resolved.data(), static_cast<DWORD>(resolved.size()),
+		                                               FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) : 0;
+		CloseHandle(h);
+		if (!got || got >= resolved.size())
+		{ error = "can't canonicalize save destination; replacement refused"; return false; }
+		canonical.assign(resolved.data(), got);
+		if (!leaf.empty())
+		{
+			if (canonical.back() != '\\') canonical += '\\';
+			canonical += leaf;
+		}
+		return true;
+	}
+
+	class destination_lease
+	{
+		HANDLE handle_ = INVALID_HANDLE_VALUE;
+		std::string path_;
+	public:
+		destination_lease() = default;
+		destination_lease(const destination_lease&) = delete;
+		destination_lease& operator=(const destination_lease&) = delete;
+		~destination_lease() { if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
+		const std::string& path() const { return path_; }
+		bool held() const { return handle_ != INVALID_HANDLE_VALUE; }
+		bool acquire(const std::string& path, std::string& error, DWORD wait_ms = save_lease_wait_ms,
+		             transaction_observer after = nullptr, void* context = nullptr)
+		{
+			if (held()) { error = "save lease already held"; return false; }
+			if (!canonical_destination(path, path_, error)) return false;
+			const auto lease_path = path_ + ".lock";
+			const auto start = GetTickCount64();
+			for (;;)
+			{
+				// Never delete this file: closing/crashing releases ownership, and OPEN_ALWAYS reuses it.
+				HANDLE h = CreateFileA(lease_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+				                       FILE_ATTRIBUTE_NORMAL, nullptr);
+				DWORD code = GetLastError();
+				if (h != INVALID_HANDLE_VALUE)
+				{
+					OVERLAPPED at{};
+					// Also require a byte lock. If a Wine/filesystem implementation ignores sharing, the lock
+					// must still exclude writers. Unsupported locking refuses; there is no unlocked fallback.
+					if (LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at))
+					{
+						handle_ = h;
+						observe(after, transaction_step::lease_acquired, context);
+						return true;
+					}
+					code = GetLastError();
+					CloseHandle(h);
+				}
+				if (code != ERROR_SHARING_VIOLATION && code != ERROR_LOCK_VIOLATION)
+				{ error = "can't acquire save transaction lease (error " + std::to_string(code) + "); nothing written"; return false; }
+				observe(after, transaction_step::lease_wait, context);
+				if (GetTickCount64() - start >= wait_ms)
+				{ error = "another writer is saving this file; save transaction lease timed out; try saving again"; return false; }
+				Sleep(20);
+			}
+		}
+	};
+
 	inline bool injected(failure_point chosen, failure_point at, std::string& error)
 	{
 		if (chosen != at) return false;
@@ -89,49 +191,67 @@ namespace save_guard_rules
 		return count;
 	}
 
-	// A scratch file is flushed and compared byte for byte before it may become a backup or the destination.
-	inline bool durable_scratch(const std::string& path, const std::vector<std::uint8_t>& bytes,
-								std::string& error, failure_point fault, DWORD disposition = CREATE_ALWAYS)
+	// Only a successful CREATE_NEW grants cleanup ownership. Stale/foreign files are never truncated or deleted.
+	class owned_scratch
 	{
-		if (injected(fault, failure_point::create, error)) return false;
-		const HANDLE h = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
-		if (h == INVALID_HANDLE_VALUE)
+		std::string path_;
+		bool owned_ = false;
+	public:
+		owned_scratch() = default;
+		owned_scratch(const owned_scratch&) = delete;
+		owned_scratch& operator=(const owned_scratch&) = delete;
+		~owned_scratch() { if (owned_) DeleteFileA(path_.c_str()); }
+		const std::string& path() const { return path_; }
+		void published() { owned_ = false; }
+		bool create(const std::string& target, const std::vector<std::uint8_t>& bytes,
+		            std::string& error, failure_point fault)
 		{
-			error = "can't create " + path + " (error " + std::to_string(GetLastError()) + ")";
-			return false;
+			if (owned_) { error = "save scratch already owned"; return false; }
+			if (injected(fault, failure_point::create, error)) return false;
+			static volatile LONG sequence = 0;
+			HANDLE h = INVALID_HANDLE_VALUE;
+			for (unsigned attempt = 0; attempt < 32; ++attempt)
+			{
+				path_ = target + ".tmp." + std::to_string(GetCurrentProcessId()) + "." +
+				        std::to_string(GetTickCount64()) + "." + std::to_string(static_cast<ULONG>(InterlockedIncrement(&sequence)));
+				h = CreateFileA(path_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+				if (h != INVALID_HANDLE_VALUE) { owned_ = true; break; }
+				const auto code = GetLastError();
+				if (code != ERROR_FILE_EXISTS && code != ERROR_ALREADY_EXISTS)
+				{ error = "can't create save scratch (error " + std::to_string(code) + ")"; return false; }
+			}
+			if (!owned_) { error = "can't reserve a unique save scratch name"; return false; }
+			std::size_t done = 0;
+			bool ok = !injected(fault, failure_point::write, error);
+			while (ok && done < bytes.size())
+			{
+				DWORD put = 0;
+				ok = WriteFile(h, bytes.data() + done, static_cast<DWORD>(std::min<std::size_t>(bytes.size()-done, 1u<<20)), &put, nullptr) && put;
+				done += put;
+			}
+			ok = ok && !injected(fault, failure_point::flush, error) && FlushFileBuffers(h);
+			CloseHandle(h);
+			if (!ok)
+			{
+				if (error.empty()) error = "write/flush failed for " + path_;
+				return false;
+			}
+			std::vector<std::uint8_t> check;
+			ok = !injected(fault, failure_point::verify, error) && save_format_rules::read_file(path_, check, error) && check == bytes;
+			if (!ok)
+			{
+				if (error.empty()) error = "verification failed for " + path_;
+			}
+			return ok;
 		}
-		std::size_t done = 0;
-		bool ok = !injected(fault, failure_point::write, error);
-		while (ok && done < bytes.size())
-		{
-			DWORD put = 0;
-			ok = WriteFile(h, bytes.data() + done, static_cast<DWORD>(std::min<std::size_t>(bytes.size()-done, 1u<<20)), &put, nullptr) && put;
-			done += put;
-		}
-		ok = ok && !injected(fault, failure_point::flush, error) && FlushFileBuffers(h);
-		CloseHandle(h);
-		if (!ok)
-		{
-			if (error.empty()) error = "write/flush failed for " + path;
-			DeleteFileA(path.c_str());
-			return false;
-		}
-		std::vector<std::uint8_t> check;
-		ok = !injected(fault, failure_point::verify, error) && save_format_rules::read_file(path, check, error) && check == bytes;
-		if (!ok)
-		{
-			if (error.empty()) error = "verification failed for " + path;
-			DeleteFileA(path.c_str());
-		}
-		return ok;
-	}
+	};
 
 	// Protected copies: <file>.newer, then <file>.newer.2 .. .newer.9. A copy with identical bytes under any of these
 	// names is reused; a different original takes the first free name and never replaces an existing copy. A save
 	// whose destination AND rotated .bak are both protected (two different files from a preview or newer build, such
 	// as a carried-over profile) needs two names; with one name every later save refused (0.6.0-beta.6 carry-over).
-	// The names are bounded: when all hold different bytes the write refuses. A stale <name>.tmp also refuses until
-	// inspected/removed. CREATE_NEW and a rename without REPLACE prevent racing publishers.
+	// The names are bounded: when all hold different bytes the write refuses. A legacy <name>.tmp also refuses until
+	// inspected/removed. Owned CREATE_NEW scratch and a rename without REPLACE prevent racing publishers.
 	constexpr int protected_copy_names = 9;
 	inline std::string protected_copy_path(const std::string& path, const int index)
 	{ return path + ".newer" + (index <= 1 ? std::string() : "." + std::to_string(index)); }
@@ -158,15 +278,17 @@ namespace save_guard_rules
 			        " to " + protected_copy_path(path, protected_copy_names) + "; original kept";
 			return false;
 		}
-		const auto tmp = free_path + ".tmp";
-		if (!durable_scratch(tmp, original, error, fault, CREATE_NEW)) return false;
+		if (exists(free_path + ".tmp"))
+		{ error = "unowned legacy protected scratch at " + free_path + ".tmp; original kept"; return false; }
+		owned_scratch tmp;
+		if (!tmp.create(free_path, original, error, fault)) return false;
 		if (injected(fault, failure_point::newer_publish, error) ||
-			!MoveFileExA(tmp.c_str(), free_path.c_str(), MOVEFILE_WRITE_THROUGH))
+			!MoveFileExA(tmp.path().c_str(), free_path.c_str(), MOVEFILE_WRITE_THROUGH))
 		{
 			if (error.empty()) error = "can't publish " + free_path + " (error " + std::to_string(GetLastError()) + ")";
-			DeleteFileA(tmp.c_str());
 			return false;
 		}
+		tmp.published();
 		if (!save_format_rules::read_file(free_path, check, error) || check != original)
 		{
 			error = "protected original did not verify at " + free_path;
@@ -175,12 +297,15 @@ namespace save_guard_rules
 		return true;
 	}
 
-	// LC only: generic ledger/import behavior stays in write_atomically. The old destination stays in place
+	// LC only: generic ledger/debug-dump behavior stays in write_atomically. The old destination stays in place
 	// until the final atomic replacement; a failure at any earlier step leaves it byte-identical.
-	inline bool write_lc_atomically(const std::string& path, const std::vector<std::uint8_t>& bytes,
-									std::string& error, failure_point fault = failure_point::none)
+	inline bool write_lc_under_lease(const destination_lease& lease, const std::vector<std::uint8_t>& bytes,
+									std::string& error, failure_point fault = failure_point::none,
+									transaction_observer after = nullptr, void* context = nullptr)
 	{
 		error.clear();
+		if (!lease.held()) { error = "save transaction lease is not held; nothing written"; return false; }
+		const auto& path = lease.path();
 		const auto new_info = inspect(bytes.data(), bytes.size(), 0);
 		if (new_info.status != file_status::ok)
 		{
@@ -203,8 +328,9 @@ namespace save_guard_rules
 			if (intact && protected_source(old_info,new_info) &&
 				!preserve_newer(path, original, error, fault)) return false;
 		}
-		const auto tmp = path + ".tmp";
-		if (!durable_scratch(tmp, bytes, error, fault)) return false;
+		owned_scratch tmp;
+		if (!tmp.create(path, bytes, error, fault)) return false;
+		observe(after, transaction_step::scratch_verified, context);
 		if (intact)
 		{
 			// An earlier DLL may have left the only newer original in .bak. Preserve it before rotating it.
@@ -212,35 +338,72 @@ namespace save_guard_rules
 			if (exists(backup))
 			{
 				std::vector<std::uint8_t> prior_backup;
-				if (!save_format_rules::read_file(backup,prior_backup,error)) { DeleteFileA(tmp.c_str()); return false; }
+				if (!save_format_rules::read_file(backup,prior_backup,error)) return false;
 				const auto backup_info = inspect(prior_backup.data(),prior_backup.size(),0);
 				if (backup_info.status != file_status::damaged &&
 					protected_source(backup_info,new_info) &&
-					!preserve_newer(path,prior_backup,error,fault)) { DeleteFileA(tmp.c_str()); return false; }
+					!preserve_newer(path,prior_backup,error,fault)) return false;
 			}
-			const auto backup_tmp = path + ".bak.tmp";
-			if (!durable_scratch(backup_tmp, original, error, fault)) { DeleteFileA(tmp.c_str()); return false; }
+			owned_scratch backup_tmp;
+			if (!backup_tmp.create(path + ".bak", original, error, fault)) return false;
 			if (injected(fault, failure_point::backup_publish, error) ||
-				!MoveFileExA(backup_tmp.c_str(), (path+".bak").c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+				!MoveFileExA(backup_tmp.path().c_str(), (path+".bak").c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 			{
 				if (error.empty()) error = "can't publish backup (error " + std::to_string(GetLastError()) + ")";
-				DeleteFileA(backup_tmp.c_str()); DeleteFileA(tmp.c_str()); return false;
+				return false;
 			}
+			backup_tmp.published();
 		}
-		// Refuse concurrent destination changes instead of backing up one file and replacing another.
+		// Keep the final check too: tools/older DLLs may not participate in the lease.
+		observe(after, transaction_step::before_replace, context);
 		std::vector<std::uint8_t> check;
 		if (had_original != exists(path) ||
 			(had_original && (!save_format_rules::read_file(path,check,error) || check != original)))
 		{
 			error = "destination changed during write; replacement refused";
-			DeleteFileA(tmp.c_str()); return false;
+			return false;
 		}
 		if (injected(fault, failure_point::replace, error) ||
-			!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			!MoveFileExA(tmp.path().c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 		{
 			if (error.empty()) error = "can't replace destination (error " + std::to_string(GetLastError()) + ")";
-			DeleteFileA(tmp.c_str()); return false;
+			return false;
 		}
+		tmp.published();
+		observe(after, transaction_step::published, context);
+		// Never let the caller commit sequence/retained state just because a rename succeeded.
+		if (!save_format_rules::read_file(path, check, error) || check != bytes)
+		{ error = "published save did not verify; in-memory save state was not committed"; return false; }
 		return true;
+	}
+
+	inline bool write_lc_atomically(const std::string& path, const std::vector<std::uint8_t>& bytes,
+		                               std::string& error, failure_point fault = failure_point::none,
+		                               transaction_observer after = nullptr, void* context = nullptr,
+		                               DWORD wait_ms = save_lease_wait_ms)
+	{
+		error.clear();
+		destination_lease lease;
+		return lease.acquire(path, error, wait_ms, after, context) &&
+		       write_lc_under_lease(lease, bytes, error, fault, after, context);
+	}
+
+	// Automatic legacy import selects a free slot before conversion. Another process may fill it meanwhile.
+	// Join the regular save lease, then require BOTH names to be absent; never replace a newly saved campaign.
+	inline bool import_lc_if_absent(const std::string& path, const std::vector<std::uint8_t>& bytes,
+	                                std::string& error, transaction_observer after = nullptr, void* context = nullptr)
+	{
+		error.clear();
+		destination_lease lease;
+		if (!lease.acquire(path, error, save_lease_wait_ms, after, context)) return false;
+		for (const auto& candidate : {lease.path(), lease.path() + ".bak"})
+		{
+			const auto attributes = GetFileAttributesA(candidate.c_str());
+			if (attributes != INVALID_FILE_ATTRIBUTES)
+			{ error = "chosen import destination is no longer empty (primary or backup exists); nothing written"; return false; }
+			if (GetLastError() != ERROR_FILE_NOT_FOUND)
+			{ error = "can't confirm that the import destination is empty; nothing written"; return false; }
+		}
+		return write_lc_under_lease(lease, bytes, error, failure_point::none, after, context);
 	}
 }
