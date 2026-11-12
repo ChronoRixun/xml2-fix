@@ -1,3 +1,17 @@
+## 1.11.0-beta.6 - 2026-11-11
+
+XML2 Fix 1.11.0-beta.6 is paired with Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package/tag identify beta.6.
+
+Legends Classic 0.6.0-beta.7 needs XML2 Fix 1.11.0-beta.6. Update BOTH parts on Ultimate Legends' Beta channel, Rebuild, then Play. Back up SaveLC first. Beta.1-6 saves remain compatible; online peers need the same build and settings (content 36 / catalogue 8 / LC46).
+
+- Fixed a rare crash before the main menu on PCs with exactly 16 or 32 HID devices.
+- Iceman and Magma skating now continues while jump is held, up to the first game's rank limit, and releasing jump ends the slide. A completed slide no longer breaks later jumps or jump attacks. Both the builder and companion fix are required.
+- Save safety: carried-over preview saves can keep distinct protected copies without refusing every later save. Saves and automatic legacy-import writers coordinate their transactions; failed/contended writes refuse rather than report another writer's progress as saved.
+
+This is a beta, not a full campaign or Internet co-op certification. Local acceptance is tracked by the release round. Relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+
+Skating uses agreement rule 42 revision 2; old skating peers are refused in both directions. No Internet or long-session acceptance is claimed.
+
 # Changelog
 
 ## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2 / beta.3 / beta.4 / beta.5 / beta.6)

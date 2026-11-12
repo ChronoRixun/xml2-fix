@@ -14,6 +14,36 @@ using update=void(__thiscall*)(void*,void*,void*);
 using input=bool(__thiscall*)(void*,void*,void*);
 inline float now() { return fn<float(__cdecl*)()>(0x45fe60)(); }
 inline void* action(void* actor,u32 id) { return fn<void*(__thiscall*)(void*,u32)>(0x427c80)(actor,id); }
+inline u32 skating_resolver=0x427c80;
+// Both ch_skating samepowerhold tails have ESI=actor, EDI=this handler,
+// and saved EDI/ESI/EBX followed by the return address and two arguments.
+// Preserve the resolved node across the __thiscall exit (ret 4), then replay
+// the native store/true/ret 8 tail. A self-loop retains its traversal state.
+__declspec(naked) inline void skating_continue() {
+ __asm {
+  push 0x1e
+  mov ecx,esi
+  call dword ptr [skating_resolver]
+  test eax,eax
+  jz leave_skating
+  cmp [eax+0xc8],edi
+  je keep_skating
+ leave_skating:
+  push eax
+  mov edx,[edi]
+  push esi
+  mov ecx,edi
+  call dword ptr [edx+0xc]
+  pop eax
+ keep_skating:
+  pop edi
+  mov [esi+0x3bc],eax
+  pop esi
+  mov al,1
+  pop ebx
+  ret 8
+ }
+}
 inline void play(void* actor,void* move) { fn<void(__thiscall*)(void*,void*,int)>(0x42c340)(actor,move,1); }
 inline void* event(void* actor,u32 id) {
  auto* node=field<void*>(actor,0x3c0);

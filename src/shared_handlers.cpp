@@ -13,6 +13,7 @@ std::uint32_t wanted=0,applied=0;
 bool valid=true;
 }
 bool requested() { return wanted!=0; }
+std::uint16_t revision() { return shared_handler_rules::revision_for(wanted); }
 bool installed() { return applied!=0 && applied==wanted; }
 bool verified() { return valid && wanted==applied; }
 std::array<std::uint32_t,4> values() { return {applied,0,0,0}; }
@@ -46,11 +47,11 @@ void install(HMODULE game) {
   }
  }
  using namespace shared_handler_bridges;
- const targets callbacks{&teleport_land,&popup_decision,&charge_enter,&charge_exit,&charge_input,&charge_update,&charge_event_bridge,&nightcrawler_bridge,&gambit_bridge};
+ const targets callbacks{&teleport_land,&popup_decision,&charge_enter,&charge_exit,&charge_input,&charge_update,&charge_event_bridge,&nightcrawler_bridge,&gambit_bridge,&skating_continue};
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
   applied=wanted;
-  logger::write("shared handlers: XML1 callback rules installed (mask %02X, revision 1)",applied);
+  logger::write("shared handlers: XML1 callback rules installed (mask %02X, revision %u)",applied,unsigned(revision()));
  } else {
   if(!safe)game_version::refuse_startup();
   logger::write(safe?"shared handlers: transaction refused; native callbacks restored, online agreement refused":"shared handlers: unsafe rollback; startup refused");

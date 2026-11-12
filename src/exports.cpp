@@ -19,6 +19,7 @@
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
 #include "address_space.hpp"
+#include "dinput_heap_slack.hpp"
 #include "balance.hpp"
 #include "balance_parity.hpp"
 #include "balance_parity_rules.hpp"
@@ -167,6 +168,11 @@ namespace
 			if (loaded)
 			{
 				logger::write("loaded %ls", path.c_str());
+				// Before any export runs: its HID device list walk reads past the list (dinput_heap_slack.hpp).
+				const auto slack = dinput_heap_slack::install(loaded);
+				logger::write("dinput heap slack: %s - every block it allocates gets %u zeroed bytes more, so its HID list walk's read past the list's end (dinput.dll+0x1a353 in 10.0.26100.8115) reads 0 instead of a page that may not be there",
+					slack.alloc && slack.realloc ? "on (LocalAlloc and LocalReAlloc imports)" : slack.alloc || slack.realloc ? "PARTIAL (one of LocalAlloc / LocalReAlloc not imported)" : "off (no LocalAlloc / LocalReAlloc import)",
+					static_cast<unsigned>(dinput_heap_slack::slack));
 			}
 			else
 			{
@@ -182,6 +188,31 @@ namespace
 	{
 		const auto module = system_dinput();
 		return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
+	}
+
+	// Once, after the first DirectInputCreateEx: how full the system dinput.dll's HID list is (dinput_heap_slack.hpp).
+	void log_hid_list()
+	{
+		static volatile LONG logged = 0;
+		if (InterlockedExchange(&logged, 1))
+		{
+			return;
+		}
+		const auto list = dinput_heap_slack::hid_list(system_dinput());
+		if (!list.shape)
+		{
+			logger::write("dinput heap slack: this dinput.dll's HID list walk is not the one known to read past the list (nothing read)");
+		}
+		else if (list.count == list.capacity)
+		{
+			logger::write("dinput heap slack: HID list %d of %d - full, the case where the walk at dinput.dll+0x%lx reads past the list (now into the slack)",
+				list.count, list.capacity, static_cast<unsigned long>(list.compare_rva));
+		}
+		else
+		{
+			logger::write("dinput heap slack: HID list %d of %d (the walk at dinput.dll+0x%lx reads past the list only when it is full)",
+				list.count, list.capacity, static_cast<unsigned long>(list.compare_rva));
+		}
 	}
 
 	HRESULT hooked(const HRESULT result, void** out)
@@ -531,7 +562,7 @@ namespace
 		control_life::install(game);
 		shared_handlers::install(game);
 		if (shared_handlers::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision(),
 				shared_handlers::values(), shared_handlers::verified());
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())
@@ -769,7 +800,12 @@ extern "C"
 	HRESULT WINAPI proxy_DirectInputCreateEx(HINSTANCE instance, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer)
 	{
 		static const auto target = real<HRESULT(WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN)>("DirectInputCreateEx");
-		return target ? hooked(target(instance, version, riid, out, outer), out) : DIERR_GENERIC;
+		const HRESULT result = target ? hooked(target(instance, version, riid, out, outer), out) : DIERR_GENERIC;
+		if (target)
+		{
+			log_hid_list();
+		}
+		return result;
 	}
 
 	HRESULT WINAPI proxy_DllCanUnloadNow()

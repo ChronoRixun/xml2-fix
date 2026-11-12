@@ -1,3 +1,5 @@
+> **Current beta: 1.11.0-beta.6**, paired with Legends Classic 0.6.0-beta.7. Update both parts, Rebuild, Play; back up saves.
+
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
 </p>
