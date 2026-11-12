@@ -4,6 +4,7 @@
 #include "item_capacity_sites.hpp"
 #include "w2_boot_probe.hpp"
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
@@ -136,6 +137,46 @@ namespace {
  void* last_definition=nullptr;
  unsigned __fastcall observe_definition0(void* p,void*){last_definition=p;return 1;}
  unsigned __fastcall observe_definition1(void* p,void*,unsigned){last_definition=p;return 1;}
+
+ // Execute the door's real stack-index handoff and count dispatch. Dirty
+ // padding must never become the high byte of a W2 definition index.
+ __declspec(naked) unsigned __cdecl door_index_probe(unsigned index,unsigned poison){__asm {
+  push ebp
+  push ebx
+  push edi
+  push esi
+  sub esp,18h
+  mov eax,[esp+30h]
+  mov [esp+14h],eax
+  mov eax,[esp+2ch]
+  push 497bbch
+  ret
+ }}
+ __declspec(naked) void door_index_return(){__asm {
+  add esp,18h
+  pop esi
+  pop edi
+  pop ebx
+  pop ebp
+  ret
+ }}
+ unsigned(__cdecl* volatile invoke_door_index)(unsigned,unsigned)=&door_index_probe;
+ void door_index_tests(void* manager){
+  using namespace item_capacity_rules;
+  // Stop after the native quantity getter, before the surrounding door's
+  // activation/audio/script edges. All instructions under test stay native.
+  const auto tail=std::vector<std::uint8_t>(static_cast<std::uint8_t*>(at(0x497bd4)),static_cast<std::uint8_t*>(at(0x497bd4))+5);
+  jump(0x497bd4,&door_index_return);
+  bool okay=true;unsigned cases=0;
+  for(unsigned index:{0u,6u,255u,256u,1023u})for(unsigned poison:{0u,0xff00u,0xa5a5a5a5u,0xffff0000u}){
+   last_definition=nullptr;const auto count=invoke_door_index(index,poison);
+   okay&=(count&255)==1&&last_definition==static_cast<std::uint8_t*>(manager)+definitions+index*0x3c;++cases;
+  }
+  check(okay,"door key handoff: 20 native dispatches preserve index 0/6/255/256/1023 with poisoned stack padding");
+  last_definition=nullptr;
+  check((invoke_door_index(0xffffffff,0xa5a5a5a5)&255)==0&&last_definition==nullptr,"door key lookup sentinel refuses without selecting any item");
+  std::memcpy(at(0x497bd4),tail.data(),tail.size());FlushInstructionCache(GetCurrentProcess(),at(0x497bd4),tail.size());
+ }
 
  __declspec(naked) void saved_header(){__asm {
  pop edi
@@ -282,6 +323,7 @@ second:
    okay&=last_definition==m.data+definitions+index*0x3c;
   }
   check(okay,"T5 all 13 forwarding accessor thunks select the relocated definition at 255/256/1023 (39 native calls)");
+  door_index_tests(m.data);
   definition_vt[0x1c/4]=reinterpret_cast<void*>(&definition_name);
 
   manager_vt[0x124/4]=reinterpret_cast<void*>(&zero0);
@@ -443,6 +485,13 @@ int main(int argc,char** argv) {
  if(c.writes.empty())return 1;
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  check(patch_transaction::verify_expectations(c,why),"complete generated guards verified: "+why);
+ {const bool guarded=std::any_of(c.guards.begin(),c.guards.end(),[](const auto& g){return g.va==0x497bbc&&g.bytes==patch_transaction::bytes_of("88442414");});
+  check(guarded,"door key stack store has an exact retail byte guard");
+  if(guarded){const auto saved=*static_cast<std::uint8_t*>(at(0x497bbc));*static_cast<std::uint8_t*>(at(0x497bbc))^=1;
+   const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);
+   check(bad.commit()==patch_transaction::outcome::refused_guard&&std::equal(mutated.begin(),mutated.end(),fixture_space),"mutated door key store refuses the complete W2 union with zero writes");*static_cast<std::uint8_t*>(at(0x497bbc))=saved;
+  }
+ }
  {const auto saved=*static_cast<std::uint8_t*>(at(0x47e37e));*static_cast<std::uint8_t*>(at(0x47e37e))^=1;
   const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);
   check((bad.commit()==patch_transaction::outcome::refused_guard||bad.result()==patch_transaction::outcome::refused_region)&&std::equal(mutated.begin(),mutated.end(),fixture_space),"T3 copied lookup owner mutated outside entry: entire item union refuses with zero writes");*static_cast<std::uint8_t*>(at(0x47e37e))=saved;

@@ -74,7 +74,7 @@ def invoke(name,ini,expected,extra,source=DLL/'dinput.dll',mapping=DLL/'dinput.m
   entries=[(int(a),int(b),tuple(map(int,values.split(',')))) for a,b,values in re.findall(r'online: rule (\d+) .*? revision (\d+) \{([\d,]+)\}',log)]
   layout=[r for r in entries if r[0]==47]
   if expected=='W2':
-   assert layout==[(47,1,EXPECTED_VALUES)],(name,layout)
+   assert layout==[(47,2,EXPECTED_VALUES)],(name,layout)
    if name=='status':assert 'union status: '+EXPECTED_STATUS in host and 'union pipe: '+EXPECTED_STATUS in host,(name,host)
    assert (34,1,(4096,0,0,0)) in entries,(name,'implicit enhancement rule34 absent')
    assert 'pool stays at 375 records' not in log and '375 item enhancements (no [Limits]' not in log,(name,'legacy parser misreports W2 item capacity')

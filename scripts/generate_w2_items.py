@@ -195,6 +195,10 @@ edit(0x47e389,'83c8ff','definition-lookup-failure')
 edit(0x47e393,'0fb7c3','definition-lookup-success')
 for a in (0x49ed9d,0x49ee11):
  b=bytearray(ins(a).bytes);b[0]=0x89;edit(a,b,'definition-script-index-dword')
+# Door activation keeps the same DWORD-sized local as the script callers.
+# The widened getter reads AX, so an AL-only store also exposes dirty padding.
+assert raw(0x497bbc,4)==bytes.fromhex('88442414'),'door key index retail guard'
+edit(0x497bbc,'89442414','definition-door-index-dword')
 # Reward +8 becomes u16; +0xa is already a live u16 and is preserved.
 edit(0x4d47da,'66894708','definition-reward-index')
 for a in (0x4c8fe1,0x4ca138):edit(a,'0fb74e08','definition-reward-reader')
