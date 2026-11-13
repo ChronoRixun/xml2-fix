@@ -30,6 +30,8 @@ namespace forced_teams
 		std::atomic<bool> forced_teams_on{false};
 		std::atomic<bool> add_hero_switch{false};
 		std::atomic<bool> join_hero_switch{false};
+		bool asked = false;      // [Game] ForcedTeams present
+		bool installed = false;  // the functions registered
 
 		// What the functions keep from call to call; the game calls them on its one thread.
 		call_state kept;
@@ -298,6 +300,70 @@ namespace forced_teams
 				}
 				value = stats[offset];
 				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		// The extension object at CStats+0xc0 of hero `index` when it is a herostat hero's (vtable 0x685294), else null.
+		std::uint8_t* hero_extension(const int index)
+		{
+			__try
+			{
+				void* registry = object(registry_getter, registry_vtable);
+				if (!registry)
+				{
+					return nullptr;
+				}
+				std::uint8_t* stats = method<stats_t>(registry, registry_stats_slot)(registry, nullptr, index);
+				if (!stats)
+				{
+					return nullptr;
+				}
+				std::uint8_t* extension = nullptr;
+				std::memcpy(&extension, stats + hero_extension_offset, sizeof(extension));
+				return extension && *reinterpret_cast<const DWORD*>(extension) == hero_extension_vtable ? extension : nullptr;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return nullptr;
+			}
+		}
+
+		bool read_vitals(const int index, bool& valid, float& health)
+		{
+			__try
+			{
+				const std::uint8_t* extension = hero_extension(index);
+				if (!extension)
+				{
+					return false;
+				}
+				valid = (extension[vitals_flags] & 1) != 0;
+				std::memcpy(&health, extension + vitals_health, sizeof(health));
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		// The extension's own vt+0x1c, when it is the retail reset the guards compared (0x44a670).
+		bool call_clear_vitals(const int index)
+		{
+			__try
+			{
+				std::uint8_t* extension = hero_extension(index);
+				if (!extension || (*reinterpret_cast<const DWORD* const*>(extension))[vitals_clear_slot / 4] != vitals_clear)
+				{
+					return false;
+				}
+				using clear_t = void(__fastcall*)(void* extension, void* edx);
+				method<clear_t>(extension, vitals_clear_slot)(extension, nullptr);
+				return (extension[vitals_flags] & 1) == 0;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -768,6 +834,17 @@ namespace forced_teams
 				return call_hero_count(count) ? std::optional<int>(count) : std::nullopt;
 			}
 
+			std::optional<saved_vitals> vitals(const int index)
+			{
+				saved_vitals v;
+				return read_vitals(index, v.valid, v.health) ? std::optional<saved_vitals>(v) : std::nullopt;
+			}
+
+			bool clear_vitals(const int index)
+			{
+				return call_clear_vitals(index);
+			}
+
 			std::optional<int> hero_at(const int i)
 			{
 				int index = 0;
@@ -1038,6 +1115,7 @@ namespace forced_teams
 			logger::write("forced teams: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", refused);
 			return;
 		}
+		asked = true; // the game, ForcedTeams present: rule 63 registers (unverified if a guard below refuses)
 		if (!script_pools::value_makers_match())
 		{
 			logger::write("forced teams: value makers do not match the published ScriptPools layout - %s", refused);
@@ -1083,6 +1161,7 @@ namespace forced_teams
 			return;
 		}
 		forced_teams_on = chosen.forced_teams;
+		installed = true;
 		add_hero_switch = chosen.add_hero;
 		join_hero_switch = chosen.join_hero;
 
@@ -1101,4 +1180,7 @@ namespace forced_teams
 		logger::write("forced teams: %d of %zu Xtraction menus (extractionPoint, extractionPointLite) run the fix's handler first: %s", wrapped, xpoint_menus.size(),
 		              chosen.forced_teams ? "Change Team greyed out while game flag teamlock bit 1 is set (a mission's fixed party)" : "ForcedTeams=0 - Change Team as the game has it");
 	}
+
+	bool requested() { return asked; }
+	bool revives() { return installed; }
 }

@@ -34,7 +34,7 @@ namespace xml1_cling {
 namespace {
 using shared_handler_bridges::entry;using shared_handler_bridges::input;
 using shared_handler_c_bridges::contact_callback;
-void seed(const image& pc){for(const auto& g:shared_handler_c_rules::guards)pc.load(g.bytes.va,g.bytes.hex.size()/2);}
+void seed(const image& pc){for(const auto& g:shared_handler_c_rules::guards)pc.load(g.bytes.va,g.bytes.hex.size()/2);pc.load(0x546d4c,6);}
 void keys(u32 mask,const char* v="xml1"){for(unsigned i=0;i<ini::settings.size();++i)ini::settings[i]=(mask&(1u<<i))?std::optional<std::string>(v):std::nullopt;}
 void load_x1(const image& x1,u32 a,std::size_t n) {
  x1.load(a,n,bias);
@@ -484,6 +484,41 @@ void abi_tests() {
  jump_resume=0x4ee9ef;fly_resume=0x4eebb9;fastball_resume=0x4f4b16;
 }
 }
+
+// A skin rebuild can replace a paused controller with a running one. Native
+// Resume assumes a matching Pause and otherwise adds the entire session age.
+float __fastcall clock_duration(void*,void*) {return 100.f;}
+void skin_rebuild_clock_tests(const image& pc) {
+ pc.load(0x573d30,0x60);pc.load(0x574050,0x60);pc.load(0x5761f0,0xf0);pc.load(0x5f5fa0,4);
+ for(u32 a:{0x680030u,0x680518u,0x69c318u})pc.load(a,4);
+ std::array<unsigned char,0x60> controller{};std::array<void*,0x9c/4> vt{};
+ vt[0x48/4]=reinterpret_cast<void*>(&clock_duration);
+ vt[0x68/4]=at(0x573d30);vt[0x70/4]=at(0x5f5fa0);vt[0x7c/4]=at(0x574050);vt[0x84/4]=at(0x5761f0);
+ field<void*>(controller.data(),0)=vt.data();
+ using skin_callback=void(__fastcall*)(void*,void*,float,float);
+ using time_callback=float(__thiscall*)(void*,float);
+ auto skin_dispatch=reinterpret_cast<skin_callback>(at(0x5761f0));
+ // Execute the production target installed at the actual skin-change call.
+ if(at(0x546d4c)[0]==0xe8)skin_dispatch=reinterpret_cast<skin_callback>(0x546d51+field<int>(at(0x546d4c),1));
+ const auto time_at=reinterpret_cast<time_callback>(at(0x573d30));
+ auto close=[](float a,float b){return std::fabs(a-b)<.0001f;};
+ field<float>(controller.data(),0x14)=.7f;field<float>(controller.data(),0x18)=100.f;
+ field<float>(controller.data(),0x1c)=.25f;field<float>(controller.data(),0x20)=0.f;
+ skin_dispatch(controller.data(),nullptr,105.f,.455f);
+ check(close(time_at(controller.data(),105.f),3.75f),"skin rebuild of running controller keeps current animation phase");
+ check(close(time_at(controller.data(),106.f),4.205f),"skin rebuild preserves the next frame at the restored move speed");
+ check(field<unsigned char>(controller.data(),0x24)==0&&close(field<float>(controller.data(),0x14),.455f),"running skin controller remains running at the requested speed");
+ skin_dispatch(controller.data(),nullptr,106.f,.7f);
+ check(close(time_at(controller.data(),106.f),4.205f),"repeated running skin rebuild never adds the session age");
+ // A real pause must still shift the origin by the five-second pause duration.
+ field<float>(controller.data(),0x14)=.4f;field<float>(controller.data(),0x18)=95.f;
+ field<float>(controller.data(),0x1c)=3.f;field<float>(controller.data(),0x20)=100.f;
+ field<unsigned char>(controller.data(),0x24)=1;
+ skin_dispatch(controller.data(),nullptr,105.f,.7f);
+ check(close(field<float>(controller.data(),0x18),100.f)&&close(field<float>(controller.data(),0x1c),3.f),"paused skin controller retains native elapsed-pause arithmetic");
+ check(field<unsigned char>(controller.data(),0x24)==0&&close(time_at(controller.data(),106.f),7.2f),"valid skin resume clears pause and keeps requested native rate");
+}
+
 int main(int argc,char** argv) {
  std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("exception %08lX at %p EAX=%08lX ECX=%08lX ESI=%08lX ESP=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Esi,e->ContextRecord->Esp);return EXCEPTION_CONTINUE_SEARCH;});
@@ -574,15 +609,17 @@ int main(int argc,char** argv) {
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
  check(bool(tk_guard_bridges::guard_block_lookup("ch_guard_block"))==bool(mask&shared_handler_c_rules::guard),"only Guard publishes its private block handler");
  check(shared_handlers_c::values()[1]==((mask&shared_handler_c_rules::guard)?1u:0u),"Guard policy agreement distinguishes old peers while unrelated masks retain their bytes");
+ check(shared_handlers_c::values()[2]==((mask&shared_handler_c_rules::phase)?1u:0u)&&shared_handlers_c::values()[3]==0,"AnimationPhaseRule skin-resume agreement distinguishes old peers while unrelated masks retain their bytes");
  using namespace shared_handler_c_bridges;
  const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
-  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate,&skin_resume};
  auto expected=installation_baseline;auto writes=shared_handler_c_rules::patches(mask,targets);
  for(const auto& p:writes){check(p.before.size()==p.after.size()&&std::equal(p.before.begin(),p.before.end(),pc.read(p.address,p.before.size())),"every written byte is guarded");std::copy(p.after.begin(),p.after.end(),expected.begin()+p.address-0x401000);}
  check(std::equal(expected.begin(),expected.end(),at(0x401000)),"production installer exact footprint preserves other owners' collision/cancel hooks");
  gameplay_capabilities::record off,on,other;check(off.finalize(),"OFF agreement finalizes");check(gameplay_capabilities::shared_handlers_c_id==46,"coordinator rule 46");
  check(on.add(46,1,shared_handlers_c::values(),true)&&on.finalize()&&on.compare(off.bytes())!=gameplay_capabilities::result::match,"selected C rules refuse OFF peer");
  check(other.add(46,1,{mask^2047u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different C selections refuse peer");
+ if(mask&shared_handler_c_rules::phase)skin_rebuild_clock_tests(pc);
  if(mask!=2047){std::printf("shared handlers C mask %u: %d checks, %d failures\n",mask,checks,failures);return failures?1:0;}
  pc.load(0x4f4ad0,0xc3);load_x1(x1,0xdabe0,0x65);load_x1(x1,0xe11d0,0x100);load_x1(x1,0xdaa00,0x8c);load_x1(x1,0xdad20,0x2e7);
  for(auto a:{0x3c6de4u,0x3c6e40u,0x3d6438u,0x3d643cu,0x3d6430u})x1.load(a,4,bias);

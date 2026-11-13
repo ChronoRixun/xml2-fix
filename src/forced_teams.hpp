@@ -42,6 +42,10 @@ namespace forced_teams
 	// Reads [Game] ForcedTeams, AddHero and JoinHero from xml2-fix.ini and registers the functions. Must run
 	// before XMen2.exe's own code does - from DllMain (see exports.cpp).
 	void install(HMODULE game);
+	// Gameplay agreement rule 63 (seatParty revives a fallen seated hero): requested = [Game] ForcedTeams present in the game (XMen2.exe at 0x400000);
+	// revives = the functions registered (seatParty revives whenever a script calls it). Valid after install.
+	bool requested();
+	bool revives();
 }
 
 namespace forced_teams { inline void register_stats_layout(){stats_layout::register_consumer(stats_layout::consumer::forced_teams);} }

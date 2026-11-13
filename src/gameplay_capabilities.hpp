@@ -17,7 +17,7 @@ namespace gameplay_capabilities
   gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29,
   world_backfaces_id=30, igb_cache_id=31, resource_names_id=32, actor_slots_id=33, item_enhancements_id=34,
   fight_styles_id=35, effect_curves_id=36, move_triggers_id=37, lift_rule_id=38, wall_cling_id=39,
-  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, native_save_layout_id=47, anim_enums_id=48, char_sounds_id=49, resident_stats_id=50, motion_pool_id=51, xml1_economy_id=52, effect_files_id=55, style_events_id=53, fight_moves_id=54, primitive_defs_id=56, effect_vectors_id=57, primitives_per_effect_id=58, script_pools_id=59, particle_scratch_id=60, attached_powerups_id=61, vf_nodes_id=62, online_removal_notice_id=64;
+  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, native_save_layout_id=47, anim_enums_id=48, char_sounds_id=49, resident_stats_id=50, motion_pool_id=51, xml1_economy_id=52, effect_files_id=55, style_events_id=53, fight_moves_id=54, primitive_defs_id=56, effect_vectors_id=57, primitives_per_effect_id=58, script_pools_id=59, particle_scratch_id=60, attached_powerups_id=61, vf_nodes_id=62, forced_party_revival_id=63, online_removal_notice_id=64;
  // Rules 17..29 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md; 25 = [Online] Transport=gns, docs/gns-transport.md;
  // 26 = [Online] JoinInProgress, docs/join-in-progress.md; 27 = [Game] OnlineConversations=lockstep, docs/gameplay-agreement.md;
  // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md;
@@ -29,6 +29,9 @@ namespace gameplay_capabilities
  // 43 = [Game] Xml1RogueDecide=xml1, docs/xml1-rogue-decide.md;
  // 44 = [Limits] ActorPools=124 (ActorAI), docs/actor-pools.md; 45 = [Game] Xml1GrabCarry=xml1, docs/xml1-grab-carry.md; 46 = the wave-C shared handler keys, docs/shared-handler-c-rules.md)
  // participate only when requested; OFF preserves the released digest.
+ // 63 = [Game] ForcedTeams: seatParty revives a fallen seated hero (forced_teams_rules::revive_fallen), revision 1
+ // {installed ? 1 : 0,0,0,0}; requested only (the key present, ForcedTeams=0 too: the functions still exist), a refused
+ // install registers unverified.
  constexpr std::uint16_t fast_transfer_revision=1;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only). Revision 3 whenever
@@ -118,6 +121,7 @@ namespace gameplay_capabilities
   case script_pools_id: return "ScriptPools";
   case attached_powerups_id: return "AttachedPowerups";
   case vf_nodes_id: return "VFNodes";
+  case forced_party_revival_id: return "ForcedTeams (fallen heroes revived)";
   case native_save_layout_id: return "NativeSaveLayout";
   case xml1_economy_id: return "Xml1Economy";
   case online_removal_notice_id: return "OnlineRemovalNotice";

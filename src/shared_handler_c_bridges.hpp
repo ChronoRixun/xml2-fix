@@ -5,6 +5,17 @@
 namespace shared_handler_c_bridges {
 using namespace shared_handler_bridges;
 using contact_callback=void(__thiscall*)(void*,void*,void*,void*);
+// A skin rebuild can replace the paused controller. Native Resume then has no
+// matching Pause: its zero pause timestamp shifts the origin by the session age.
+// Keep the running controller's phase through native SetRate instead. A genuine
+// pause retains the complete native Resume path, including child controllers.
+inline void __fastcall skin_resume(void* controller,void*,float now,float rate) {
+ if(field<unsigned char>(controller,0x24))
+  method<void(__thiscall*)(void*,float,float)>(controller,0x84)(controller,now,rate);
+ else
+  method<void(__thiscall*)(void*,float,float)>(controller,0x7c)(controller,rate,now);
+}
+
 inline void dispatch(void* actor,u32 id,void* recipient) {
  auto* move=field<void*>(actor,0x378);
  method<void(__thiscall*)(void*,u32,void*,void*)>(move,0x14)(move,id,actor,recipient);

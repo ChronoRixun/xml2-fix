@@ -36,6 +36,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -548,6 +549,43 @@ namespace forced_teams_rules
 	constexpr DWORD registry_stats_slot = 0x74;     // stats* (short index)
 	constexpr DWORD registry_has_stats_slot = 0x78; // bool (short index)
 	constexpr DWORD registry_herostat_slot = 0x7c;  // bool (short index): a herostat hero (entry flag bit 0)
+
+	// ---- A seated hero's saved vitals (seatParty) ----------------------------------------------------------
+	//
+	// A herostat hero's stats (CStats, registry vt+0x74) keep an extension object at CStats+0xc0 (vtable 0x685294,
+	// stored by its constructor at 0x44a436) that holds the hero's vitals between zones: health (float +0x28),
+	// energy (float +0x2c), player seat (int +0x30) and a flags byte (+0x34) whose bit 0 says they are valid. The
+	// zone load spawns a seated hero with them when the bit is set: a hero who fell and was benched (at an Xtraction
+	// Point's Change Team) keeps health <= 0 and spawns dead. The object's vt+0x1c (0x44a670) clears them - health and
+	// energy 0, seat -1, the valid bit off - and the next spawn is a fresh one, standing (Magma at level 25 came back with 310 of 357 in the live check); the registry's vt+0xc (0x449d70)
+	// runs it for every roster hero.
+	//
+	// The first game does exactly that at every mission start that doesn't keep its heroes: its beginmission
+	// (XBE 0x18da90) calls the campaign registry's vt+0xc (0x55020: every roster hero's health 0, energy 0, seat -1,
+	// valid bit off) when the mission's keepheroes bit (+0x12f bit 1) is clear, before its party builder seats the
+	// REQUIRED heroes (0x18d6d0). The port runs those mission starts as scripts (seatParty, then loadMapKeepTeam),
+	// which never reset the vitals: a fallen hero seated alone (Magma at the Act 8 status meeting, benched dead
+	// during the riots) spawned at her saved health -54 and the zone opened on "All X-Men have been eliminated".
+	// seatParty clears the vitals of each hero it seats who has fallen, so a forced party never starts dead.
+	constexpr DWORD hero_extension_offset = 0xc0;   // CStats+0xc0: the extension object
+	constexpr DWORD hero_extension_vtable = 0x685294;
+	constexpr DWORD vitals_health = 0x28;           // float
+	constexpr DWORD vitals_flags = 0x34;            // byte: bit 0 = the saved vitals are valid
+	constexpr DWORD vitals_clear_slot = 0x1c;       // vt+0x1c: 0x44a670, __thiscall void ()
+	constexpr DWORD vitals_clear = 0x44a670;
+
+	struct saved_vitals
+	{
+		bool valid = false;
+		float health = 0.0f;
+	};
+
+	// Fallen: valid vitals whose health is below 1 (XML1's death threshold, DeathRule=xml1; XMen2.exe's own is 0,
+	// and a hero spawned with health in (0, 1) under it is merely healed). NaN counts as fallen.
+	constexpr bool fallen(const saved_vitals& v)
+	{
+		return v.valid && !(v.health >= 1.0f);
+	}
 	constexpr DWORD intern_name = 0x425bf0;         // __thiscall (uint* handle, const char*): 0 for ""
 	constexpr DWORD name_text = 0x425bc0;           // __thiscall const char* (const uint* handle): "" for 0
 	constexpr DWORD script_system_getter = 0x4d8770;
@@ -637,7 +675,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 118> guards{{
+	inline constexpr std::array<guard, 121> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -660,6 +698,10 @@ namespace forced_teams_rules
 		{0x468e6d, "c7061c6e6800", "the game's vtable (0x686e1c, stored at 0x468e6d)"},
 		{0x686f0c, "10c84600", "game vt+0xf0 (the slot setter 0x46c810)"},
 		{0x686f8c, "f0c94600", "game vt+0x170 (the dormant addHero 0x46c9f0)"},
+		// A seated hero's saved vitals (seatParty revives a fallen one).
+		{0x44a436, "c70694526800", "a herostat hero's extension object: the vtable 0x685294 (0x44a436)"},
+		{0x6852b0, "70a64400", "the extension's vt+0x1c (the vitals reset 0x44a670)"},
+		{0x44a670, "33c089412c8941288a413424fec74130ffffffff884134c3", "the vitals reset (0x44a670): health, energy 0, seat -1, valid bit off"},
 		{0x46c810, "81ec08010000a1f8386f0053578bbc241401000085ff8984240c0100008bd90f8ce500000083ff040f8ddc", "the slot setter's prologue (0x46c810)"},
 		{0x46c883, "8b74bb148d7cbb14", "the party slots at game+0x14 (0x46c883)"},
 		{0x46c928, "81c408010000c20800", "the slot setter's ret 8 (0x46c928)"},
@@ -1108,10 +1150,47 @@ namespace forced_teams_rules
 		return nullptr;
 	}
 
+	inline std::string health_text(const float health)
+	{
+		char text[32];
+		std::snprintf(text, sizeof text, "%.1f", static_cast<double>(health));
+		return text;
+	}
+
+	// A seated hero who has fallen (saved vitals valid, health below 1) gets the game's own vitals reset, so the
+	// next zone load spawns them fresh (see saved_vitals). "" when the hero hadn't fallen; otherwise the
+	// text seatParty's log line ends with.
+	template <typename Engine>
+	std::string revive_fallen(Engine& e, const std::string& name)
+	{
+		const auto index = e.hero_index(name);
+		if (!index || *index <= 0)
+		{
+			return "; ERROR: " + name + "'s index couldn't be read (registry vt+0x3c) - saved vitals left as they are";
+		}
+		const auto vitals = e.vitals(*index);
+		if (!vitals)
+		{
+			return "; ERROR: " + name + "'s saved vitals couldn't be read (CStats+0xc0 isn't the herostat extension 0x685294) - left as they are";
+		}
+		if (!fallen(*vitals))
+		{
+			return "";
+		}
+		if (!e.clear_vitals(*index))
+		{
+			return "; ERROR: " + name + " has fallen (saved health " + health_text(vitals->health) +
+			       ") and the game's vitals reset (extension vt+0x1c, 0x44a670) couldn't run - they spawn as saved";
+		}
+		return "; " + name + " had fallen (saved health " + health_text(vitals->health) +
+		       ") - vitals reset (0x44a670): spawns fresh at the zone load, as after the first game's mission-start reset";
+	}
+
 	// seatParty(h1, h2, h3, h4): the party becomes exactly these heroes, through the game's slot
 	// setter (game vt+0xf0), as restorelastzone (0x5f4612-0x5f4667) and the Danger Room's course
 	// start do; nothing spawns until the next zone load (0x486dd0), which the script does next. All
 	// or nothing: a name that isn't a herostat hero, or no name at all, leaves the party as it is.
+	// A seated hero who has fallen is revived (revive_fallen): a forced party never starts dead.
 	template <typename Engine>
 	void* seat_party(Engine& e, void* args)
 	{
@@ -1150,7 +1229,15 @@ namespace forced_teams_rules
 		{
 			dropped += " named twice - seated once)";
 		}
-		e.log(call + " -> " + party_text(e) + " (was " + before + ")" + dropped);
+		std::string revived;
+		for (const auto& name : order.slots)
+		{
+			if (!name.empty())
+			{
+				revived += revive_fallen(e, name);
+			}
+		}
+		e.log(call + " -> " + party_text(e) + " (was " + before + ")" + dropped + revived);
 		return nullptr;
 	}
 
