@@ -15,8 +15,10 @@ bool requested(){return wanted!=0;}
 bool installed(){return applied!=0&&applied==wanted;}
 bool verified(){return valid&&wanted==applied;}
 // Guard's corrected admission and private block policy must refuse older peers.
+// AnimationPhaseRule's skin-change resume (1.11.0-beta.8: a running controller keeps its phase instead of jumping a
+// whole stride) changes what every peer simulates, so value 2 refuses peers without it the same way.
 // Unrelated rule46 selections retain their original agreement bytes.
-std::array<std::uint32_t,4> values(){return {applied,(applied&shared_handler_c_rules::guard)?1u:0u,0,0};}
+std::array<std::uint32_t,4> values(){return {applied,(applied&shared_handler_c_rules::guard)?1u:0u,(applied&shared_handler_c_rules::phase)?1u:0u,0};}
 void install(HMODULE game) {
  using namespace shared_handler_c_rules;
  if(applied)return;
@@ -48,7 +50,7 @@ void install(HMODULE game) {
  }
  using namespace shared_handler_c_bridges;
  const targets callbacks{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
-  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate,&skin_resume};
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
   if(wanted&guard){

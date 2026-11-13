@@ -1,6 +1,6 @@
 # Shared handlers C (rule 46)
 
-All keys are under `[Game]`, accept `xml1` or `xml2`, and default to native. Absent, empty, and `xml2` perform no image accesses or writes and register no agreement entry. Invalid selections or mismatched executable bytes remain unverified. A selected mask installs in a single guarded transaction with readback and rollback. Requested-only agreement ID 46 revision 1 records `{installed_mask,0,0,0}`. Rule 42 remains independent. Callback registration guards cover only the slots each part owns; fly-charge collision and pickup cancellation may already belong to the grab/carry installer. The fixture installs external replacements in those slots before C and verifies they remain unchanged. Full combined startup and lifecycle validation still belongs to integration. Capacity-owned contact query APIs accept only the exact replacement target published by the verified capacity installer; arbitrary jumps are refused.
+All keys are under `[Game]`, accept `xml1` or `xml2`, and default to native. Absent, empty, and `xml2` perform no image accesses or writes and register no agreement entry. Invalid selections or mismatched executable bytes remain unverified. A selected mask installs in a single guarded transaction with readback and rollback. Requested-only agreement ID 46 revision 1 records `{installed_mask, guard ? 1 : 0, AnimationPhaseRule ? 1 : 0, 0}` (the third value since 1.11.0-beta.8: the skin-change resume fix below). Rule 42 remains independent. Callback registration guards cover only the slots each part owns; fly-charge collision and pickup cancellation may already belong to the grab/carry installer. The fixture installs external replacements in those slots before C and verifies they remain unchanged. Full combined startup and lifecycle validation still belongs to integration. Capacity-owned contact query APIs accept only the exact replacement target published by the verified capacity installer; arbitrary jumps are refused.
 
 | Bit | Key | Source behavior and PC sites |
 |---:|---|---|
@@ -11,7 +11,7 @@ All keys are under `[Game]`, accept `xml1` or `xml2`, and default to native. Abs
 | 16 | FastballRule | Event bridge 4f4adf emits for actors, non-actors and null contacts. Native angle, response velocity and action tail remain. |
 | 32 | IdleBoredRule | Source map predicate slot 3c; remove controller/team exclusions and nonhumanoidskeleton selection gate; restore bored entry policy. The native stun redirection bytes remain untouched and rule 18 retains stun ownership. |
 | 64 | LocomotionScaleRule | Remove the local animation-rate division by scale_factor at 4f01d4. |
-| 128 | AnimationPhaseRule | Remove additional input phase-preservation bit write at 4f026a, shared by move and pickup idle/walk. Preserve all incoming flags and default input result. |
+| 128 | AnimationPhaseRule | Remove additional input phase-preservation bit write at 4f026a, shared by move and pickup idle/walk. Preserve all incoming flags and default input result. On a skin rebuild, already running animation controllers use native SetRate instead of an unmatched Resume; a genuine pause retains native Resume. |
 | 256 | TeleportVisibilityRule | Temporary suppression cleanup at 4efc7e and 4f44a4 follows the source even with an invisibility affecter. This key affects visuals and participates in rule 46 for exact selection agreement. |
 | 512 | TelekinesisRule | Coupled suspend parser/entry/control/release/cancel, signed tklevel and damagelevel, token sidecar and rule45 lifecycle. |
 | 1024 | GuardDecideRule | Source short entry and input-scheduled interaction policy, pickup claim and rank-3 walllunge acquisition. |
@@ -53,3 +53,25 @@ context produces damage/range/knockback 0/0/0; caster and fixed collision produc
 9/40/190. Its registry, modifier and terminal volume/HP services are synthetic.
 Arc180 takes XML1 `5BA90` / PC `450580`; live query membership/defenses remain
 validation work. The fixed-box difference belongs to another arc branch.
+
+## Skin rebuild clock regression
+
+Juggernaut's armor swaps the model during the mansion flashback. The PC skin
+replacement path at `0x546d4c` resumes its resulting animation controller even
+when that controller is already running. With no matching pause timestamp,
+native Resume adds the entire session age to the animation origin. A following
+speed change can produce negative animation time; root motion then arrives in
+whole strides and the boss overshoots his room waypoint repeatedly.
+
+The XML1 animation-phase selection replaces only that skin-change call. Paused
+controllers retain native Resume(now, rate). Running controllers use native
+SetRate(rate, now), preserving phase and child-controller rate propagation.
+The call context, controller clock layout and native callback slots are guarded
+in the existing all-or-nothing transaction. Disabled selections remain native.
+
+The native fixture executes the owner's actual clock getter, rate setter and
+resume code on invented controller states. It checks current/next-frame phase,
+repeated running rebuilds, requested speed, and valid elapsed-pause arithmetic.
+Agreement: rule 46's third value is 1 whenever AnimationPhaseRule is installed
+(1.11.0-beta.8), so a peer without this resume refuses and is refused naming
+rule 46; other selections keep their bytes.

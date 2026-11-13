@@ -1,3 +1,8 @@
+Rule **46 Shared handler C rules** (1.11.0-beta.8) records `{installed_mask, guard ? 1 : 0, AnimationPhaseRule ? 1 : 0, 0}`.
+The third value is new: with `AnimationPhaseRule=xml1` the armor/skin-change resume keeps a running animation's phase
+(Juggernaut no longer covers whole running strides at once), so peers without it are refused naming rule 46. Other
+rule-46 selections keep their earlier bytes.
+
 Rule **42 Shared handler rules** uses revision **2** when `SkatingRule=xml1`
 is requested (including an unverified request), otherwise revision **1**. Values
 remain `{installed_mask,0,0,0}`. Skating continuation now invokes exit when its
