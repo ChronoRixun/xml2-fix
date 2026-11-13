@@ -437,6 +437,11 @@ namespace
 		script_functions::install(game);
 		script_pools::install(game);
 		forced_teams::install(game);
+		// seatParty revives a fallen seated hero (the first game's mission start resets every hero's vitals): what spawns
+		// at the next zone load, so every peer must seat alike (rule 63). Requested = [Game] ForcedTeams present.
+		if (forced_teams::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::forced_party_revival_id, 1, {forced_teams::revives() ? 1u : 0u, 0, 0, 0},
+			                                  forced_teams::revives());
 		online_menus::install(game);
 		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
 		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.

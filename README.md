@@ -584,7 +584,7 @@ It works by pointing one call (the accept check), one call (the pending reply's 
 | Function | Does |
 | -------- | ---- |
 | `xml2fixFeature("forcedteams")` | 1 when `ForcedTeams=1` (`"addhero"`: `AddHero=1` too; `"joinhero"`: `JoinHero` isn't 0; `"skillpoints"`: always, the functions being there), else 0 |
-| `seatParty("magma", "", "", "")` | the party becomes exactly these heroes (herostat heroes only; empty strings are empty slots); the script's next statement loads the zone |
+| `seatParty("magma", "", "", "")` | the party becomes exactly these heroes (herostat heroes only; empty strings are empty slots); the script's next statement loads the zone. A seated hero who has fallen (benched while down) has their saved vitals reset and spawns standing, as at the first game's mission starts |
 | `setSkinset("civilian", "magma")` | the costume for the listed heroes that have it, default for every hero in a mission costume (default, 60s, 70s, weaponx, civilian); a player's own pick (astonishing, aoa, future, winter) stays |
 | `pushParty("_ACTIVE_HERO_")` | saves the zone, the party and that hero's spot on the game's side-mission stack (two at most), before a flashback |
 | `popParty("mansion/man2/subbasement2")` | back to the saved zone, party and spot; with nothing saved, the team menu at the zone given. Once per end: a second call before the first has taken the player away (every sentinel's death script ends one flashback) does nothing |

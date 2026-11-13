@@ -3401,6 +3401,23 @@ namespace
 		std::optional<int> costume(const int index) { return find(index)->costume; }
 		std::optional<bool> has_variant(const int index, const int costume) { return find(index)->variants[static_cast<std::size_t>(costume)] != 0; }
 		bool set_costume(const int index, const int costume) { find(index)->costume = costume; return true; }
+		// A hero's saved vitals (CStats+0xc0 +0x28 / +0x34 bit 0) and the game's reset (extension vt+0x1c, 0x44a670).
+		std::map<int, forced_teams_rules::saved_vitals> saved;
+		std::set<int> vitals_fault, clear_fault;
+		std::vector<int> cleared;
+		std::optional<forced_teams_rules::saved_vitals> vitals(const int index)
+		{
+			if (vitals_fault.count(index)) return std::nullopt;
+			const auto f = saved.find(index);
+			return f == saved.end() ? forced_teams_rules::saved_vitals{} : f->second;
+		}
+		bool clear_vitals(const int index)
+		{
+			if (clear_fault.count(index)) return false;
+			cleared.push_back(index);
+			saved[index] = forced_teams_rules::saved_vitals{};
+			return true;
+		}
 		std::optional<int> side_records() { return static_cast<int>(records.size()); }
 		std::optional<forced_teams_rules::side_record> side_record_at(const int i)
 		{
@@ -3756,6 +3773,50 @@ namespace
 			s.text("magma").text("").text("");
 			seat_party(e, &s.args);
 			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("couldn't read argument 4 - nothing done") != std::string::npos);
+		}
+		// seatParty revives a seated hero who has fallen (the Act 8 status meeting: Magma benched dead in the riots,
+		// saved health -53.98, seated alone - she spawned dead and the zone opened on "All X-Men have been
+		// eliminated"). Only seated heroes, only fallen ones (valid vitals, health below 1); a fault is logged and
+		// the party is seated all the same.
+		{
+			CHECK(fallen({true, -53.97888f}) && fallen({true, 0.0f}) && fallen({true, 0.5f}) && !fallen({true, 1.0f}) && !fallen({true, 40.0f}) &&
+			      !fallen({false, -53.97888f}) && !fallen({false, 0.0f}) && fallen({true, std::numeric_limits<float>::quiet_NaN()}));
+			e.saved = {{5, {true, -53.97888f}}, {12, {true, -10.0f}}, {9, {true, 40.0f}}, {20, {false, 0.0f}}};
+			e.cleared.clear();
+			script_call c(vtables);
+			c.text("magma").text("").text("").text("");
+			seat_party(e, &c.args);
+			CHECK((e.slots == party{"magma", "", "", ""}) && e.cleared == std::vector<int>{5} && !fallen(*e.vitals(5)) && fallen(*e.vitals(12)));
+			CHECK(e.last() == "forced teams: seatParty(\"magma\", \"\", \"\", \"\") -> magma / - / - / - (was cyclops / phoenix / wolverine / -); magma had fallen "
+			                  "(saved health -54.0) - vitals reset (0x44a670): spawns fresh at the zone load, as after the first game's mission-start reset");
+			// Low health but standing, never-saved vitals and a benched fallen hero (Colossus) are left as they are.
+			e.cleared.clear();
+			script_call d(vtables);
+			d.text("iceman").text("cyclops").text("").text("");
+			seat_party(e, &d.args);
+			CHECK((e.slots == party{"iceman", "cyclops", "", ""}) && e.cleared.empty() && e.last().find("fallen") == std::string::npos && fallen(*e.vitals(12)));
+			// A refusal seats nobody and revives nobody.
+			script_call r(vtables);
+			r.text("colossus").text("nobody").text("").text("");
+			seat_party(e, &r.args);
+			CHECK((e.slots == party{"iceman", "cyclops", "", ""}) && e.cleared.empty() && fallen(*e.vitals(12)));
+			// Faults: the vitals unreadable, the reset refused - logged, the party seated.
+			e.vitals_fault = {9};
+			e.clear_fault = {12};
+			script_call f(vtables);
+			f.text("colossus").text("iceman").text("").text("");
+			seat_party(e, &f.args);
+			CHECK((e.slots == party{"colossus", "iceman", "", ""}) && e.cleared.empty() && fallen(*e.vitals(12)) &&
+			      e.last().find("; ERROR: colossus has fallen (saved health -10.0) and the game's vitals reset (extension vt+0x1c, 0x44a670) couldn't run") != std::string::npos &&
+			      e.last().find("; ERROR: iceman's saved vitals couldn't be read") != std::string::npos);
+			e.vitals_fault.clear();
+			e.clear_fault.clear();
+			e.saved.clear();
+			e.cleared.clear();
+			script_call back(vtables);
+			back.text("cyclops").text("phoenix").text("wolverine").text("");
+			seat_party(e, &back.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.cleared.empty());
 		}
 		{
 			e.seat_fault_at = 2;
@@ -4267,7 +4328,7 @@ namespace
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
 		// The two value makers are checked through ScriptPools' published
 		// guards; its native fixture tests their retail and relocated bytes.
-		CHECK(guards_ok && guards.size() == 118);
+		CHECK(guards_ok && guards.size() == 121);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -4322,6 +4383,31 @@ namespace
 			CHECK(get(block.data(), nullptr) == 4);
 			set(block.data(), nullptr, 5);
 			CHECK(get(block.data(), nullptr) == 5 && block == expected);
+		}
+
+		// The vitals reset seatParty runs on a fallen seated hero (extension vt+0x1c, 0x44a670), on an extension object
+		// of the test's own: health and energy 0, seat -1, bit 0 of the flags off and the other bits kept; nothing else.
+		if (retail)
+		{
+			using clear_t = void(__fastcall*)(void*, void*);
+			CHECK(dword_at(0x6852b0) == vitals_clear && dword_at(0x44a436 + 2) == hero_extension_vtable);
+			std::array<std::uint8_t, 0x40> extension{};
+			for (std::size_t i = 0; i < extension.size(); ++i) extension[i] = static_cast<std::uint8_t>(0xa0 + i);
+			const float health = -53.97888f, energy = 12.5f;
+			const std::int32_t seat = 0;
+			std::memcpy(extension.data() + vitals_health, &health, 4);
+			std::memcpy(extension.data() + 0x2c, &energy, 4);
+			std::memcpy(extension.data() + 0x30, &seat, 4);
+			extension[vitals_flags] = 0x07;
+			auto expected = extension;
+			const float zero = 0.0f;
+			const std::int32_t none = -1;
+			std::memcpy(expected.data() + vitals_health, &zero, 4);
+			std::memcpy(expected.data() + 0x2c, &zero, 4);
+			std::memcpy(expected.data() + 0x30, &none, 4);
+			expected[vitals_flags] = 0x06;
+			reinterpret_cast<clear_t>(at(vitals_clear))(extension.data(), nullptr);
+			CHECK(extension == expected);
 		}
 
 		// The game's names: its 289 functions and 19 builtins; none of the ten is among them, nor
