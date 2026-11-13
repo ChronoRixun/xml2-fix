@@ -1,4 +1,5 @@
 #pragma once
+#include "event_pool_rules.hpp"
 #include "limits_rules.hpp"
 #include <array>
 #include <cstring>

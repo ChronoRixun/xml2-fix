@@ -678,6 +678,8 @@ __declspec(naked) void spawn_entry_bridge()
 // the retail pool init and the records and heap pairs are re-added through the retail alloc / store / push, so both
 // peers hold byte-identical queues for the same live set.
 std::uint32_t event_manager_at = event_manager_object, entity_of_handle_at = entity_of_handle; // mutable for the owned native fixture only
+// The manager object: the fixture's own image when a test set one, else where the pool module installed it (event_pool_rules.hpp).
+std::uint32_t event_manager_now() { return event_manager_at != event_manager_object ? event_manager_at : event_pool_rules::installed_object; }
 // Follow-up 8: the pump slot (vt+0xc) is accepted when it holds retail 0x4b2d60 or the dispatch hook xml1_turrets
 // installed there before this module. The rebuild and the probe never call the pump (alloc / store / push / reads).
 bool event_pump_slot_ok()
@@ -696,15 +698,15 @@ std::uint32_t event_index_mask()
 // Reads the heap pairs and their records; false when the counts are implausible (nothing is touched then).
 bool read_event_entries(std::uint8_t* body, std::vector<join_in_progress_core::event_entry>& out, unsigned& dead, unsigned& stale)
 {
-	const auto heap_count = at<std::uint32_t>(body, event_heap_count_at);
-	if (heap_count > event_records) return false;
+	const auto heap_count = at<std::uint32_t>(body, event_pool_rules::installed_layout.heap_count);
+	if (heap_count > event_pool_rules::installed_layout.records) return false;
 	out.clear(); out.reserve(heap_count); dead = stale = 0;
 	for (std::uint32_t i = 0; i < heap_count; ++i)
 	{
 		join_in_progress_core::event_entry e{};
-		const auto pair = body + event_heap_at + i * 8;
+		const auto pair = body + event_pool_rules::installed_layout.heap + i * 8;
 		std::memcpy(&e.time, pair, 4); std::memcpy(&e.index, pair + 4, 4);
-		if (e.index >= event_records) return false;
+		if (e.index >= event_pool_rules::installed_layout.records) return false;
 		const auto record = body + e.index * event_record_bytes;
 		e.handle = at<std::uint32_t>(record, 0); e.event = at<std::uint32_t>(record, 4);
 		std::memcpy(e.payload, record + 8, sizeof e.payload);
@@ -732,7 +734,7 @@ constexpr unsigned probe_event_limit = 256, probe_events_per_line = 16;
 void probe_events_body(const char* where)
 {
 	{
-		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_at);
+		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_now());
 		if (at<std::uint32_t>(object, 0) != event_manager_vtable) { logger::write("jip events: where=%s (unexpected manager vtable %08x)", where, at<std::uint32_t>(object, 0)); return; }
 		auto* body = object + event_body_at;
 		std::vector<join_in_progress_core::event_entry> entries; unsigned dead = 0, stale = 0;
@@ -742,7 +744,7 @@ void probe_events_body(const char* where)
 		for (unsigned part = 0; part < parts; ++part)
 		{
 			char line[1500]; int n = std::snprintf(line, sizeof line, "jip events: where=%s heap=%u records=%u ring=r:%u/w:%u/n:%u live=%u dead=%u stale=%u rebuilds=%u part=%u/%u head=",
-				where, at<std::uint32_t>(body, event_heap_count_at), at<std::uint32_t>(body, event_record_count_at), at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at),
+				where, at<std::uint32_t>(body, event_pool_rules::installed_layout.heap_count), at<std::uint32_t>(body, event_pool_rules::installed_layout.record_count), at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_read), at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_write), at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_count),
 				ok ? unsigned(entries.size()) - dead : 0, dead, stale, event_rebuilds, part + 1, parts);
 			const unsigned first = part * probe_events_per_line, last = (first + probe_events_per_line < shown) ? first + probe_events_per_line : shown;
 			for (unsigned i = first; i < last && n > 0 && n < int(sizeof line) - 80; ++i)
@@ -811,15 +813,15 @@ void canonical_party_seat_events(const char* where, bool wanted)
 void canonical_event_queue_body(const char* where)
 {
 	{
-		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_at);
+		auto* object = reinterpret_cast<std::uint8_t*>(event_manager_now());
 		if (at<std::uint32_t>(object, 0) != event_manager_vtable)
 		{
 			logger::write_once("jip:events-vtable", "join in progress: the timed-event manager has an unexpected vtable %08x - its queue is left as it is", at<std::uint32_t>(object, 0));
 			return;
 		}
 		auto* body = object + event_body_at;
-		const auto heap_count = at<std::uint32_t>(body, event_heap_count_at), records = at<std::uint32_t>(body, event_record_count_at);
-		const auto ring_read = at<std::uint32_t>(body, event_ring_read_at), ring_write = at<std::uint32_t>(body, event_ring_write_at), ring_count = at<std::uint32_t>(body, event_ring_count_at);
+		const auto heap_count = at<std::uint32_t>(body, event_pool_rules::installed_layout.heap_count), records = at<std::uint32_t>(body, event_pool_rules::installed_layout.record_count);
+		const auto ring_read = at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_read), ring_write = at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_write), ring_count = at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_count);
 		std::vector<join_in_progress_core::event_entry> entries; unsigned dead = 0, stale = 0;
 		if (!read_event_entries(body, entries, dead, stale))
 		{
@@ -857,10 +859,10 @@ void canonical_event_queue_body(const char* where)
 		// The pool back to its constructed state (retail pool init: the free ring 0..1124 ascending, read 0), both
 		// bitmaps and both counts cleared, then every kept entry re-added through the retail alloc / store / heap push.
 		fn<void(__thiscall*)(void*)>(event_pool_init)(body);
-		std::memset(body + event_used_bitmap_at, 0, 0x24 * 4);
-		std::memset(body + event_alloc_bitmap_at, 0, 0x24 * 4);
-		at<std::uint32_t>(body, event_record_count_at) = 0;
-		at<std::uint32_t>(body, event_heap_count_at) = 0;
+		std::memset(body + event_pool_rules::installed_layout.used_bitmap, 0, event_pool_rules::installed_layout.words * 4);
+		std::memset(body + event_pool_rules::installed_layout.alloc_bitmap, 0, event_pool_rules::installed_layout.words * 4);
+		at<std::uint32_t>(body, event_pool_rules::installed_layout.record_count) = 0;
+		at<std::uint32_t>(body, event_pool_rules::installed_layout.heap_count) = 0;
 		for (const auto& e : entries)
 		{
 			const auto index = fn<std::uint32_t(__thiscall*)(void*)>(event_record_alloc)(body);
@@ -868,12 +870,12 @@ void canonical_event_queue_body(const char* where)
 			std::memcpy(record, &e.handle, 4); std::memcpy(record + 4, &e.event, 4); std::memcpy(record + 8, e.payload, sizeof e.payload);
 			fn<void(__thiscall*)(void*, std::uint32_t, const void*)>(event_record_store)(body, index, record);
 			struct { float time; std::uint32_t index; } pair{e.time, index};
-			fn<void(__thiscall*)(void*, const void*)>(event_heap_push)(body + event_heap_at, &pair);
+			fn<void(__thiscall*)(void*, const void*)>(event_heap_push)(body + event_pool_rules::installed_layout.heap, &pair);
 		}
 		++event_rebuilds; event_last_live = unsigned(entries.size()); event_last_dead = dead;
 		logger::write("join in progress: canonical restart - the timed-event queue (every actor update) is rebuilt in canonical order at %s on every peer: %u entries kept (%u whose owner is gone dropped, %u cancelled kept, %u party-hero moved event(s) dropped, %u AI-hero periodic event(s) dropped), heap %u -> %u, records %u -> %u, free ring r:%u/w:%u/n:%u -> r:%u/w:%u/n:%u, index mask %03x (rebuild %u)",
-			where, unsigned(entries.size()), dead, stale, moved_dropped_last, seat_dropped_last, heap_count, at<std::uint32_t>(body, event_heap_count_at), records, at<std::uint32_t>(body, event_record_count_at),
-			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_ring_read_at), at<std::uint32_t>(body, event_ring_write_at), at<std::uint32_t>(body, event_ring_count_at), mask, event_rebuilds);
+			where, unsigned(entries.size()), dead, stale, moved_dropped_last, seat_dropped_last, heap_count, at<std::uint32_t>(body, event_pool_rules::installed_layout.heap_count), records, at<std::uint32_t>(body, event_pool_rules::installed_layout.record_count),
+			ring_read, ring_write, ring_count, at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_read), at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_write), at<std::uint32_t>(body, event_pool_rules::installed_layout.ring_count), mask, event_rebuilds);
 	}
 }
 void canonical_event_queue(const char* where, bool wanted)

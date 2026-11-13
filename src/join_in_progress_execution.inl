@@ -140,12 +140,12 @@ void execution_snapshot(execution_boundary b, const std::uint32_t* saved)
         if (execution_video_state(video_active)) q.video = 1 | (unsigned(video_active) << 1);
         const auto& installed_entities = entity_capacity::installed();
         q.world_live = at<unsigned>(reinterpret_cast<const void*>(installed_entities.world_object),installed_entities.world_core.live_count);
-        const auto body = event_manager_object + event_body_at;
-        q.event_count = *reinterpret_cast<const unsigned*>(body + event_heap_count_at);
+        const auto body = event_pool_rules::installed_object + event_body_at;
+        q.event_count = *reinterpret_cast<const unsigned*>(body + event_pool_rules::installed_layout.heap_count);
         q.event_hash = 2166136261u;
         // A bounded local head digest, not a canonical cross-PC event identity.
         for (unsigned i = 0; i < std::min(q.event_count, 8u)*2; ++i)
-            q.event_hash = (q.event_hash ^ *reinterpret_cast<const unsigned*>(body + event_heap_at + 4*i))*16777619u;
+            q.event_hash = (q.event_hash ^ *reinterpret_cast<const unsigned*>(body + event_pool_rules::installed_layout.heap + 4*i))*16777619u;
         const auto& d = actor_ai::installed();
         const auto pool = d.primary_base ? d.primary_base : brain_pool_stock;
         q.ai_free = *reinterpret_cast<const unsigned*>(pool + actor_ai::ring_free(d));

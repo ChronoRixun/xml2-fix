@@ -1,0 +1,243 @@
+// The timed-event pool (src/event_pool_rules.hpp, src/event_pool.cpp) against the retail manager's own code.
+//   event_pool_test                      rules only (layout, key parsing, the edit plan, the watchdog's verdicts)
+//   event_pool_test <retail exe> defect  the unmodified manager: the 1126th pending event cuts the heap and reuses a live record
+//   event_pool_test <retail exe> raised  the production install: 8192 pending events fire once each, in time order; the 8193rd
+//                                        is dropped; the watchdog reports a broken and an empty queue; a foreign byte refuses
+//   event_pool_test <retail exe> retail-holds   the raised expectations on the UNMODIFIED manager: fails (what the fix is for)
+// The retail image is supplied locally and only mapped into this process; nothing of it is stored in the repository.
+#include "../src/event_pool.cpp"
+#include "../src/entity_capacity_layout.hpp"
+
+#include <algorithm>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <vector>
+
+extern "C" unsigned char union_space[];
+using namespace event_pool_rules;
+using bytes = std::vector<std::uint8_t>;
+static unsigned checks = 0, failures = 0;
+#define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #x); } } while (0)
+static std::string mode = "rules", key_text;
+static bool key_present = false, entities_raised = true, startup_refused = false;
+static std::vector<std::string> lines;
+namespace ini { std::optional<std::string> text(const wchar_t*, const wchar_t*) { return key_present ? std::optional<std::string>(key_text) : std::nullopt; } }
+namespace logger { void write(const char* f, ...) { char b[1024]; va_list a; va_start(a, f); std::vsnprintf(b, sizeof b, f, a); va_end(a); lines.emplace_back(b); std::puts(b); } }
+namespace game_version { void refuse_startup() { startup_refused = true; } }
+namespace entity_capacity { const entity_capacity_layout::descriptor& installed() { static entity_capacity_layout::descriptor d; d.raised = entities_raised; return d; } }
+
+static void* ptr(std::uint32_t p) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(p)); }
+static std::uint32_t& word(std::uint32_t p) { return *static_cast<std::uint32_t*>(ptr(p)); }
+static bytes raw;
+static bool map_image()
+{
+	const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw.data());
+	const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(raw.data() + dos->e_lfanew);
+	if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.ImageBase != 0x400000) return false;
+	DWORD old = 0; if (!VirtualProtect(union_space, 0x700000, PAGE_EXECUTE_READWRITE, &old)) return false;
+	std::memset(union_space, 0, 0x700000);
+	auto* s = IMAGE_FIRST_SECTION(nt);
+	for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) std::memcpy(ptr(0x400000 + s[i].VirtualAddress), raw.data() + s[i].PointerToRawData, s[i].SizeOfRawData);
+	return FlushInstructionCache(GetCurrentProcess(), union_space, 0x700000) != FALSE;
+}
+
+// ---- the fixture's two stand-ins inside the mapped image: the record fire and the game's CRT atexit ----
+static std::vector<std::uint32_t> fired; // the owner field of each fired record, in firing order
+static void __fastcall record_fired(void* record, void*) { fired.push_back(*static_cast<const std::uint32_t*>(record)); }
+static void stub_services()
+{
+	auto* fire = static_cast<unsigned char*>(ptr(0x4199f0)); // record fire (thiscall, no stack arguments): mov eax, fn; jmp eax
+	fire[0] = 0xb8; const auto target = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&record_fired)); std::memcpy(fire + 1, &target, 4); fire[5] = 0xff; fire[6] = 0xe0;
+	auto* at_exit = static_cast<unsigned char*>(ptr(0x67211e)); // cdecl atexit: xor eax, eax; ret
+	at_exit[0] = 0x31; at_exit[1] = 0xc0; at_exit[2] = 0xc3;
+	FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+}
+struct record { std::uint32_t owner, event; std::uint8_t payload[16]; };
+static void* manager() { return reinterpret_cast<void*(__cdecl*)()>(ptr(manager_getter))(); }
+static void add(void* m, std::uint32_t owner, float time)
+{
+	record r{owner, 0x6d7c5c, {}};
+	const auto slot = word(word(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(m))) + 8);
+	reinterpret_cast<void(__thiscall*)(void*, const record*, float)>(ptr(slot))(m, &r, time);
+}
+static void pump(void* m, float now)
+{
+	const auto slot = word(word(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(m))) + 0xc);
+	reinterpret_cast<void(__thiscall*)(void*, float)>(ptr(slot))(m, now);
+}
+static counts read_counts(void* m, const layout& l)
+{
+	const auto* b = static_cast<const unsigned char*>(m) + body_at;
+	const auto u = [&](std::uint32_t o) { std::uint32_t v; std::memcpy(&v, b + o, 4); return v; };
+	const auto pop = [&](std::uint32_t o) { std::uint32_t n = 0; for (std::uint32_t i = 0; i < l.words; ++i) n += std::uint32_t(std::popcount(u(o + i * 4))); return n; };
+	return {u(l.record_count), u(l.heap_count), u(l.ring_count), pop(l.used_bitmap), pop(l.alloc_bitmap)};
+}
+// A deterministic spread of times with many ties (every actor update of a frame shares one time).
+static float time_of(std::uint32_t i) { return 10.f + float((i * 37u) % 97u) * 0.25f; }
+
+static void rules()
+{
+	CHECK(layout_for(0x465) == retail_layout && retail_layout.body_bytes == 0x9f70 && retail_layout.words == 0x24);
+	const auto r = layout_for(raised_records);
+	CHECK(r.records == 8192 && r.words == 256 && r.used_bitmap == 8192 * 24 && r.ring == r.used_bitmap + 1024 && r.heap_count - r.heap == 8192 * 8 + 4);
+	CHECK(r.ring_read - r.ring == 8192 * 4 + 8 && r.ring_count - r.ring == 8192 * 4 + 12 && r.body_bytes == r.heap_count + 4);
+	std::uint32_t v = 0;
+	CHECK(parse_capacity("", 8192, v) && v == 8192); CHECK(parse_capacity("", 1125, v) && v == 1125);
+	CHECK(parse_capacity("0", 8192, v) && v == 1125); CHECK(parse_capacity("1125", 8192, v) && v == 1125);
+	CHECK(parse_capacity("4500", 1125, v) && v == 4512); CHECK(parse_capacity("65536", 1125, v) && v == 65536);
+	CHECK(!parse_capacity("1124", 8192, v)); CHECK(!parse_capacity("65537", 8192, v)); CHECK(!parse_capacity("8k", 8192, v)); CHECK(!parse_capacity("-1", 8192, v));
+	const auto same = plan(retail_layout, retail_object);
+	CHECK(same.size() == event_pool_sites::sites.size() && same.size() == 75);
+	for (const auto& e : same) CHECK(e.before == e.after); // the retail layout at the retail object is the identity
+	const auto p = plan(r, 0x12340000);
+	unsigned changed = 0; for (const auto& e : p) { CHECK(e.before.size() == e.after.size()); changed += e.before != e.after; }
+	CHECK(changed == 75);
+	CHECK(judge({5, 5, 1120, 5, 5}, retail_layout, true) == verdict::ok);
+	CHECK(judge({561, 0, 564, 284, 284}, retail_layout, true) == verdict::counts_disagree); // the frozen game's reading (2026-11-13)
+	CHECK(judge({5, 5, 1120, 4, 5}, retail_layout, true) == verdict::bitmaps_disagree && judge({5, 5, 1120, 4, 5}, retail_layout, false) == verdict::ok);
+	CHECK(judge({1126, 564, 0xffffffffu, 1125, 1125}, retail_layout, true) == verdict::over_capacity);
+	CHECK(add_fits(1124, 1124, retail_layout) && !add_fits(1125, 1125, retail_layout) && !add_fits(8192, 8192, r) && add_fits(8191, 8191, r));
+}
+
+// The unmodified manager at its retail address: what the 1126th pending event does.
+static void defect(bool expect_holds)
+{
+	CHECK(map_image()); stub_services();
+	auto* m = manager();
+	CHECK(m == ptr(retail_object) && word(retail_object) == manager_vtable);
+	const auto& l = retail_layout;
+	for (std::uint32_t i = 0; i < retail_records; ++i) add(m, 1000 + i, time_of(i));
+	CHECK(judge(read_counts(m, l), l, true) == verdict::ok); // 1125 pending: still whole
+	add(m, 5000, 99.f);                                       // one more
+	const auto c = read_counts(m, l);
+	std::printf("retail after 1126 adds: records %u heap %u ring %d used %u alloc %u\n", c.record_count, c.heap_count, int(c.ring_count), c.used_bits, c.alloc_bits);
+	if (expect_holds)
+	{
+		// What a correct queue would do. On the unmodified manager these fail.
+		CHECK(c.heap_count == 1126); CHECK(judge(c, l, true) == verdict::ok);
+		fired.clear(); pump(m, 1.0e9f);
+		CHECK(fired.size() == 1126);
+		return;
+	}
+	// The ring was empty: the alloc handed out ring[read] = record 0 again (still in use by event 1000), and the heap
+	// pair written at [1125] put that index on the heap's count: 1 entry left of 1125, 1124 events cut off.
+	CHECK(c.record_count == 1126 && int(c.ring_count) == -1 && c.used_bits == 1125 && c.alloc_bits == 1125);
+	CHECK(c.heap_count == 1);
+	CHECK(judge(c, l, true) != verdict::ok);
+	fired.clear(); pump(m, 1.0e9f);
+	CHECK(fired.size() == 1 && fired[0] == 5000); // record 0 now holds the new event; event 1000 and 1124 others never fire
+	const auto after = read_counts(m, l);
+	CHECK(after.heap_count == 0 && after.record_count == 1125 && after.used_bits == 1124); // an empty queue with 1124 records "in use": the freeze
+	std::printf("retail after the pump: records %u heap %u ring %d used %u alloc %u; fired %zu\n", after.record_count, after.heap_count, int(after.ring_count), after.used_bits, after.alloc_bits, fired.size());
+}
+
+static bool has_line(const char* part) { return std::any_of(lines.begin(), lines.end(), [&](const std::string& s) { return s.find(part) != std::string::npos; }); }
+
+static void raised_install()
+{
+	CHECK(map_image()); stub_services();
+	const bytes before(union_space, union_space + 0x700000);
+	// A foreign byte in one edited instruction refuses everything and leaves the image as it was.
+	static_cast<unsigned char*>(ptr(0x4b2c14))[0] ^= 0x01; // the opcode byte of an edited instruction (record alloc)
+	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
+	CHECK(!event_pool::installed() && !event_pool::raised() && has_line("not retail") && installed_object == retail_object && installed_layout == retail_layout);
+	static_cast<unsigned char*>(ptr(0x4b2c14))[0] ^= 0x01;
+	CHECK(std::memcmp(before.data(), union_space, before.size()) == 0);
+	// Not requested: plain XML2 (no key, stock entity capacity) writes nothing.
+	entities_raised = false; lines.clear();
+	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
+	CHECK(!event_pool::installed() && lines.empty() && std::memcmp(before.data(), union_space, before.size()) == 0);
+	entities_raised = true;
+	// The production default: raised with the entity capacity.
+	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
+	CHECK(event_pool::installed() && event_pool::raised() && !startup_refused && installed_layout == layout_for(raised_records) && installed_object != retail_object);
+	const auto& l = installed_layout;
+	auto* m = manager(); // the game's own getter constructs the relocated object
+	CHECK(m == ptr(installed_object) && word(installed_object) == manager_vtable && manager() == m);
+	CHECK(judge(read_counts(m, l), l, true) == verdict::ok && read_counts(m, l).ring_count == l.records);
+	// The retail statics behind the old object were not touched by the constructor (the init flag byte is the getter's).
+	CHECK(std::memcmp(before.data() + (static_cast<const unsigned char*>(ptr(retail_object)) - union_space), ptr(retail_object), retail_layout.body_bytes + 4) == 0);
+	// 1126 pending events (the retail break) and then the whole pool.
+	std::vector<std::pair<float, std::uint32_t>> expected;
+	for (std::uint32_t i = 0; i < l.records; ++i)
+	{
+		add(m, 1000 + i, time_of(i)); expected.emplace_back(time_of(i), 1000 + i);
+		if (i == retail_records) CHECK(judge(read_counts(m, l), l, true) == verdict::ok && read_counts(m, l).heap_count == 1126);
+	}
+	auto c = read_counts(m, l);
+	CHECK(c.record_count == l.records && c.heap_count == l.records && c.ring_count == 0 && c.used_bits == l.records && judge(c, l, true) == verdict::ok);
+	add(m, 9999999, 5.f); // the pool is full: dropped, nothing overwritten
+	c = read_counts(m, l);
+	CHECK(c.record_count == l.records && c.heap_count == l.records && c.ring_count == 0 && has_line("pool FULL"));
+	fired.clear(); pump(m, 20.f); // only what is due
+	const auto due = std::size_t(std::count_if(expected.begin(), expected.end(), [](const auto& e) { return e.first < 20.f; }));
+	CHECK(fired.size() == due && due > 0 && due < expected.size());
+	pump(m, 1.0e9f);
+	CHECK(fired.size() == expected.size());
+	// Each event exactly once, in time order (ties in any order).
+	std::vector<std::uint32_t> sorted = fired; std::sort(sorted.begin(), sorted.end());
+	bool each_once = sorted.size() == expected.size(); for (std::size_t i = 0; each_once && i < sorted.size(); ++i) each_once = sorted[i] == 1000 + i;
+	CHECK(each_once);
+	bool ordered = true; for (std::size_t i = 1; i < fired.size(); ++i) ordered = ordered && time_of(fired[i - 1] - 1000) <= time_of(fired[i] - 1000);
+	CHECK(ordered);
+	c = read_counts(m, l);
+	CHECK(c.record_count == 0 && c.heap_count == 0 && c.ring_count == l.records && c.used_bits == 0 && c.alloc_bits == 0 && !has_line("QUEUE BROKEN"));
+	// The same push/pop history gives the same firing order as the retail manager for a retail-sized load: checked by
+	// the caller against the "order" run of the unmodified image (the heap code is unchanged, only its bounds moved).
+	// Watchdog: an emptied queue in a live zone, then a count that disagrees.
+	std::strcpy(static_cast<char*>(ptr(0x72a758)), "fixture/zone");
+	reinterpret_cast<void(__thiscall*)(void*)>(ptr(word(manager_vtable + 4)))(m); // reset (zone change): the per-zone line and a fresh watch
+	CHECK(has_line("timed events fixture/zone: peak 8192 of 8192") || has_line("peak 8192 of 8192"));
+	add(m, 1, 10.f); pump(m, 2.f);  // one event pending
+	pump(m, 11.f);                  // it fires: the queue is empty from here
+	pump(m, 12.f); CHECK(!has_line("EMPTY"));
+	pump(m, 13.5f); CHECK(has_line("EMPTY"));
+	add(m, 2, 100.f);
+	auto* b = static_cast<unsigned char*>(m) + body_at;
+	std::uint32_t zero = 0; std::memcpy(b + l.heap_count, &zero, 4); // what the retail overflow leaves: records in use, nothing queued
+	pump(m, 6.f); CHECK(has_line("QUEUE BROKEN") && has_line("counts disagree"));
+	CHECK(event_pool::status().find("breaks 1") != std::string::npos && event_pool::status().find("empty alarms 1") != std::string::npos);
+}
+
+// The firing order of one fixed load on the unmodified image and on the raised install (separate processes).
+static void order(bool raise)
+{
+	CHECK(map_image()); stub_services();
+	if (raise) { event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000))); CHECK(event_pool::raised()); }
+	auto* m = manager();
+	std::uint32_t h = 2166136261u;
+	const auto mix = [&] { for (const auto f : fired) h = (h ^ f) * 16777619u; fired.clear(); };
+	std::uint32_t next = 1000;
+	for (unsigned frame = 0; frame < 400; ++frame) // adds and pumps interleaved, never above 1000 pending
+	{
+		const float now = 10.f + float(frame) * 0.033f;
+		for (unsigned k = 0; k < 1 + frame % 5; ++k) { add(m, next, now + float((next * 7u) % 13u) * 0.033f); ++next; }
+		pump(m, now); mix();
+	}
+	pump(m, 1.0e9f); mix();
+	std::printf("ORDER %08x events %u\n", h, next - 1000);
+}
+
+int main(int argc, char** argv)
+{
+	rules();
+	if (argc > 2)
+	{
+		std::ifstream f(argv[1], std::ios::binary); raw.assign(std::istreambuf_iterator<char>(f), {});
+		if (raw.size() < 0x1000) { std::puts("retail image not readable"); return 2; }
+		mode = argv[2];
+		if (mode == "defect") defect(false);
+		else if (mode == "retail-holds") defect(true);
+		else if (mode == "raised") raised_install();
+		else if (mode == "order-retail") order(false);
+		else if (mode == "order-raised") order(true);
+		else return 2;
+	}
+	std::printf("%s event pool (%s): %u checks, %u failures\n", failures ? "FAIL" : "PASS", mode.c_str(), checks, failures);
+	return failures ? 1 : 0;
+}
