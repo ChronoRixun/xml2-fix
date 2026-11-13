@@ -142,7 +142,8 @@ static void agreement_rules()
 	// Records: beta.8 (no rule 65, the 1125 pool) against beta.9 (rule 65 = 8192).
 	const auto raised = agreement_for(true, raised_records, raised_records, true), other = agreement_for(true, 4512, 4512, true);
 	const auto beta8 = lc_record(nullptr), beta9 = lc_record(&raised), beta9b = lc_record(&raised), custom = lc_record(&other);
-	const auto kept = agreement_for(true, retail_records, retail_records, true), kept_retail = lc_record(&kept);
+	const auto kept = agreement_for(true, retail_records, retail_records, true);
+	const auto kept_retail = lc_record(&kept);
 	CHECK(beta9.ready() && beta8.ready() && beta9.compare(beta9b.bytes()) == gameplay_capabilities::result::match);
 	CHECK(beta9.compare(beta8.bytes()) != gameplay_capabilities::result::match && beta8.compare(beta9.bytes()) != gameplay_capabilities::result::match);
 	CHECK(beta9.compare(custom.bytes()) != gameplay_capabilities::result::match && custom.compare(beta9.bytes()) != gameplay_capabilities::result::match);
