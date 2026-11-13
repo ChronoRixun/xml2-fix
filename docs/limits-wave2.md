@@ -1325,3 +1325,23 @@ registry exports. Each startup run uses a fresh case directory so stale
 snapshots/markers cannot certify a rerun; a missing-evidence negative control
 proves that check. A fresh read-only review found no production defects; its
 stale-evidence observation was reproduced and fixed. No live-game gate ran.
+# W2 key-door index handoff
+
+The door activation caller at `0x497bbc` used to initialize only the low byte
+of a four-byte stack local before passing that local to the inventory quantity
+getter. W2 widens the getter's definition index to 16 bits, so stale stack
+padding could turn even a low key index into a different or out-of-range item.
+The W2 transaction now guards the exact four retail instruction bytes and
+stores the full EAX lookup result in that existing local. The lookup already
+zero-extends successful indices and returns all ones for a missing name.
+No stack layout, save stream, item identity, key quantity or removal policy changes.
+
+The equivalent script callers (`setInventoryCount`, `getInventoryCount`) already
+use full-width locals. The generated site table and its generator both include
+the door repair; the whole-text gate checks all three external stores. The
+mapped-retail fixture executes the door's store and real W2 getter with dirty
+padding, indices 0/6/255/256/1023, and a missing-item sentinel. A mutated retail
+store must refuse the complete W2 transaction without writes.
+
+Rule 47 revision 2 distinguishes the changed door behavior from revision 1;
+matching layout capacities alone do not imply compatible simulation.

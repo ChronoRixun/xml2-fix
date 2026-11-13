@@ -60,6 +60,11 @@ def inspect(i,owner):
    if MANAGER[0]<=owner<MANAGER[1] and v==150:errors.append(f'old world-slot capacity {owner:x}')
 
 patched=Path(str(prefix)+'-text.bin').read_bytes();assert len(patched)==size
+# External index owners are outside the item manager's address range. Their
+# DWORD locals must be fully initialized before any widened by-index thunk.
+for address,expected in ((0x497bbc,'89442414'),(0x49ed9d,'89442408'),(0x49ee11,'89442404')):
+ value=bytes.fromhex(expected)
+ if patched[address-base:address-base+len(value)]!=value:errors.append(f'narrow/unexpected definition-index stack store {address:x}')
 for i in decode(md,patched,base):
  if not inside(i.address,DEAD):inspect(i,i.address)
 # Copied owners keep their retail ownership even though their addresses move.

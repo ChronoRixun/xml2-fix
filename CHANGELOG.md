@@ -1,3 +1,13 @@
+## 1.11.0-beta.7 - 2026-11-12
+
+XML2 Fix 1.11.0-beta.7 is a companion-only hotfix for Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package and tag identify beta.7.
+
+- **Keyed doors open again.** A held keycard was not recognised at some doors, e.g. Weapon X part 2.
+- **No rebuild needed.** Update XML2 Fix on Ultimate Legends' **Beta** channel and keep Legends Classic 0.6.0-beta.7. Existing beta.7 builds and saves remain compatible. Back up SaveLC before updating.
+- **Online: everyone needs XML2 Fix 1.11.0-beta.7.** Older companions are refused in both directions because the keyed-door rule differs (rule 47 revision 2).
+
+**Known issues:** Iceman and Magma skating still stops after one burst on real pads. This hotfix does not fix it. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+
 ## 1.11.0-beta.6 - 2026-11-11
 
 XML2 Fix 1.11.0-beta.6 is paired with Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package/tag identify beta.6.

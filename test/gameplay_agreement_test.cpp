@@ -91,10 +91,17 @@ record peer(bool on,bool verified=true){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},
 void records(){
  {
   namespace w2=native_save_layout_rules;
+  check(w2::rule_revision==2,"W2 door key handoff repair advertises rule47 revision2");
+  {record released,fixed,same;
+   released.add(47,1,w2::agreement_values(),true);fixed.add(47,w2::rule_revision,w2::agreement_values(),true);same.add(47,w2::rule_revision,w2::agreement_values(),true);
+   released.finalize();fixed.finalize();same.finalize();
+   check(fixed.compare(same.bytes())==result::match,"two fixed W2 peers agree");
+   check(released.compare(fixed.bytes())!=result::match&&fixed.compare(released.bytes())!=result::match,"released/fixed W2 peers refuse in both directions with identical capacities");
+  }
   check(w2::agreement_values()==std::array<std::uint32_t,4>{0x10802,0x10000400,0x4000400,0xc80400},"T13 rule47 carries ordinal2/zones8/structure1 and all frozen layout capacities");
   record old,current,other,failed;
   old.layout(3,{32,768,1024,10},true);current.layout(3,{32,768,1024,10},true);other.layout(3,{32,768,1024,10},true);
-  current.add(47,1,w2::agreement_values(),true);other.add(47,1,w2::agreement_values(),true);failed.add(47,1,w2::agreement_values(),false);
+  current.add(47,w2::rule_revision,w2::agreement_values(),true);other.add(47,w2::rule_revision,w2::agreement_values(),true);failed.add(47,w2::rule_revision,w2::agreement_values(),false);
   old.finalize();current.finalize();other.finalize();
   check(current.compare(other.bytes())==result::match,"T13 two verified W2 peers match");
   gameplay_capabilities::difference forward{},backward{};
@@ -102,7 +109,7 @@ void records(){
   char a[256]{},b[256]{};current.describe(forward.buckets,forward.local_only,true,a,sizeof a);old.describe(backward.buckets,backward.local_only,true,b,sizeof b);
   check(std::string(a).find("47 NativeSaveLayout")!=std::string::npos&&std::string(b).find("47 NativeSaveLayout")!=std::string::npos,"T13 both sides name47 NativeSaveLayout despite equal entity capacities");
   check(!failed.finalize()&&failed.compare(current.bytes())==result::unavailable,"T12 unverified rule47 closes agreement");
-  auto changed=w2::agreement_values();changed[0]^=0x10000;record revision;revision.layout(3,{32,768,1024,10},true);revision.add(47,1,changed,true);revision.finalize();
+  auto changed=w2::agreement_values();changed[0]^=0x10000;record revision;revision.layout(3,{32,768,1024,10},true);revision.add(47,w2::rule_revision,changed,true);revision.finalize();
   check(current.compare(revision.bytes())!=result::match,"T13 structural revision difference refuses even when capacities match");
   check(w2::status({1023,4096,4095,1024,1023,127,256,8})=="layout W2; defs 1023/1024; enh 4096/4096; att 4095/4096; inst 1024/1024; world 1023/1024; obj 127/1024; talents 256/256; zones 8/8","W2 status protocol has exact fields/order and descriptor ceilings");
   check(!w2::choose("lc",true,std::nullopt,std::nullopt).requested&&!w2::choose("",true,"w2",std::nullopt).requested,"selector absent and non-LC combinations keep released behavior");

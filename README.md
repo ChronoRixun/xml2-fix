@@ -1,4 +1,4 @@
-> **Current beta: 1.11.0-beta.6**, paired with Legends Classic 0.6.0-beta.7. Update both parts, Rebuild, Play; back up saves.
+> **Current beta: 1.11.0-beta.7**, the keyed-door hotfix for Legends Classic 0.6.0-beta.7. Update XML2 Fix on the Beta channel; no rebuild needed. Back up saves.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
@@ -40,10 +40,11 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.11.0-beta.5**, paired with Legends Classic 0.6.0-beta.6 (content 35 / catalogue 8 / LC45).
-Update both parts on Ultimate Legends' Beta channel and Rebuild. Beta.5 makes converted lightning and flame weapons
-follow the first game's trace timer and counts each weapon contact once; older companions are refused online.
-See [beta notes](packaging/release-notes/v1.11.0.md) for evidence and remaining limitations.
+**Beta: XML2 Fix 1.11.0-beta.7**, paired with Legends Classic 0.6.0-beta.7.
+Keyed doors recognise held keycards again, including Weapon X part 2. Update XML2 Fix on Ultimate Legends' **Beta**
+channel; no rebuild needed. Everyone in an online session needs beta.7; older companions are refused.
+Iceman and Magma skating still stops after one burst on real pads.
+See [beta notes](packaging/release-notes/v1.11.0.md) for the remaining limitations.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 

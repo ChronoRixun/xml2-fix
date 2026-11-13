@@ -338,7 +338,11 @@ an absent/false key adds no entry and preserves the released OFF digest. A peer
 differing in any value is refused naming **52 Xml1Economy**. See
 [XML1 economy](xml1-economy.md) for sites, sidecar contract and tests.
 
-Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
+Rule47 NativeSaveLayout is assigned to W2, revision2. Revision2 includes the
+door key-index handoff repair: the native door caller initializes the complete
+index local before the W2 quantity getter reads its 16-bit index. Revision1
+and revision2 peers refuse each other in both directions even though their
+layout capacities and save streams are identical. It registers only for
 verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
 requests poison admission. Effective values are
 `{ordinal | zone_records<<8 | structural_revision<<16,

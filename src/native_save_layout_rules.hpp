@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 namespace native_save_layout_rules {
-inline constexpr unsigned rule_id=47,rule_revision=1,structural_revision=1;
+inline constexpr unsigned rule_id=47,rule_revision=2,structural_revision=1;
 inline std::string normal(std::string_view value){
  const auto begin=value.find_first_not_of(" \t\r\n"),end=value.find_last_not_of(" \t\r\n");
  std::string text=begin==value.npos?"":std::string(value.substr(begin,end-begin+1));

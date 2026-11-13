@@ -259,6 +259,7 @@ inline const std::vector<row> direct{
  {0x4833fe,"ff8650380000","ff8610e10000","instance-layout",0},
  {0x48345a,"8d848e00340000","8d848e00d00000","instance-layout",0},
  {0x48361e,"68603c0000","6820f10000","instance-allocation",0},
+ {0x497bbc,"88442414","89442414","definition-door-index-dword",0},
  {0x49ed9d,"88442408","89442408","definition-script-index-dword",0},
  {0x49ee11,"88442404","89442404","definition-script-index-dword",0},
  {0x673a78,"81c1a0720000","81c100f40300","world-unwind",0},
