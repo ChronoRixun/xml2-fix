@@ -112,7 +112,7 @@ for name,modes in mode_suites.items():
 cmds += [[str(b / "xml2_effect_pools_test.exe"), EXE, mode] for mode in ("refuse-vector", "refuse-primitive")]
 # The timed-event pool: rules, then the unmodified manager's overflow, the production install and the firing order (mapped retail image).
 cmds.append([str(b / "xml2_event_pool_test.exe")])
-cmds += [[str(b / "xml2_event_pool_test.exe"), EXE, mode] for mode in ("defect", "raised", "order-retail", "order-raised")]
+cmds += [[str(b / "xml2_event_pool_test.exe"), EXE, mode] for mode in ("defect", "raised", "rebuild", "order-retail", "order-raised")]
 installer_modes |= {"xml2_event_pool_test"}
 installer_modes |= {"xml2_effect_pools_test"}
 # 0.4.2 integration: the XML1 economy fixture runs once per mode (loot/digest's matrix), tagged by mode.

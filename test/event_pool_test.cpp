@@ -3,6 +3,7 @@
 //   event_pool_test <retail exe> defect  the unmodified manager: the 1126th pending event cuts the heap and reuses a live record
 //   event_pool_test <retail exe> raised  the production install: 8192 pending events fire once each, in time order; the 8193rd
 //                                        is dropped; the watchdog reports a broken and an empty queue; a foreign byte refuses
+//   event_pool_test <retail exe> rebuild the late-join queue rebuild's steps (retail pool init / alloc / store / push) on the raised pool
 //   event_pool_test <retail exe> retail-holds   the raised expectations on the UNMODIFIED manager: fails (what the fix is for)
 // The retail image is supplied locally and only mapped into this process; nothing of it is stored in the repository.
 #include "../src/event_pool.cpp"
@@ -204,6 +205,54 @@ static void raised_install()
 	CHECK(event_pool::status().find("breaks 1") != std::string::npos && event_pool::status().find("empty alarms 1") != std::string::npos);
 }
 
+// What join in progress's canonical restart does to the queue (join_in_progress_residue.inl), on the raised pool: read
+// the heap pairs and their records, retail pool init, both bitmaps and counts cleared, every entry re-added through
+// the retail alloc / store / heap push in sorted order.
+static void rebuild()
+{
+	CHECK(map_image()); stub_services();
+	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
+	CHECK(event_pool::raised());
+	const auto& l = installed_layout;
+	auto* m = manager(); auto* body = static_cast<unsigned char*>(m) + body_at;
+	const std::uint32_t n = 1500; // more than a retail pool holds
+	for (std::uint32_t i = 0; i < n; ++i) add(m, 1000 + i, time_of(i));
+	struct entry { float time; record r; };
+	std::vector<entry> entries;
+	std::uint32_t heap_count = 0; std::memcpy(&heap_count, body + l.heap_count, 4);
+	CHECK(heap_count == n);
+	for (std::uint32_t i = 0; i < heap_count; ++i)
+	{
+		entry e{}; std::uint32_t index = 0;
+		std::memcpy(&e.time, body + l.heap + i * 8, 4); std::memcpy(&index, body + l.heap + i * 8 + 4, 4);
+		CHECK(index < l.records);
+		std::memcpy(&e.r, body + index * record_bytes, sizeof e.r); entries.push_back(e);
+	}
+	std::stable_sort(entries.begin(), entries.end(), [](const entry& a, const entry& b) { return a.time != b.time ? a.time < b.time : a.r.owner < b.r.owner; });
+	reinterpret_cast<void(__thiscall*)(void*)>(ptr(0x4b2a10))(body);
+	std::memset(body + l.used_bitmap, 0, l.words * 4); std::memset(body + l.alloc_bitmap, 0, l.words * 4);
+	std::uint32_t zero = 0; std::memcpy(body + l.record_count, &zero, 4); std::memcpy(body + l.heap_count, &zero, 4);
+	std::uint32_t expected_index = 0; bool ascending = true;
+	for (const auto& e : entries)
+	{
+		const auto index = reinterpret_cast<std::uint32_t(__thiscall*)(void*)>(ptr(0x4b2c10))(body);
+		ascending = ascending && index == expected_index++;
+		reinterpret_cast<void(__thiscall*)(void*, std::uint32_t, const void*)>(ptr(0x4b2b80))(body, index, &e.r);
+		struct { float time; std::uint32_t index; } pair{e.time, index};
+		reinterpret_cast<void(__thiscall*)(void*, const void*)>(ptr(0x4b2c90))(body + l.heap, &pair);
+	}
+	CHECK(ascending); // the canonical record order: 0, 1, 2, ... on every peer
+	const auto c = read_counts(m, l);
+	CHECK(c.record_count == n && c.heap_count == n && c.ring_count == l.records - n && c.used_bits == n && c.alloc_bits == n && judge(c, l, true) == verdict::ok);
+	fired.clear(); pump(m, 1.0e9f);
+	CHECK(fired.size() == n);
+	bool ordered = true; for (std::size_t i = 1; i < fired.size(); ++i) ordered = ordered && time_of(fired[i - 1] - 1000) <= time_of(fired[i] - 1000);
+	std::vector<std::uint32_t> sorted = fired; std::sort(sorted.begin(), sorted.end());
+	bool each_once = true; for (std::size_t i = 0; i < sorted.size(); ++i) each_once = each_once && sorted[i] == 1000 + i;
+	CHECK(ordered && each_once && !has_line("QUEUE BROKEN"));
+	CHECK(judge(read_counts(m, l), l, true) == verdict::ok && read_counts(m, l).record_count == 0);
+}
+
 // The firing order of one fixed load on the unmodified image and on the raised install (separate processes).
 static void order(bool raise)
 {
@@ -234,6 +283,7 @@ int main(int argc, char** argv)
 		if (mode == "defect") defect(false);
 		else if (mode == "retail-holds") defect(true);
 		else if (mode == "raised") raised_install();
+		else if (mode == "rebuild") rebuild();
 		else if (mode == "order-retail") order(false);
 		else if (mode == "order-raised") order(true);
 		else return 2;

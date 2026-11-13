@@ -62,7 +62,8 @@ Chained on the manager's reset / add / pump slots whenever the module installs:
 
 `xml2_event_pool_test` (rules), and with a local retail image: `defect` (the unmodified manager: 1126 pending events
 leave heap 1 / ring -1, one pump later an empty queue with 1124 records in use), `raised` (production install: guard
-refusal, 8192 pending events fire once each in time order, the 8193rd is dropped, both watchdog lines), `order-retail`
+refusal, 8192 pending events fire once each in time order, the 8193rd is dropped, both watchdog lines), `rebuild`
+(the late-join queue rebuild's own steps - retail pool init, alloc, store, push - on the raised pool), `order-retail`
 / `order-raised` (same firing-order digest), `retail-holds` (the raised expectations on the unmodified manager: fails
 by design - it is what the raise fixes).
 
