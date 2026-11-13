@@ -150,7 +150,21 @@ static void agreement_rules()
 	CHECK(kept_retail.compare(beta8.bytes()) == gameplay_capabilities::result::match); // a pool kept retail on purpose plays with beta.8
 	const auto named = refusal_names(beta9, beta8), named_back = refusal_names(beta8, beta9), named_custom = refusal_names(custom, beta9);
 	std::printf("refusal beta.9 -> beta.8: %s\nrefusal beta.8 -> beta.9: %s\nrefusal 4512 -> 8192: %s\n", named.c_str(), named_back.c_str(), named_custom.c_str());
-	CHECK(named.find("65 TimedEvents") != std::string::npos && named_custom.find("65 TimedEvents") != std::string::npos);
+	CHECK(named.find("65 TimedEvents") != std::string::npos);
+	// Two raised capacities: the digest always refuses; the one-byte summary of bucket 0 names rule 65 unless the two
+	// folds happen to collide (docs/gameplay-agreement.md: the summary is advisory). 4512 vs 8192 is such a collision.
+	unsigned named_values = 0;
+	for (const std::uint32_t n : {4096u, 4512u, 16384u, 32768u, 65536u})
+	{
+		const auto e = agreement_for(true, n, n, true);
+		const auto peer = lc_record(&e);
+		CHECK(peer.compare(beta9.bytes()) != gameplay_capabilities::result::match && beta9.compare(peer.bytes()) != gameplay_capabilities::result::match);
+		const bool collide = peer.bytes()[gameplay_capabilities::summary_at] == beta9.bytes()[gameplay_capabilities::summary_at];
+		const auto text = refusal_names(peer, beta9);
+		CHECK(collide ? text.empty() : text.find("65 TimedEvents") != std::string::npos);
+		named_values += !collide;
+	}
+	CHECK(named_values >= 3);
 	CHECK(named_back.find("1 entity layout") != std::string::npos); // an older PC names the bucket's rule it knows
 	gameplay_capabilities::record unverified;
 	unverified.layout(3, {32, 768, 1024, 10}, true);
