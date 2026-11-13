@@ -7,6 +7,8 @@
 // overwriting a live record). Installs after every module that guards the manager's retail bytes (xml1 turrets, join
 // in progress): its hooks chain to whatever those left in the slots.
 
+#include "event_pool_rules.hpp"
+
 #include <Windows.h>
 
 #include <string>
@@ -17,4 +19,6 @@ namespace event_pool
 	bool installed();     // the watchdog and the add guard are on the manager's slots
 	bool raised();        // the pool is larger than retail
 	std::string status(); // one line for the test pipe / logs
+	// Gameplay agreement rule 65 (TimedEvents) as this install settled: event_pool_rules::agreement_for.
+	event_pool_rules::agreement_entry agreement();
 }

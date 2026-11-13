@@ -24,6 +24,8 @@ namespace
 	using pump_t = void(__fastcall*)(void*, void*, u32);
 
 	bool hooked = false, pool_raised = false;
+	bool engaged = false;                  // install() ran past "plain XML2" (rule 65 participates)
+	std::uint32_t wanted = retail_records;  // the capacity the key or the default asked for
 	reset_t previous_reset = nullptr;
 	add_t previous_add = nullptr;
 	pump_t previous_pump = nullptr;
@@ -168,6 +170,7 @@ namespace
 			logger::write("timed events: [Limits] TimedEvents=%s is not 0, 1125 or a count up to %u; the pool is %u", key->c_str(), max_records, fallback);
 			records = fallback;
 		}
+		wanted = records;
 		if (reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base) { logger::write("timed events: XMen2.exe is not at its image base; the pool stays retail, no watchdog"); return; }
 		u32 reset = 0, add = 0, pump = 0; bool constructed = true;
 		if (!read_slots(reset, add, pump, constructed) || reset != native_reset || add != native_add)
@@ -239,11 +242,15 @@ std::string status()
 	return line;
 }
 
+event_pool_rules::agreement_entry agreement() { return agreement_for(engaged, wanted, installed_layout.records, hooked); }
+
 void install(const HMODULE game)
 {
+	engaged = false; wanted = retail_records;
 	const auto key = ini::text(L"Limits", L"TimedEvents");
 	const bool entities_raised = entity_capacity::installed().raised;
 	if (!key && !entities_raised) return; // plain XML2: nothing is read, written or hooked
+	engaged = true;
 	install_checked(game, key, entities_raised);
 }
 }

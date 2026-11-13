@@ -170,4 +170,31 @@ namespace event_pool_rules
 	{
 		return record_count < l.records && heap_count < l.records;
 	}
+
+	// ---- online: gameplay agreement rule 65 (TimedEvents, docs/gameplay-agreement.md) ----
+	// Which pending events survive is lockstep state: a retail pool that overflows destroys live records and cuts the
+	// heap, a raised one does not, so two peers with different capacities stop agreeing on the world the moment one of
+	// them passes its own bound (1.11.0-beta.8 and older: 1125). The rule carries the INSTALLED capacity, so any later
+	// change of the default or of [Limits] TimedEvents is refused too. Requested only: plain XML2 (no key, stock entity
+	// capacity) and an install that kept the retail pool on purpose (TimedEvents=0 / 1125) add no entry - the released
+	// record, which every older peer also has. A requested raise that did not take effect (manager already constructed,
+	// no memory, code or slots not retail) is unverified: host/join close instead of playing a 1125 pool against 8192.
+	constexpr std::uint16_t agreement_revision = 1;
+	struct agreement_entry
+	{
+		bool registers;
+		std::array<std::uint32_t, 4> values;
+		bool verified;
+		constexpr bool operator==(const agreement_entry&) const = default;
+	};
+	// engaged: the module ran (the key is present or the entity capacity is raised); wanted: the capacity it asked for
+	// (the key, or the default); capacity: the installed pool; hooked: the install transaction committed.
+	constexpr agreement_entry agreement_for(const bool engaged, const std::uint32_t wanted, const std::uint32_t capacity, const bool hooked)
+	{
+		if (!engaged || (wanted == retail_records && capacity == retail_records)) return {false, {0, 0, 0, 0}, true};
+		return {true, {capacity, 0, 0, 0}, hooked && wanted == capacity};
+	}
+	static_assert(!agreement_for(false, retail_records, retail_records, false).registers);
+	static_assert(agreement_for(true, raised_records, raised_records, true) == agreement_entry{true, {raised_records, 0, 0, 0}, true});
+	static_assert(!agreement_for(true, raised_records, retail_records, false).verified);
 }

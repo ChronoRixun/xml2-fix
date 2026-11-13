@@ -44,7 +44,11 @@ game constructs the manager (first getter call). Those two modules read the layo
 
 Online: the firing order of a given add/pump history is unchanged (`xml2_event_pool_test order-retail` and
 `order-raised` print the same digest), record indices are not part of any agreed state, and the canonical queue
-rebuild of a late join uses the installed layout. A peer on an older Fix differs only where its own pool overflows.
+rebuild of a late join uses the installed layout. A peer on an older Fix differs where its own pool overflows, so the
+capacity is gameplay agreement rule 65 (TimedEvents, revision 1, `{installed capacity,0,0,0}`): every peer of a session
+needs the same pool. Plain XML2 and a pool kept at 1125 on purpose add no entry (they play with 1.11.0-beta.8 and older);
+the default raise registers `{8192,0,0,0}`, so beta.8 and beta.9 Legends Classic PCs refuse each other in both
+directions; a raise that did not install registers unverified and closes host/join (`event_pool_rules::agreement_for`).
 
 ## The watchdog (diagnostic only)
 

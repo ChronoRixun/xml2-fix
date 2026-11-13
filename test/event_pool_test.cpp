@@ -8,6 +8,7 @@
 // The retail image is supplied locally and only mapped into this process; nothing of it is stored in the repository.
 #include "../src/event_pool.cpp"
 #include "../src/entity_capacity_layout.hpp"
+#include "../src/gameplay_capabilities.hpp"
 
 #include <algorithm>
 #include <cstdarg>
@@ -81,6 +82,7 @@ static counts read_counts(void* m, const layout& l)
 // A deterministic spread of times with many ties (every actor update of a frame shares one time).
 static float time_of(std::uint32_t i) { return 10.f + float((i * 37u) % 97u) * 0.25f; }
 
+static void agreement_rules();
 static void rules()
 {
 	CHECK(layout_for(0x465) == retail_layout && retail_layout.body_bytes == 0x9f70 && retail_layout.words == 0x24);
@@ -103,6 +105,56 @@ static void rules()
 	CHECK(judge({5, 5, 1120, 4, 5}, retail_layout, true) == verdict::bitmaps_disagree && judge({5, 5, 1120, 4, 5}, retail_layout, false) == verdict::ok);
 	CHECK(judge({1126, 564, 0xffffffffu, 1125, 1125}, retail_layout, true) == verdict::over_capacity);
 	CHECK(add_fits(1124, 1124, retail_layout) && !add_fits(1125, 1125, retail_layout) && !add_fits(8192, 8192, r) && add_fits(8191, 8191, r));
+	agreement_rules();
+}
+
+// Gameplay agreement rule 65 (TimedEvents): a peer on the retail 1125 pool (1.11.0-beta.8 and older, which register no
+// rule 65) and a peer on the raised pool refuse each other in both directions, and so do two different raised capacities.
+static gameplay_capabilities::record lc_record(const agreement_entry* timed)
+{
+	gameplay_capabilities::record r;
+	r.layout(3, {32, 768, 1024, 10}, true); // Legends Classic's entity capacity (the pool's default follows it)
+	r.add(gameplay_capabilities::forced_party_revival_id, 1, {1, 0, 0, 0}, true);
+	if (timed && timed->registers) r.add(gameplay_capabilities::timed_events_id, agreement_revision, timed->values, timed->verified);
+	r.finalize();
+	return r;
+}
+static std::string refusal_names(const gameplay_capabilities::record& mine, const gameplay_capabilities::record& peer)
+{
+	gameplay_capabilities::difference d{};
+	if (mine.compare(peer.bytes(), &d) == gameplay_capabilities::result::match) return "MATCH";
+	char text[256]{}; mine.describe(d.buckets, d.local_only, true, text, sizeof text);
+	return text;
+}
+static void agreement_rules()
+{
+	CHECK(gameplay_capabilities::timed_events_id == 65 && agreement_revision == 1);
+	CHECK(std::string(gameplay_capabilities::rule_name(65)) == "TimedEvents");
+	for (std::uint16_t id = 1; id <= 64; ++id) CHECK(std::string(gameplay_capabilities::rule_name(id)) != "a newer rule"); // every ID below 65 is assigned
+	CHECK(gameplay_capabilities::bucket_of(65) == gameplay_capabilities::bucket_of(gameplay_capabilities::entity_layout_id));
+	// The four ways an install settles.
+	CHECK(agreement_for(false, retail_records, retail_records, false) == (agreement_entry{false, {0, 0, 0, 0}, true}));  // plain XML2
+	CHECK(agreement_for(true, raised_records, raised_records, true) == (agreement_entry{true, {8192, 0, 0, 0}, true})); // LC default
+	CHECK(agreement_for(true, retail_records, retail_records, true) == (agreement_entry{false, {0, 0, 0, 0}, true}));   // TimedEvents=0 / 1125
+	CHECK(agreement_for(true, 4512, 4512, true) == (agreement_entry{true, {4512, 0, 0, 0}, true}));                      // TimedEvents=4500
+	const auto failed = agreement_for(true, raised_records, retail_records, false);                                       // raise refused
+	CHECK(failed.registers && !failed.verified && failed.values[0] == retail_records);
+	// Records: beta.8 (no rule 65, the 1125 pool) against beta.9 (rule 65 = 8192).
+	const auto raised = agreement_for(true, raised_records, raised_records, true), other = agreement_for(true, 4512, 4512, true);
+	const auto beta8 = lc_record(nullptr), beta9 = lc_record(&raised), beta9b = lc_record(&raised), custom = lc_record(&other);
+	const auto kept = agreement_for(true, retail_records, retail_records, true), kept_retail = lc_record(&kept);
+	CHECK(beta9.ready() && beta8.ready() && beta9.compare(beta9b.bytes()) == gameplay_capabilities::result::match);
+	CHECK(beta9.compare(beta8.bytes()) != gameplay_capabilities::result::match && beta8.compare(beta9.bytes()) != gameplay_capabilities::result::match);
+	CHECK(beta9.compare(custom.bytes()) != gameplay_capabilities::result::match && custom.compare(beta9.bytes()) != gameplay_capabilities::result::match);
+	CHECK(kept_retail.compare(beta8.bytes()) == gameplay_capabilities::result::match); // a pool kept retail on purpose plays with beta.8
+	const auto named = refusal_names(beta9, beta8), named_back = refusal_names(beta8, beta9), named_custom = refusal_names(custom, beta9);
+	std::printf("refusal beta.9 -> beta.8: %s\nrefusal beta.8 -> beta.9: %s\nrefusal 4512 -> 8192: %s\n", named.c_str(), named_back.c_str(), named_custom.c_str());
+	CHECK(named.find("65 TimedEvents") != std::string::npos && named_custom.find("65 TimedEvents") != std::string::npos);
+	CHECK(named_back.find("1 entity layout") != std::string::npos); // an older PC names the bucket's rule it knows
+	gameplay_capabilities::record unverified;
+	unverified.layout(3, {32, 768, 1024, 10}, true);
+	unverified.add(gameplay_capabilities::timed_events_id, agreement_revision, failed.values, failed.verified);
+	CHECK(!unverified.finalize() && !unverified.ready()); // a raise that did not install closes host/join
 }
 
 // The unmodified manager at its retail address: what the 1126th pending event does.
@@ -147,16 +199,19 @@ static void raised_install()
 	static_cast<unsigned char*>(ptr(0x4b2c14))[0] ^= 0x01; // the opcode byte of an edited instruction (record alloc)
 	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
 	CHECK(!event_pool::installed() && !event_pool::raised() && has_line("not retail") && installed_object == retail_object && installed_layout == retail_layout);
+	CHECK(event_pool::agreement() == (agreement_entry{true, {retail_records, 0, 0, 0}, false})); // rule 65 unverified: online closed
 	static_cast<unsigned char*>(ptr(0x4b2c14))[0] ^= 0x01;
 	CHECK(std::memcmp(before.data(), union_space, before.size()) == 0);
 	// Not requested: plain XML2 (no key, stock entity capacity) writes nothing.
 	entities_raised = false; lines.clear();
 	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
 	CHECK(!event_pool::installed() && lines.empty() && std::memcmp(before.data(), union_space, before.size()) == 0);
+	CHECK(!event_pool::agreement().registers); // plain XML2: the released record
 	entities_raised = true;
 	// The production default: raised with the entity capacity.
 	event_pool::install(reinterpret_cast<HMODULE>(ptr(0x400000)));
 	CHECK(event_pool::installed() && event_pool::raised() && !startup_refused && installed_layout == layout_for(raised_records) && installed_object != retail_object);
+	CHECK(event_pool::agreement() == (agreement_entry{true, {raised_records, 0, 0, 0}, true})); // rule 65 {8192,0,0,0}
 	const auto& l = installed_layout;
 	auto* m = manager(); // the game's own getter constructs the relocated object
 	CHECK(m == ptr(installed_object) && word(installed_object) == manager_vtable && manager() == m);
