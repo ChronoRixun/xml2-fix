@@ -42,6 +42,7 @@ namespace
 	const unsigned char* body() { return reinterpret_cast<const unsigned char*>(static_cast<std::uintptr_t>(installed_object)) + body_at; }
 	bool ours(const void* self) { return self == reinterpret_cast<const void*>(static_cast<std::uintptr_t>(installed_object)); }
 	float pump_time = 0; // the game time of the last pump (the world update's own clock argument)
+	unsigned pump_depth = 0;
 	const char* zone_now() { return reinterpret_cast<const char*>(static_cast<std::uintptr_t>(0x72a758)); }
 	void remember_zone()
 	{
@@ -100,9 +101,13 @@ namespace
 
 	void __fastcall pump_hook(void* self, void* edx, const u32 time_bits)
 	{
-		if (ours(self)) std::memcpy(&pump_time, &time_bits, 4);
+		if (!ours(self)) { previous_pump(self, edx, time_bits); return; }
+		std::memcpy(&pump_time, &time_bits, 4);
+		// A pump entered from inside an event's fire sees the outer pump's popped, not yet freed record: only the
+		// outermost pump's end is a quiescent queue.
+		++pump_depth;
 		previous_pump(self, edx, time_bits);
-		if (!ours(self)) return;
+		if (--pump_depth) return;
 		remember_zone();
 		const bool deep = (++w.pumps & 31u) == 0;
 		auto c = read(deep);
