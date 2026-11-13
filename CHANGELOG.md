@@ -1,3 +1,14 @@
+## 1.11.0-beta.9 - 2026-11-13
+
+XML2 Fix 1.11.0-beta.9 is a companion-only hotfix for Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package and tag identify beta.9.
+
+- **Fixed a world freeze in busy fights.** Everything stopped moving while menus and sound kept working (seen at Dark Avalanche). The game's timed-event list was too small for Legends Classic's larger levels: in a big enough fight it overflowed and the characters' and objects' updates were lost. The list now holds 8192 events instead of 1125 (`[Limits] TimedEvents`; raised automatically whenever Legends Classic's larger entity capacity is on).
+- **A log line to share.** `xml2-fix.log` now has one line per area, for example `timed events astral/ast3/astral3_4: peak 282 of 8192 (retail pool 1125); refused 0`. If the world ever stops again, send that log: the lines that start with `timed events` show how full the list got and any `QUEUE BROKEN`, `EMPTY` or `pool FULL` alarm.
+- **No rebuild needed.** Update XML2 Fix on Ultimate Legends' **Beta** channel and keep Legends Classic 0.6.0-beta.7. Existing beta.7 builds and saves remain compatible. A save made in the frozen fight loads normally; replay the fight. Back up SaveLC before updating.
+- **Online: everyone needs XML2 Fix 1.11.0-beta.9.** Older companions are refused in both directions (new rule 65 TimedEvents; this build names "1 entity layout, 65 TimedEvents", beta.8 names "1 entity layout").
+
+**Known issues:** Iceman and Magma skating still stops after one burst on real pads. This update does not fix it. Heroes who are down but not put in a mission's fixed party still need a paid revival at an Xtraction Point. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+
 ## 1.11.0-beta.8 - 2026-11-13
 
 XML2 Fix 1.11.0-beta.8 is a companion-only update for Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package and tag identify beta.8.
