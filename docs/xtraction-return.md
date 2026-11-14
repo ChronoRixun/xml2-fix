@@ -1,6 +1,6 @@
 # Returning from Team Management
 
-With `XtractionShop=1`, this candidate keeps a side-mission return's requested
+With `XtractionShop=1`, XML2 Fix 1.11.0 keeps a side-mission return's requested
 position when the navigation grid suggests a different floor. It targets the
 party dying below Interior Quarters after leaving Team Management, including
 leaving without changing heroes. Offline live proof passed twice at Interior Quarters, including a hero replacement, and in Command Center and Lounge Deck A. The wider story-dependent census remains incomplete.
@@ -34,10 +34,7 @@ disabled, guard-refusal, native-failure, other-caller and boundary cases are
 checked as well. `XML2_FIX_TEST_RETURN_BASELINE=1` runs the native regression
 without installing the filter and is expected to fail its safety assertion.
 
-**Integration requirement:** this changes deterministic placement and needs a new
-revision of the existing Xtraction-services gameplay agreement before online
-release. All peers must use the update. Release and agreement identities are
-left to the maintainer; this work does not assign one. Until that integration,
-the candidate is for offline validation only.
-
-Stable integration: rule 10 revision 4 whenever XtractionShop is requested; beta.9 peers refuse both directions.
+Stable integration assigns rule 10 revision 4 whenever XtractionShop is requested. All peers
+need the update; beta.9's placement rule is refused in both directions. Native agreement
+regressions cover matching-new acceptance, old/new refusal and unchanged absent-shop behavior.
+The wider runtime point census and the stable release smoke are tracked by the release round.
