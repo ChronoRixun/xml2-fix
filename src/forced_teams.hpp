@@ -43,7 +43,7 @@ namespace forced_teams
 	// before XMen2.exe's own code does - from DllMain (see exports.cpp).
 	void install(HMODULE game);
 	// Gameplay agreement rule 63 (seatParty revives a fallen seated hero): requested = [Game] ForcedTeams present in the game (XMen2.exe at 0x400000);
-	// revives = the functions registered (seatParty revives whenever a script calls it). Valid after install.
+	// revives = the functions registered including whole-roster reset (needs the raised tree). Valid after install.
 	bool requested();
 	bool revives();
 }

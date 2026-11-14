@@ -198,6 +198,23 @@ void records(){
   check(std::string(name).find("10 Xtraction services/RevivalCost")!=std::string::npos,std::string("the revival refusal names rule 10: ")+name);
   check(services(2,shop).compare(services(gameplay_capabilities::xtraction_services_revision,shop).bytes())==result::match,"rule 10 without RevivalCost keeps the released revision 2");
  }
+ {
+  using namespace gameplay_capabilities;
+  for (bool revival : {false,true}) {
+   record current,peer,old;
+   const std::array<std::uint32_t,4> v{1,0x3f,1,revival?1u:0u};
+   current.add(xtraction_services_id,xtraction_revision(true,revival),v,true);current.finalize();
+   peer.add(xtraction_services_id,xtraction_revision(true,revival),v,true);peer.finalize();
+   old.add(xtraction_services_id,revival?3:2,v,true);old.finalize();
+   check(current.compare(peer.bytes())==result::match,"rule 10 matching NAV-filter peers agree");
+   check(current.compare(old.bytes())==result::value && old.compare(current.bytes())==result::value,"rule 10 old NAV-placement peers refused both directions");
+  }
+  check(xtraction_revision(false,false)==2 && xtraction_revision(false,true)==3 && xtraction_revision(true,true)==4,"rule 10 unchanged absent-shop identity; NAV-filter revision 4");
+  record current,old;current.add(forced_party_revival_id,1,forced_revival_values(true),true);current.finalize();
+  old.add(forced_party_revival_id,1,{1,0,0,0},true);old.finalize();
+  check(current.compare(old.bytes())==result::value && old.compare(current.bytes())==result::value,"rule 63 whole-roster and seated-only revival refused both directions");
+  check(forced_revival_values(false)==std::array<std::uint32_t,4>{0,0,0,0},"rule 63 refused installation stays zero and unverified");
+ }
  record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");

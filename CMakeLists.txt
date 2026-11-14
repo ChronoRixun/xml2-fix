@@ -168,6 +168,7 @@ add_library(xml2_fix SHARED
 	src/cutscene_mouse.cpp
 	src/personal_item_text.cpp
 	src/xtract.cpp
+	src/xtraction_return.cpp
 	src/forced_teams.cpp
 	src/script_pools.cpp
 	src/script_functions.cpp
@@ -1032,7 +1033,7 @@ add_executable(xml2_dr_reward_test test/xml1_dr_reward_test.cpp src/xml1_roll.cp
 target_include_directories(xml2_dr_reward_test PRIVATE src)
 target_link_options(xml2_dr_reward_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
-add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/xtraction_return.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_limits_test PRIVATE src)
 target_link_options(xml2_save_limits_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

@@ -63,6 +63,7 @@ namespace forced_teams_rules
 		stat_points,      // n(ai): addStatPoints(actor, n), unspent attribute points
 		xtraction_shop,   // n(ai): native point menu, with this point's equipment-shop permission
 		solo_mode,        // n(ai): setSoloMode(actor, on) - XML1 enterSoloMode (on) / exitSoloMode (off), solo_mode.hpp
+		reset_hero_vitals, // n(): XML1 mission start, whole-roster saved vitals reset
 	};
 
 	struct function_spec
@@ -74,7 +75,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 12> functions{{
+	inline constexpr std::array<function_spec, 13> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -87,6 +88,7 @@ namespace forced_teams_rules
 		{"addStatPoints", "n", "ai"},
 		{"extractionPointServices", "n", "ai"},
 		{"setSoloMode", "n", "ai"},
+		{"resetHeroVitals", "n", ""},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -543,6 +545,8 @@ namespace forced_teams_rules
 	constexpr DWORD game_party_offset = 0x14;       // four name handles, 0 = empty (0x46c883)
 	constexpr DWORD registry_getter = 0x44b8f0;     // __cdecl: the stats registry
 	constexpr DWORD registry_vtable = 0x68544c;
+	constexpr DWORD registry_reset_slot = 0x0c;
+	constexpr DWORD registry_reset_vitals = 0x449d70;
 	constexpr DWORD registry_index_slot = 0x3c;     // short (const char* name): 0 = no such character
 	constexpr DWORD registry_hero_count_slot = 0x48;// int (): the herostat heroes (their list at +0x120dc)
 	constexpr DWORD registry_hero_at_slot = 0x4c;   // short (int i)
@@ -675,7 +679,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 121> guards{{
+	inline constexpr std::array<guard, 123> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -729,6 +733,8 @@ namespace forced_teams_rules
 		{0x44b7a0, "0fbf4424046bc01c568bb408389b000033d285f60f95c28ac25ec20400", "registry vt+0x78 (0x44b7a0)"},
 		{0x44b7c0, "0fbf4424046bc01c8a8408409b00002401c20400", "registry vt+0x7c (0x44b7c0)"},
 		{0x44c22f, "8ad180e2010ac284c988461866895e1674198b8530230100668b4c241c66898c45dc200100ff8530230100", "the hero list is the herostat entries (0x44c22f)"},
+		{registry_vtable + registry_reset_slot, "709d4400", "registry whole-roster reset vtable entry"},
+		{registry_reset_vitals, "568bf18b86a8bb00004885c07e408bc86bc91c53578dbc31389b00008bd88bff8b1785d274208b86209b00008d4e0423c269c0f804000003c18b80c00000008b108bc8ff521c83ef1c4b75d45f5b5ec3", "whole-roster reset loop and saved-vitals dispatch"},
 		// Costumes.
 		{0x6d8aa0, "902f68000000000020926800010000001c92680002000000189268000300000014926800040000000c926800050000000492680006000000fc91680007000000f09168000800000068196800ffffffff",
 		 "the costume table (0x6d8aa0)"},
@@ -1028,6 +1034,20 @@ namespace forced_teams_rules
 			values.push_back(*value);
 		}
 		return values;
+	}
+
+	// Only generated at keepheroes=false starts. Native vt+0x0c resets every registry record,
+	// including benched heroes; it neither seats heroes nor spends currency nor changes stats.
+	template <typename Engine>
+	void* reset_hero_vitals(Engine& e, void*)
+	{
+		if (!e.forced_teams())
+			e.log(std::string(prefix) + "resetHeroVitals: ForcedTeams=0 - nothing done");
+		else if (!e.reset_hero_vitals())
+			e.log(std::string(prefix) + "ERROR: resetHeroVitals: native whole-roster reset unavailable");
+		else
+			e.log(std::string(prefix) + "resetHeroVitals: whole-roster saved vitals reset (registry vt+0x0c)");
+		return nullptr;
 	}
 
 	// xml2fixFeature(name): 1 when the feature is on. Read at the call, so a switch changed while the

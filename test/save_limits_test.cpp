@@ -8,6 +8,8 @@
 #include "forced_teams_rules.hpp"
 #include "test_state_rules.hpp"
 #include "ini.hpp"
+#include "xtraction_return.hpp"
+#include "xtraction_return_rules.hpp"
 #include <array>
 #include <cstdio>
 #include <cstdarg>
@@ -15,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -22,6 +25,7 @@ extern "C" std::uint8_t fixture_space[0x700000];
 namespace ini { bool descriptions=true; bool flag(const wchar_t*,const wchar_t*,bool){return descriptions;} }
 namespace logger {void write(const char*,...){} }
 namespace save_format {unsigned refusals=0;void latch_reconstruction_failure(const char*){++refusals;} }
+namespace game_version {void refuse_startup(){std::abort();}}
 namespace {
 using namespace save_limits_sites;
 int checks=0,failures=0;
@@ -162,6 +166,102 @@ void __fastcall capture_snapshot(void* snapshot,void*,unsigned){
  std::snprintf(static_cast<char*>(snapshot)+0xa4,32,"frame-%u",frame_sequence++);
  native<bool(__fastcall*)(void*,void*,void*)>(0x489a80)(nullptr,nullptr,snapshot);
  const unsigned vector[6]={0x3f000000,0x471c4000,0xc71c4000,0x80000000,0x3f800000,0x3fc00000};std::memcpy(static_cast<std::uint8_t*>(snapshot)+0x528,vector,24);
+}
+// Exercise the real point/party capture instead of replacing it with capture_snapshot.
+std::array<std::array<std::uint8_t,0x290>,5> capture_entities{};
+unsigned capture_vt[16]{},capture_class[32]{};
+void* capture_entity(unsigned id){return id>=1&&id<=5?capture_entities[id-1].data():nullptr;}
+void* __fastcall capture_lookup(unsigned* id,void*){return capture_entity(*id);}
+void* __cdecl capture_by_value(unsigned id){return capture_entity(id);}
+void* __fastcall capture_class_info(void*,void*){return capture_class;}
+void* __fastcall capture_transform(void* entity,void*){return static_cast<std::uint8_t*>(entity)+0x20;}
+void* __fastcall capture_list_init(void* list,void*){std::memset(list,0,24);return list;}
+void __fastcall capture_list(void*,void*,void* list,unsigned,unsigned){for(unsigned i=0;i<4;++i)put(list,4*i,i+1);put(list,20,4u);}
+void* __fastcall capture_no_name(void*,void*,unsigned){return nullptr;}
+void* __fastcall point_vector(void* out,void*,float x,float y,float z){const float v[]={x,y,z};std::memcpy(out,v,12);return out;}
+float __fastcall point_length(const float* p,void*){return p[0]*p[0]+p[1]*p[1]+p[2]*p[2];}
+int __cdecl point_as_int(const char* text){return std::atoi(text);}
+bool __fastcall point_no_help(void*,void*){return false;}
+void* __fastcall point_add(const float* a,void*,float* out,const float* b){for(unsigned i=0;i<3;++i)out[i]=a[i]+b[i];return out;}
+void __fastcall point_position(void* entity,void*,const void* p){std::memcpy(static_cast<std::uint8_t*>(entity)+0x20,p,12);}
+void __fastcall point_orientation(void* entity,void*,const void* p){std::memcpy(static_cast<std::uint8_t*>(entity)+0x2c,p,12);}
+unsigned floor_nav_vt[4]{};
+unsigned* floor_nav=floor_nav_vt;
+std::array<std::uint8_t,0x400> floor_actor{};
+void* __cdecl floor_nav_get(){return &floor_nav;}
+void __fastcall floor_nav_enable(void*,void*,int){}
+bool __fastcall floor_bad_nav(void*,void*,const float*,float* out,int,int){out[0]=-12.f;out[1]=34.f;out[2]=-600.f;return true;}
+void __fastcall floor_restore_driver(void*,void*){native<void(__fastcall*)(void*,void*)>(0x423cf0)(floor_actor.data(),nullptr);}
+__declspec(naked) void floor_after_nav(){__asm {
+ mov eax,[esp+18h]
+ mov [esi+20h],eax
+ mov eax,[esp+1ch]
+ mov [esi+24h],eax
+ mov eax,[esp+20h]
+ mov [esi+28h],eax
+ mov eax,423e94h
+ jmp eax
+}}
+void unsafe_floor_test(){
+ // Execute the actual retail NAV call, acceptance branch and selected-position copy.
+ // End before the separate world collider: the live regression proves its +/-24
+ // trace cannot recover a position hundreds of units below the authored floor.
+ put(at(0x67fa60),0,addr(&vector_zero));put(at(0x67fa2c),0,addr(&vector_assign));put(at(0x67f9e0),0,addr(&vector_assign));
+ jump(0x495350,&floor_nav_get);jump(0x494300,&floor_bad_nav);floor_nav_vt[2]=addr(&floor_nav_enable);
+ // The installed NAV slot is copied to this synthetic object, so the production bridge executes.
+ floor_nav_vt[3]=read<unsigned>(at(0x689c38));
+ jump(0x423d5b,&floor_after_nav);
+ const float requested[3]={1111.5f,2222.25f,10.f};std::memcpy(floor_actor.data()+0x20,requested,12);
+ const auto restore=std::vector<std::uint8_t>(native<const std::uint8_t*>(0x489300),native<const std::uint8_t*>(0x489305));
+ jump(0x489300,&floor_restore_driver);
+ const auto entry=0x5f4509+read<unsigned>(at(0x5f4505));
+ native<void(__fastcall*)(void*,void*)>(entry)(nullptr,nullptr);
+ check(!std::memcmp(floor_actor.data()+0x20,requested,12),"side return refuses a NAV height outside the native floor-search span; retail NAV acceptance branch retains requested position");
+ std::memcpy(at(0x489300),restore.data(),restore.size());
+ const float valid[3]={1111.5f,2222.25f,0.f},bad[3]={-12.f,34.f,-600.f};
+ check(xtraction_return_rules::accept(false,true,requested,bad),"other NAV callers retain the native result");
+ check(!xtraction_return_rules::accept(true,false,requested,nullptr),"native NAV failure is preserved without reading an output");
+ check(xtraction_return_rules::accept(true,true,requested,valid),"same-floor NAV projection is retained");
+ float boundary[3]={0,0,requested[2]+24.f};
+ check(xtraction_return_rules::accept(true,true,requested,boundary),"projection at the native trace boundary is retained");
+ boundary[2]=requested[2]+24.5f;
+ check(!xtraction_return_rules::accept(true,true,requested,boundary),"projection beyond the native trace boundary is refused");
+ boundary[0]=std::numeric_limits<float>::quiet_NaN();boundary[2]=requested[2];
+ check(!xtraction_return_rules::accept(true,true,requested,boundary),"nonfinite NAV output is refused during a side return");
+}
+void point_capture_tests(){
+ put(at(0x67fa60),0,addr(&vector_zero));put(at(0x67fa2c),0,addr(&vector_assign));put(at(0x67fa54),0,addr(zero_vector));
+ jump(0x484990,&zone_get);jump(0x46dce0,&game_get);jump(0x4218f0,&capture_list_init);
+ jump(0x4654b0,&capture_lookup);jump(0x41fb10,&capture_by_value);jump(0x41fb70,&capture_by_value);
+ zone_vt[0x5c/4]=addr(&zone_name);game_vt[0x120/4]=addr(&capture_list);game_vt[0xe0/4]=addr(&capture_no_name);
+ std::fill_n(capture_class,32,0xffffffffu);put(at(0x718448),0,0u);put(at(0x70b840),0,0u);
+ capture_vt[0]=addr(&capture_class_info);capture_vt[0x30/4]=addr(&capture_transform);
+ for(unsigned i=0;i<5;++i){put(capture_entities[i].data(),0,addr(capture_vt));put(capture_entities[i].data(),0x27c,100.f);
+  const float location[6]={1111.5f+20*i,2222.25f+30*i,7.5f,0.f,0.f,.75f};std::memcpy(capture_entities[i].data()+0x20,location,sizeof location);}
+ std::array<std::uint8_t,0x550> snapshot;snapshot.fill(0xa5);
+ native<void*(__fastcall*)(void*,void*)>(0x4874b0)(snapshot.data(),nullptr);
+ native<void(__fastcall*)(void*,void*,unsigned)>(0x48a170)(snapshot.data(),nullptr,5);
+ bool party=true;for(unsigned i=0;i<4;++i)party&=!std::memcmp(snapshot.data()+0x40+24*i,capture_entities[i].data()+0x20,24);
+ check(party,"real snapshot capture preserves all four party positions and orientations");
+ check(!std::memcmp(snapshot.data()+0x528,capture_entities[4].data()+0x20,24)&&snapshot[0x540]==0xa5,
+       "real point capture writes the six anchor floats at W2 offsets and preserves the end canary");
+ put(at(0x67f9c8),0,addr(&point_vector));put(at(0x67fa58),0,addr(&point_length));put(at(0x67fa10),0,addr(&point_add));
+ capture_vt[0x1c/4]=addr(&point_position);capture_vt[0x2c/4]=addr(&point_orientation);jump(0x423cf0,&no_action);
+ native<void(__fastcall*)(void*,void*)>(0x489300)(snapshot.data(),nullptr);
+ const float delta[4][3]={{40,0,10},{0,40,10},{-40,0,10},{0,-40,10}};
+ bool restored=true;for(unsigned i=0;i<4;++i)for(unsigned j=0;j<3;++j)
+  restored&=read<float>(capture_entities[i].data(),0x20+4*j)==read<float>(capture_entities[4].data(),0x20+4*j)+delta[i][j];
+ check(restored,"real snapshot restore places four heroes around the captured point, matching XML1 offsets");
+ jump(0x67233c,&point_as_int);jump(0x4654d0,&point_no_help);jump(0x422520,&no_action);game_vt[0x200/4]=addr(&no_action);
+ const char* args[]={"5"};native<void(__cdecl*)(const char**)>(0x5f3630)(args);
+ auto* side=static_cast<std::uint8_t*>(native<void*(__cdecl*)()>(0x48a070)());
+ check(read<unsigned>(side,0xa84)==1&&!std::memcmp(side+0x528,capture_entities[4].data()+0x20,24),
+       "real pushsidemission retains the Xtraction anchor in its enlarged frame");
+ for(unsigned i=0;i<4;++i)std::memset(capture_entities[i].data()+0x20,0,24);
+ native<void(__cdecl*)()>(0x5f44a0)();restored=read<unsigned>(side,0xa84)==0;
+ for(unsigned i=0;i<4;++i)for(unsigned j=0;j<3;++j)
+  restored&=read<float>(capture_entities[i].data(),0x20+4*j)==read<float>(capture_entities[4].data(),0x20+4*j)+delta[i][j];
+ check(restored,"real side-mission pop restores the captured point and empties its frame");
 }
 void side_tests(){
  put(at(0x67fa60),0,addr(&vector_zero));put(at(0x67fa2c),0,addr(&vector_assign));put(at(0x67fa54),0,addr(zero_vector));
@@ -307,7 +407,7 @@ void talent_tests(){
  check(cap_observed==4600,"T11 endpoint cave computes base+200");
  check(!save_guard_rules::registry_full(255,255,255,256)&&save_guard_rules::registry_full(256,0,0,256)&&save_guard_rules::registry_full(0,256,0,256)&&save_guard_rules::registry_full(0,0,256,256),"T11 runtime fullness guard uses 256 independently for all three pools");
 }
-LONG CALLBACK fault(EXCEPTION_POINTERS* e){std::fprintf(stderr,"FAULT %08lx at %p\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress);ExitProcess(3);}
+LONG CALLBACK fault(EXCEPTION_POINTERS* e){std::fprintf(stderr,"FAULT %08lx at %p ECX=%08lx EDX=%08lx EAX=%08lx ESP=%08lx top=%08x\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Ecx,e->ContextRecord->Edx,e->ContextRecord->Eax,e->ContextRecord->Esp,*reinterpret_cast<unsigned*>(e->ContextRecord->Esp));ExitProcess(3);}
 }
 int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);AddVectoredExceptionHandler(1,&fault);std::setvbuf(stdout,nullptr,_IONBF,0);
@@ -320,10 +420,19 @@ int main(int argc,char** argv){
  for(auto a:{0x4885c0u,0x489a01u,0x489800u,0x4bfa50u,0x4c083cu}){auto& byte=*native<std::uint8_t*>(a);byte^=1;const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);const auto r=bad.commit();check((r==patch_transaction::outcome::refused_guard||r==patch_transaction::outcome::refused_region)&&std::equal(before.begin(),before.end(),fixture_space)&&!save_limits::installed(),"T3 mutated ledger/whole-owner byte refuses all writes at "+patch_transaction::hex(a));byte^=1;}
  retail_pool_pop.assign(native<const std::uint8_t*>(0x4be010),native<const std::uint8_t*>(0x4be06f));retail_pool_clear.assign(native<const std::uint8_t*>(0x4be9c0),native<const std::uint8_t*>(0x4bea1d));
  patch_transaction::transaction tx;tx.add(c);check(objective_text::contribute(tx,reinterpret_cast<HMODULE>(0x400000),true),"W2 objective_text joins same transaction with one allocation-site writer");const auto outcome=tx.commit();check(outcome==patch_transaction::outcome::committed,"combined E14/E7/descriptions commit: "+tx.report());if(outcome!=patch_transaction::outcome::committed)return 1;
+ if(!std::getenv("XML2_FIX_TEST_RETURN_BASELINE")){
+  const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+  check(xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),false)&&xtraction_return::verified()&&std::equal(before.begin(),before.end(),fixture_space),"disabled return filter writes no retail bytes");
+  auto& byte=*native<std::uint8_t*>(0x689c38);byte^=1;
+  const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+  check(!xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&!xtraction_return::verified()&&std::equal(mutated.begin(),mutated.end(),fixture_space),"NAV slot guard mismatch refuses both writes and leaves the requested feature unverified");
+  byte^=1;
+  check(xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&xtraction_return::verified(),"guarded side-return NAV filter installed");
+ }
  if(argc>2){const std::string prefix=argv[2];std::ofstream text(prefix+"-text.bin",std::ios::binary);text.write(native<const char*>(0x401000),0x27d7b5);std::ofstream manifest(prefix+"-caves.tsv");std::set<unsigned> pages;
   for(const auto& w:c.writes)for(unsigned a=w.va&~4095u;a<((w.va+w.bytes.size()+4095u)&~4095u);a+=4096)pages.insert(a);
   std::ofstream page_file(prefix+"-pages.txt");for(auto a:pages)page_file<<std::hex<<a<<'\n';
   for(const auto& block:blocks){const auto base=block.lo+5+read<unsigned>(at(block.lo+1));int size=block.hi-block.lo+5;for(const auto& e:block.edits)size+=static_cast<int>(patch_transaction::bytes_of(e.value).size())-e.size;const auto dump_path=prefix+"-code-"+patch_transaction::hex(block.lo)+".bin";std::ofstream dump(dump_path,std::ios::binary);dump.write(native<const char*>(base),size);manifest<<std::hex<<block.lo<<'\t'<<block.hi<<'\t'<<base<<'\t'<<size<<'\t'<<dump_path<<'\n';}
  }
- externals();objective_tests();files_tests();side_tests();shared_pool_tests();talent_tests();std::printf("W2 objectives/talents: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
+ externals();objective_tests();files_tests();unsafe_floor_test();point_capture_tests();side_tests();shared_pool_tests();talent_tests();std::printf("W2 objectives/talents: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
 }

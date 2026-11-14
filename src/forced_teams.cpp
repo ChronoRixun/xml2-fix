@@ -332,6 +332,19 @@ namespace forced_teams
 			}
 		}
 
+		bool call_reset_hero_vitals()
+		{
+			__try
+			{
+				void* registry = object(registry_getter, registry_vtable);
+				if (!registry || method<void*>(registry, registry_reset_slot) != at<void*>(registry_reset_vitals)) return false;
+				using reset_t = void(__fastcall*)(void*, void*);
+				method<reset_t>(registry, registry_reset_slot)(registry, nullptr);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+
 		bool read_vitals(const int index, bool& valid, float& health)
 		{
 			__try
@@ -834,6 +847,8 @@ namespace forced_teams
 				return call_hero_count(count) ? std::optional<int>(count) : std::nullopt;
 			}
 
+			bool reset_hero_vitals() { return call_reset_hero_vitals(); }
+
 			std::optional<saved_vitals> vitals(const int index)
 			{
 				saved_vitals v;
@@ -1039,8 +1054,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&add_stat_points<game_engine>, 'n'>),
 			reinterpret_cast<const void*>(&xpoint_services_handler),
 			reinterpret_cast<const void*>(&solo_mode_handler),
+			reinterpret_cast<const void*>(&handler<&reset_hero_vitals<game_engine>, 'n'>),
 		};
-		static_assert(static_cast<std::size_t>(function::solo_mode) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::reset_hero_vitals) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{
@@ -1182,5 +1198,5 @@ namespace forced_teams
 	}
 
 	bool requested() { return asked; }
-	bool revives() { return installed; }
+	bool revives() { return installed && script_functions::capacity() >= static_cast<int>(builtin_count + table_count); }
 }
