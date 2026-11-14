@@ -36,8 +36,8 @@
 //            party can't follow (the regroup test with manual 0, all 0).
 // Regroup predicate (default.xbe 0x34bb0): the hero's own +0x3d8 bit 2 refuses; every living, seated peer of the
 // hero's controller group must be reachable through the hero's navigator (+0x3e8; reset vt+4, query
-// vt+0(position, 80, 200) == 2) and, for the held button, on screen (CCamera vt+0x178, margin 150). Not ported: the
-// test on character+0xc0 (its PC counterpart is unproven; docs/solo-mode.md).
+// vt+0(position, 80, 200) == 2) and, for the held button, on screen (CCamera vt+0x178, margin 150). A valid floor
+// handle other than the world's own level handle refuses for the hero and each living peer (XBE +0xc0, PC +0xbc).
 namespace solo_mode
 {
 	namespace
@@ -49,6 +49,8 @@ namespace solo_mode
 		template <class T> T fn(u32 a) { return reinterpret_cast<T>(static_cast<std::uintptr_t>(a)); }
 
 		using resolve_t = void*(__fastcall*)(const u32*, void*);
+		using valid_t = bool(__fastcall*)(const u32*, void*);
+		using world_floor_t = u32*(__cdecl*)(u32*);
 		using lookup_t = u32*(__cdecl*)(u32*, const char*);
 		using clock_t = float(__cdecl*)();
 		using voice_t = void(__fastcall*)(void*, void*, int);
@@ -64,12 +66,13 @@ namespace solo_mode
 		constexpr u32 path_vtable = 0x689b78;          // CPath: vt+0 query 0x496280, vt+4 reset 0x492560
 		constexpr u32 character_class_id = 0x70b840;
 		constexpr u32 ai_flags = 0x3d8, controller = 0x3d4, navigator = 0x3e8, health = 0x27c, origin = 0x20;
+		constexpr u32 floor_handle = 0xbc, handle_valid = 0x4654d0, world_floor_getter = 0x45fe70;
 
 		party state;
 		bool was_requested = false, sites_installed = false;
 		// [Test] SoloTrace: a line per regroup check - what refused it, or each peer's navigator status.
 		bool trace = false;
-		int checked = 0, statuses[4]{}, refused = 0; // refused: 0 no, 1 hero flag, 2 navigator, 3 off screen, 4 status
+		int checked = 0, statuses[4]{}, refused = 0; // refused: 0 no, 1 hero flag, 2 navigator, 3 off screen, 4 status, 5 hero floor, 6 peer floor
 		u32 handles[4]{};
 		float last_tick = -1.0f;
 
@@ -172,6 +175,18 @@ namespace solo_mode
 			return "?";
 		}
 
+		// default.xbe 0x34bd6 / 0x34cda: a character standing on a live entity other than the level stays solo.
+		// World vt+0x24 is an out-parameter getter of the level handle, not a remapping of the floor argument.
+		// The native accessors dispatch through the current world (including the raised-capacity replacement).
+		bool floor_allows_regroup(void* character)
+		{
+			const u32 floor = at<u32>(character, floor_handle);
+			if (!floor || !e4_observe::native_call("solo:floor handle valid", [&] { return fn<valid_t>(handle_valid)(&floor, nullptr); })) return true;
+			u32 level = 0;
+			e4_observe::native_call("solo:world floor", [&] { fn<world_floor_t>(world_floor_getter)(&level); });
+			return floor == level;
+		}
+
 		// default.xbe 0x34bb0(manual, all): the automatic regroup asks (0, 1), the held button (1, 1) - each peer must
 		// also be on screen: the camera's test 0x4ae90 with margin 150, PC CCamera vt+0x178 0x4403a0 - and a CheckSolo
 		// teleport (0, 0), where the first peer that can reach the hero settles it.
@@ -181,6 +196,7 @@ namespace solo_mode
 			__try
 			{
 				if (!hero || (at<unsigned char>(hero, ai_flags) & 4)) { refused = 1; return false; }
+				if (!floor_allows_regroup(hero)) { refused = 5; return false; }
 				void* nav = at<void*>(hero, navigator);
 				const int group = at<int>(hero, controller);
 				for (void* peer : party_entities())
@@ -189,6 +205,7 @@ namespace solo_mode
 					{
 						continue;
 					}
+					if (!floor_allows_regroup(peer)) { refused = 6; return false; }
 					if (!nav || at<u32>(nav, 0) != path_vtable) { refused = 2; return false; }
 					const float position[3]{at<float>(peer, origin), at<float>(peer, origin + 4), at<float>(peer, origin + 8)};
 					if (manual)
@@ -592,7 +609,7 @@ namespace solo_mode
 	{
 		if (!was_requested) return {{0, 0, 0, 0}, true};          // verified off
 		if (!sites_installed) return {{0, 0, 0, 0}, false};        // requested, failed: poisons online agreement
-		return {{1, 1, 0, 0}, true};                               // installed, decision rules revision 1
+		return {{1, 2, 0, 0}, true};                               // installed, revision 2: platform floor guards
 	}
 
 	void script_request(void* entity, bool on, const char* name)
@@ -632,7 +649,10 @@ namespace solo_mode
 			logger::write("solo mode: XMen2.exe isn't at 0x400000 - not installed, the native AI follows as before");
 			return;
 		}
-		constexpr std::array<limits_rules::guard, 25> guards{{
+		constexpr std::array<limits_rules::guard, 28> guards{{
+			{0x419f29, "8b86bc0000003b07", "actor floor handle +0xbc"},
+			{0x4654d0, "568bf1e8482a06008b16518bcc89118b108bc8ff52145ec3", "floor handle validity through current world"},
+			{0x45fe70, "8b0d308471008b01568b74240856ff50248bc65ec3", "level handle: current world vt+0x24 output"},
 			{0x51ee0e, "0f89160300008a85d8030000b30484c374168b078bcfff905401000032c05f5e5d5b83c428c20c00", "hero idle handler: formation follow"},
 			{0x51ebc6, "f680b4020000400f85f8010000a008b7700084c00f85eb010000", "hero idle handler: bridge power"},
 			{0x50b8c3, "0f8470040000f687d80300000474178b4e108b01ff905401000032c05f5e5d5b83c424c20400", "follow movement"},

@@ -23,7 +23,8 @@ SoloMode = 1   ; the port's builder writes it; absent or 0: nothing patched, set
   movement states (0x104d90, 0x105340) stop the follower and end; the idle handler's assist step (0xf2610) and the
   follow-me command (0xfb010) do nothing. Combat, damage and party membership are untouched.
 - The world update (0x73420) regroups automatically: 1.5 s after solo began and then once a second it asks 0x34bb0
-  whether every living party peer can reach the followed hero - the hero's navigator (CPath, character+0x340) finds a
+  whether the followed hero and every living party peer stand on the level rather than a live entity such as a moving
+  platform, and whether every peer can reach the hero - the hero's navigator (CPath, character+0x340) finds a
   path to each peer within 200 steps (status 2) - and leaves solo when it can.
 
 ## What the fix does (XMen2.exe)
@@ -50,17 +51,30 @@ sites installed. The automatic regroup runs the original schedule on the game cl
 clock value) and uses the hero's own CPath (vtable 0x689b78; query 0x496280 with the PC's extra argument 1, which
 skips the far-path lookup XMen2.exe added, leaving the first game's near search).
 
-`[Test] SoloTrace=1` writes one line per automatic regroup check to xml2-fix.log: what refused it, or each peer's
-navigator status (0 failed, 1 still searching, 2 reached, 3 already there, 4 blocked).
+The floor check precedes navigation for the followed hero and each eligible living peer. The floor handle is at
+actor+0xbc (default.xbe +0xc0). A null or stale handle proceeds to navigation; a valid handle must equal the current
+world's level handle. World vt+0x24 writes that level handle to its output argument; it does not remap the supplied
+floor handle. The PC accessors are 0x4654d0 (validity) and 0x45fe70 (level handle), so both retail and raised-capacity
+worlds use their own virtual methods. Their retail wrappers and the actor floor field are guarded at installation.
 
-Online: shared gameplay rule 8, `{installed, 1, 0, 0}` ([gameplay-agreement.md](gameplay-agreement.md)). Entering is
-refused with more than one human player, as in the original.
+This prevents the Forbidden Halls moving-platform puzzle from ending solo mode on the first 1.5-second check and
+sending AI followers into the gap. The original trigger starts solo when the leader crosses the gap; the switch's
+bridge script removes the moving platform and ends solo after the bridge forms. It does not teleport the teammates.
+The same entity-floor rule applies to every solo area, including CheckSolo teleports and manual regroup.
+
+`[Test] SoloTrace=1` writes one line per automatic regroup check to xml2-fix.log: what refused it, or each peer's
+navigator status (0 failed, 1 still searching, 2 reached, 3 already there, 4 blocked). Refusal 5 means the followed hero
+is on a live entity other than the level; refusal 6 means an eligible peer is.
+
+Online: shared gameplay rule 8, `{installed, 2, 0, 0}` ([gameplay-agreement.md](gameplay-agreement.md)). Revision 2 restores
+the floor checks; it refuses revision 1 in both directions. Verified off stays `{0,0,0,0}`. Entering is refused with
+more than one human player, as in the original. This is a DLL change and requires no content rebuild.
+
+`xml2_solo_mode_regroup_test <retail XMen2.exe>` executes the production predicate with synthetic actors and native
+service stubs: leader/peer platform refusals, world/null/stale floors, peer eligibility, path failures, CheckSolo's
+first-peer behavior, install guards and old/new online-agreement refusal.
 
 ## Not ported (unproven PC counterparts)
 
-- The regroup predicate's test on character+0xc0 - the handle of the entity the character stands on (set by 0x27260
-  from the floor routine 0x78640; the PC keeps it at actor+0xbc, 0x419f20) - remapped through the entity registry's
-  vt+0x24 (default.xbe 0xbef20, kept at game+0xc and 0x48d8e4): standing on an entity whose handle remaps refuses the
-  regroup. The PC counterpart of that registry call is unproven.
 - The HUD's "solo" text (string ids 0x9d / 0x9e in the first game) - the voice lines play.
 - The HUD's per-hero solo marker (0x1588c0) and the automap's solo mark (0x72150).
