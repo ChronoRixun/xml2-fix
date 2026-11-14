@@ -1,4 +1,4 @@
-> **Current beta: 1.11.0-beta.8**, for Legends Classic 0.6.0-beta.7: fallen heroes come back when a mission seats them, and Juggernaut stops rubber-banding. Update XML2 Fix on the Beta channel; no rebuild needed. Back up saves.
+> **Current beta: 1.11.0-beta.9**, for Legends Classic 0.6.0-beta.7: fixes the world freeze in busy fights (everything stopped moving at Dark Avalanche). Update XML2 Fix on the Beta channel; no rebuild needed. Back up saves.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
@@ -40,10 +40,11 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.11.0-beta.8**, paired with Legends Classic 0.6.0-beta.7.
-A hero who is down and is put in a mission's fixed party comes back standing (the Act 8 status meeting no longer opens
-on "All X-Men have been eliminated"), and Juggernaut no longer rubber-bands after his armor power. Update XML2 Fix on
-Ultimate Legends' **Beta** channel; no rebuild needed. Everyone in an online session needs beta.8; older companions are
+**Beta: XML2 Fix 1.11.0-beta.9**, paired with Legends Classic 0.6.0-beta.7.
+Fixes a world freeze in busy fights: everything stopped moving while menus and sound kept working (seen at Dark
+Avalanche), because the game's timed-event list was too small for Legends Classic's larger levels. beta.8's fixes
+(fallen heroes come back when a mission seats them; Juggernaut no longer rubber-bands) are included. Update XML2 Fix on
+Ultimate Legends' **Beta** channel; no rebuild needed. Everyone in an online session needs beta.9; older companions are
 refused. Iceman and Magma skating still stops after one burst on real pads.
 See [beta notes](packaging/release-notes/v1.11.0.md) for the remaining limitations.
 

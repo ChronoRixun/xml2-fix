@@ -1,3 +1,4 @@
+#include "event_pool_rules.hpp"
 #include "actor_ai_layout.hpp"
 #include "xml1_turrets.hpp"
 #include "turret_rules.hpp"
@@ -487,7 +488,7 @@ void watch_flights(float time){
 }
 void __fastcall process_hook(void* self,void* edx,float time){
     real_process(self,edx,time);
-    if(installed&&self==reinterpret_cast<void*>(scheduler)){update(time);watch_flights(time);}
+    if(installed&&self==reinterpret_cast<void*>(static_cast<std::uintptr_t>(event_pool_rules::installed_object))){update(time);watch_flights(time);}
 }
 u32 fnv(const std::vector<std::string>& all){
     u32 h=2166136261u;

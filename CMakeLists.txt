@@ -84,6 +84,7 @@ add_library(xml2_fix SHARED
 	src/mold_query.cpp
 	src/mold_effects.cpp
 	src/lockon_effects.cpp
+	src/event_pool.cpp
 	src/xml1_turrets.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
@@ -611,6 +612,12 @@ add_executable(xml2_join_in_progress_boundary_test test/join_in_progress_boundar
 target_include_directories(xml2_join_in_progress_boundary_test PRIVATE src)
 target_compile_options(xml2_join_in_progress_boundary_test PRIVATE /UNDEBUG /Gy)
 target_link_options(xml2_join_in_progress_boundary_test PRIVATE /OPT:REF /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+# The timed-event pool ([Limits] TimedEvents): rules, and with a retail image the unmodified manager's overflow and the
+# production install (docs/timed-event-pool.md).
+add_executable(xml2_event_pool_test test/event_pool_test.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_event_pool_test PRIVATE src)
+target_compile_options(xml2_event_pool_test PRIVATE /UNDEBUG /Gy)
+target_link_options(xml2_event_pool_test PRIVATE /OPT:REF /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 add_executable(xml2_xml1_turrets_restart_test test/xml1_turrets_restart_test.cpp tools/union_host/union_space.asm)
 target_include_directories(xml2_xml1_turrets_restart_test PRIVATE src)
 target_compile_options(xml2_xml1_turrets_restart_test PRIVATE /UNDEBUG /Gy)

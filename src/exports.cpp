@@ -78,6 +78,7 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "event_pool.hpp"
 #include "pool_counters.hpp"
 #include "effect_pools.hpp"
 #include "model_pools.hpp"
@@ -722,6 +723,14 @@ namespace
 		e4_core::verify_consumers();
 		if(!game_version::startup_allowed())return;
 		e4_observe::install(game);
+		// The timed-event pool ([Limits] TimedEvents; raised with the entity capacity): after xml1_turrets and
+		// join_in_progress, which guard the manager's retail bytes and its pump slot at their own install.
+		event_pool::install(game);
+		// Rule 65 (TimedEvents): which pending events survive a busy fight is lockstep state, so peers must share the
+		// installed capacity (a 1125 pool overflows and destroys live events where an 8192 one does not). Requested only:
+		// plain XML2 and a pool kept retail on purpose add no entry; a requested raise that did not install is unverified.
+		if (const auto timed = event_pool::agreement(); timed.registers)
+			gameplay_agreement::register_rule(gameplay_capabilities::timed_events_id, event_pool_rules::agreement_revision, timed.values, timed.verified);
 		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
