@@ -4437,6 +4437,10 @@ namespace
 			std::memcpy(registry.data() + stats_layout::stock.definition_count, &definitions, 4);
 			for (unsigned i = 0; i < roster.size(); ++i) {
 				roster[i] = extension; roster[i][vitals_flags] |= 1;
+				const float saved_health = i == 0 ? -54.0f : i == 1 ? 42.0f : 0.5f;
+				std::memcpy(roster[i].data() + vitals_health, &saved_health, 4);
+				std::memcpy(roster[i].data() + 0x2c, &energy, 4);
+				std::memcpy(roster[i].data() + 0x30, &seat, 4);
 				std::memcpy(roster[i].data(), &extension_vt, 4);
 				const DWORD handle = i + 1, pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(roster[i].data()));
 				std::memcpy(registry.data() + stats_layout::stock.entries + 0x10 + (i + 1) * 0x1c, &handle, 4);
