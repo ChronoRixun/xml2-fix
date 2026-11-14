@@ -405,7 +405,9 @@ row while retaining separate hosts on one PC or distinct addresses. Names are
 not session identities and are never used to merge rows. This adds no wire
 field, gameplay rule, or simulation change.
 
-Stable 1.11.0 adds revision 4 to rule 10 whenever XtractionShop is requested: side returns reject NAV
-projections outside the native floor trace's vertical range. Without XtractionShop, revisions 2/3 remain
+Stable 1.11.0 adds revision 5 to rule 10 whenever XtractionShop is requested. Side returns reject NAV
+projections outside the native floor trace's vertical range, and retain the requested position when a native
+collider check certifies its floor/body clearance while the horizontal projection has no floor. Revision 4
+only checked height. These peers refuse each other in both directions. Without XtractionShop, revisions 2/3 remain
 unchanged. Rule 63's second value marks resetHeroVitals(), the full registry reset at fresh mission starts;
 beta.9's seated-only revival has zero there. Both mismatches refuse in both directions before play.

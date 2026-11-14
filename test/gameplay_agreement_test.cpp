@@ -207,9 +207,12 @@ void records(){
    peer.add(xtraction_services_id,xtraction_revision(true,revival),v,true);peer.finalize();
    old.add(xtraction_services_id,revival?3:2,v,true);old.finalize();
    check(current.compare(peer.bytes())==result::match,"rule 10 matching NAV-filter peers agree");
+   record height_only;height_only.add(xtraction_services_id,4,v,true);height_only.finalize();
+   check(current.compare(height_only.bytes())==result::value && height_only.compare(current.bytes())==result::value,"rule 10 revision4 and supported-placement revision5 refuse both directions");
+
    check(current.compare(old.bytes())==result::value && old.compare(current.bytes())==result::value,"rule 10 old NAV-placement peers refused both directions");
   }
-  check(xtraction_revision(false,false)==2 && xtraction_revision(false,true)==3 && xtraction_revision(true,true)==4,"rule 10 unchanged absent-shop identity; NAV-filter revision 4");
+  check(xtraction_revision(false,false)==2 && xtraction_revision(false,true)==3 && xtraction_revision(true,true)==5,"rule 10 unchanged absent-shop identity; supported-placement revision 5");
   record current,old;current.add(forced_party_revival_id,1,forced_revival_values(true),true);current.finalize();
   old.add(forced_party_revival_id,1,{1,0,0,0},true);old.finalize();
   check(current.compare(old.bytes())==result::value && old.compare(current.bytes())==result::value,"rule 63 whole-roster and seated-only revival refused both directions");

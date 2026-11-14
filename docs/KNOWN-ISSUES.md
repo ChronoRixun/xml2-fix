@@ -9,10 +9,6 @@ slow effect matches the original. Neither is an outstanding stop-after-one-burst
 - Button prompts after rebinding or Steam Input may be wrong.
 - Guard and the 96-live-actor option remain optional and off by default.
 - xemu/XML1-recomp save import remains disabled. Larger-format saves are not backward readable by 1.8.x.
-- The Xtraction return filter was reproduced and fixed twice at Interior Quarters, with all seven
-  Asteroid M point zones checked in the source job. The broader point census has outstanding cases;
-  do not treat those target results as certification of every campaign point.
-
-## Sewer Xtraction Point
-
-Changing the team at the sewers/healer/sewers2_1_3 Xtraction Point can make Iceman fall through a nearby gap and die. Use the adjacent sewers2_1_2 point for Team Management instead. Ordinary activation with the same native save and Cyclops-for-Emma swap reproduces this on published beta.9 and the stable DLL; it predates the new return filter.
+- Xtraction return placement has live regression coverage at Interior Quarters and the sewer Healer
+  point. The 66-point census includes three story-locked points where Team Management is unavailable;
+  it does not certify every roster, save state or multiplayer return at every point.

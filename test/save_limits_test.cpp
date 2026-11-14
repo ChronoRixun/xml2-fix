@@ -26,6 +26,10 @@ namespace ini { bool descriptions=true; bool flag(const wchar_t*,const wchar_t*,
 namespace logger {void write(const char*,...){} }
 namespace save_format {unsigned refusals=0;void latch_reconstruction_failure(const char*){++refusals;} }
 namespace game_version {void refuse_startup(){std::abort();}}
+namespace entity_capacity {
+ std::uint32_t query_site=0,query_target=0;
+ std::uint32_t installed_target(std::uint32_t site){return site==query_site?query_target:0;}
+}
 namespace {
 using namespace save_limits_sites;
 int checks=0,failures=0;
@@ -188,35 +192,79 @@ void __fastcall point_orientation(void* entity,void*,const void* p){std::memcpy(
 unsigned floor_nav_vt[4]{};
 unsigned* floor_nav=floor_nav_vt;
 std::array<std::uint8_t,0x400> floor_actor{};
+unsigned floor_actor_vt[0x154/4]{},floor_query_vt[0x78/4]{};
+unsigned* floor_query=floor_query_vt;
+struct floor_contact {float point[3];unsigned token;float normal[3];};
+floor_contact floor_record{{0,0,0},0,{0,0,1}};
+unsigned floor_free=3,floor_acquires=0,floor_releases=0;
+bool floor_horizontal=false,floor_original_hit=true,floor_projected_hit=false,floor_static=true,floor_obstructed=false,floor_exhausted=false;
+bool floor_direct_nav=false,floor_direct_found=false,floor_native_found=true;
+float floor_normal_z=1,floor_height=0,floor_delta=40;
+float floor_direct_output[3]{};
+void* __fastcall floor_subtract(const float* a,void*,float* out,const float* b){for(unsigned i=0;i<3;++i)out[i]=a[i]-b[i];return out;}
+float* __fastcall floor_index(float* p,void*,unsigned i){return p+i;}
+float __fastcall floor_component(const float* p,void*,unsigned i){return p[i];}
+void* __fastcall floor_size(void*,void*,float* out){out[0]=8;out[1]=8;out[2]=36;return out;}
+void __fastcall floor_set(void* actor,void*,const float* p){std::memcpy(static_cast<std::uint8_t*>(actor)+0x20,p,12);}
+int __cdecl floor_free_count(){return floor_exhausted?0:static_cast<int>(floor_free);}
+void** __fastcall floor_acquire(void** cell,void*,const unsigned* token){check(floor_free>0&&*token==123,"floor query acquires only a free slot and excludes the restored actor");--floor_free;++floor_acquires;*cell=&floor_query;return cell;}
+void __fastcall floor_release(void** cell,void*){check(*cell==&floor_query,"floor query releases its own reference");++floor_free;++floor_releases;*cell=nullptr;floor_record.point[2]=floor_record.normal[2]=std::numeric_limits<float>::quiet_NaN();}
+bool floor_trace_hit=false;
+void __fastcall floor_segment(void*,void*,const float* from,const float* to,const float* extent){
+ check(extent[0]==8&&extent[1]==8&&extent[2]==1,"native floor and certification sweeps use the actor extent with thin Z");
+ floor_trace_hit=from[2]>to[2]?(from[1]==2180?floor_projected_hit:floor_original_hit)&&floor_height<=from[2]&&floor_height>=to[2]:floor_obstructed;
+ floor_record.point[0]=from[0];floor_record.point[1]=from[1];floor_record.point[2]=floor_height;
+ floor_record.normal[0]=floor_record.normal[1]=0;floor_record.normal[2]=floor_normal_z;
+}
+void** __fastcall floor_trace(void*,void*,void** out){*out=floor_trace_hit?&floor_record:nullptr;return out;}
+bool __fastcall floor_world(void**,void*){return floor_static;}
+void __fastcall floor_filter(void*,void*,int,int){}
 void* __cdecl floor_nav_get(){return &floor_nav;}
 void __fastcall floor_nav_enable(void*,void*,int){}
-bool __fastcall floor_bad_nav(void*,void*,const float*,float* out,int,int){out[0]=-12.f;out[1]=34.f;out[2]=-600.f;return true;}
-void __fastcall floor_restore_driver(void*,void*){native<void(__fastcall*)(void*,void*)>(0x423cf0)(floor_actor.data(),nullptr);}
-__declspec(naked) void floor_after_nav(){__asm {
- mov eax,[esp+18h]
- mov [esi+20h],eax
- mov eax,[esp+1ch]
- mov [esi+24h],eax
- mov eax,[esp+20h]
- mov [esi+28h],eax
- mov eax,423e94h
- jmp eax
-}}
+bool __fastcall floor_bad_nav(void*,void*,const float* in,float* out,int,int){out[0]=floor_horizontal?in[0]:-12.f;out[1]=floor_horizontal?in[1]+floor_delta:34.f;out[2]=floor_horizontal?3.34699f:-600.f;return floor_native_found;}
+void __fastcall floor_restore_driver(void*,void*){
+ if(floor_direct_nav)floor_direct_found=native<bool(__fastcall*)(void*,void*,const float*,float*,int,int)>(floor_nav_vt[3])(&floor_nav,nullptr,reinterpret_cast<const float*>(floor_actor.data()+0x20),floor_direct_output,0,1);
+ else native<void(__fastcall*)(void*,void*)>(0x423cf0)(floor_actor.data(),nullptr);
+}
 void unsafe_floor_test(){
- // Execute the actual retail NAV call, acceptance branch and selected-position copy.
- // End before the separate world collider: the live regression proves its +/-24
- // trace cannot recover a position hundreds of units below the authored floor.
+ // Execute the retail NAV branch, requested-input fallback, native collision
+ // tail and actor setter. Only the external world-query backend is synthetic.
  put(at(0x67fa60),0,addr(&vector_zero));put(at(0x67fa2c),0,addr(&vector_assign));put(at(0x67f9e0),0,addr(&vector_assign));
+ put(at(0x67fa0c),0,addr(&floor_subtract));put(at(0x67fa58),0,addr(&point_length));put(at(0x67f9c4),0,addr(&floor_index));put(at(0x67f9d8),0,addr(&floor_component));
  jump(0x495350,&floor_nav_get);jump(0x494300,&floor_bad_nav);floor_nav_vt[2]=addr(&floor_nav_enable);
+ jump(0x4ab670,&floor_acquire);jump(0x4ab720,&floor_release);jump(0x4ab740,&floor_free_count);jump(0x4a95c0,&floor_world);
+ floor_query_vt[0x40/4]=addr(&floor_filter);floor_query_vt[0x74/4]=addr(&floor_segment);floor_query_vt[0x20/4]=addr(&floor_trace);
+ floor_actor_vt[0x28/4]=addr(&floor_size);floor_actor_vt[0x150/4]=addr(&floor_set);put(floor_actor.data(),0,addr(floor_actor_vt));put(floor_actor.data(),0x1c,123u);
+ const float lo[3]={-8,-8,0},hi[3]={8,8,72};std::memcpy(floor_actor.data()+0x158,lo,12);std::memcpy(floor_actor.data()+0x164,hi,12);
  // The installed NAV slot is copied to this synthetic object, so the production bridge executes.
  floor_nav_vt[3]=read<unsigned>(at(0x689c38));
- jump(0x423d5b,&floor_after_nav);
  const float requested[3]={1111.5f,2222.25f,10.f};std::memcpy(floor_actor.data()+0x20,requested,12);
  const auto restore=std::vector<std::uint8_t>(native<const std::uint8_t*>(0x489300),native<const std::uint8_t*>(0x489305));
  jump(0x489300,&floor_restore_driver);
  const auto entry=0x5f4509+read<unsigned>(at(0x5f4505));
  native<void(__fastcall*)(void*,void*)>(entry)(nullptr,nullptr);
- check(!std::memcmp(floor_actor.data()+0x20,requested,12),"side return refuses a NAV height outside the native floor-search span; retail NAV acceptance branch retains requested position");
+ check(read<float>(floor_actor.data(),0x20)==1111.5f&&read<float>(floor_actor.data(),0x24)==2222.25f&&read<float>(floor_actor.data(),0x28)==2.f,"side return refuses an out-of-span NAV height and executes native fallback floor placement");
+ floor_horizontal=true;const float sewer[3]={2940,2140,10};std::memcpy(floor_actor.data()+0x20,sewer,12);const auto before_gap=floor_acquires;
+ native<void(__fastcall*)(void*,void*)>(entry)(nullptr,nullptr);
+ check(read<float>(floor_actor.data(),0x20)==2940&&read<float>(floor_actor.data(),0x24)==2140&&read<float>(floor_actor.data(),0x28)==2.f,"side return retains a supported original destination when its horizontally projected NAV destination has no world floor");
+ check(floor_acquires==before_gap+4,"original floor, projected floor, body and native collider each own a fresh sequential query");
+ auto run=[&](bool scoped=true){std::memcpy(floor_actor.data()+0x20,sewer,12);if(scoped)native<void(__fastcall*)(void*,void*)>(entry)(nullptr,nullptr);else native<void(__fastcall*)(void*,void*)>(0x423cf0)(floor_actor.data(),nullptr);};
+ auto kept_projection=[&]{return read<float>(floor_actor.data(),0x24)==2180&&read<float>(floor_actor.data(),0x28)==3.34699f;};
+ floor_projected_hit=true;run();check(read<float>(floor_actor.data(),0x24)==2180&&read<float>(floor_actor.data(),0x28)==2.f,"both supported destinations retain NAV and native collider placement");floor_projected_hit=false;
+ floor_original_hit=false;run();check(kept_projection(),"an unsupported original destination retains the native NAV result");floor_original_hit=true;
+ floor_static=false;run();check(kept_projection(),"dynamic-only original support retains the native NAV result");floor_static=true;
+ floor_normal_z=.3f;run();check(kept_projection(),"a steep original normal cannot certify a replacement");
+ floor_normal_z=std::numeric_limits<float>::quiet_NaN();run();check(kept_projection(),"nonfinite original contact data retains native placement");floor_normal_z=1;
+ floor_height=11;run();check(kept_projection(),"a floor above the requested body cannot certify a replacement");floor_height=0;
+ floor_obstructed=true;run();check(kept_projection(),"an obstructed original body retains the native NAV result");floor_obstructed=false;
+ floor_exhausted=true;auto acquired=floor_acquires;run();check(kept_projection()&&floor_acquires==acquired+1,"exhausted certification pool skips acquisition and leaves only the native collider query");floor_exhausted=false;
+ put(floor_actor.data(),0x164,std::numeric_limits<float>::quiet_NaN());acquired=floor_acquires;run();check(kept_projection()&&floor_acquires==acquired+1,"malformed actor bounds preserve native placement without certification queries");std::memcpy(floor_actor.data()+0x164,hi,12);
+ put(floor_actor.data(),0x160,-8.f);run();check(kept_projection(),"an actor extending below the certified standing volume preserves native placement");std::memcpy(floor_actor.data()+0x158,lo,12);
+ acquired=floor_acquires;run(false);check(kept_projection()&&floor_acquires==acquired+1,"the same floor caller outside snapshot restore retains native placement");
+ floor_direct_nav=true;acquired=floor_acquires;run();check(floor_direct_found&&floor_direct_output[1]==2180&&floor_acquires==acquired,"a different NAV caller inside restore cannot derive an actor or run certification");floor_direct_nav=false;
+ floor_delta=0;acquired=floor_acquires;run();check(read<float>(floor_actor.data(),0x24)==2140&&floor_acquires==acquired+1,"an unchanged horizontal NAV position uses only the native collider query");floor_delta=40;
+ floor_native_found=false;acquired=floor_acquires;run();check(read<float>(floor_actor.data(),0x24)==2140&&read<float>(floor_actor.data(),0x28)==2&&floor_acquires==acquired+1,"native NAV failure retains its fallback without certification queries");floor_native_found=true;
+ check(floor_free==3&&floor_acquires==floor_releases,"certification and native floor tail release every acquired query");
  std::memcpy(at(0x489300),restore.data(),restore.size());
  const float valid[3]={1111.5f,2222.25f,0.f},bad[3]={-12.f,34.f,-600.f};
  check(xtraction_return_rules::accept(false,true,requested,bad),"other NAV callers retain the native result");
@@ -423,10 +471,23 @@ int main(int argc,char** argv){
  if(!std::getenv("XML2_FIX_TEST_RETURN_BASELINE")){
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
   check(xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),false)&&xtraction_return::verified()&&std::equal(before.begin(),before.end(),fixture_space),"disabled return filter writes no retail bytes");
-  auto& byte=*native<std::uint8_t*>(0x689c38);byte^=1;
-  const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
-  check(!xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&!xtraction_return::verified()&&std::equal(mutated.begin(),mutated.end(),fixture_space),"NAV slot guard mismatch refuses both writes and leaves the requested feature unverified");
-  byte^=1;
+  auto reject_guard=[&](const limits_rules::guard& g){auto& byte=*native<std::uint8_t*>(g.va);byte^=1;
+   const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+   check(!xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&!xtraction_return::verified()&&std::equal(mutated.begin(),mutated.end(),fixture_space),"return guard mismatch refuses both writes at "+patch_transaction::hex(g.va));byte^=1;
+  };
+  for(const auto& g:xtraction_return_rules::guards)reject_guard(g);
+  for(const auto& g:xtraction_return_rules::query_guards)reject_guard(g);
+  for(const auto& g:xtraction_return_rules::query_guards){
+   const auto original=std::vector<std::uint8_t>(native<const std::uint8_t*>(g.va),native<const std::uint8_t*>(g.va+g.hex.size()/2));
+   entity_capacity::query_site=g.va;entity_capacity::query_target=addr(&floor_free_count);
+   const auto stale=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+   check(!xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&std::equal(stale.begin(),stale.end(),fixture_space),"a published query owner refuses stale retail entry at "+patch_transaction::hex(g.va));
+   jump(g.va,&floor_free_count);entity_capacity::query_target=addr(&floor_free_count)+1;
+   const auto foreign=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+   check(!xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&std::equal(foreign.begin(),foreign.end(),fixture_space),"a query jump to a different owner refuses both writes at "+patch_transaction::hex(g.va));
+   std::memcpy(at(g.va),original.data(),original.size());entity_capacity::query_site=entity_capacity::query_target=0;
+  }
+  entity_capacity::query_site=0x4ab740;entity_capacity::query_target=addr(&floor_free_count);jump(0x4ab740,&floor_free_count);
   check(xtraction_return::install(reinterpret_cast<HMODULE>(0x400000),true)&&xtraction_return::verified(),"guarded side-return NAV filter installed");
  }
  if(argc>2){const std::string prefix=argv[2];std::ofstream text(prefix+"-text.bin",std::ios::binary);text.write(native<const char*>(0x401000),0x27d7b5);std::ofstream manifest(prefix+"-caves.tsv");std::set<unsigned> pages;

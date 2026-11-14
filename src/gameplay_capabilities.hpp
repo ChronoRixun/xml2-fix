@@ -44,8 +44,9 @@ namespace gameplay_capabilities
  // with RevivalCost=xml1 (1.5.0 to 1.8.0-beta.7) charged 200 * L^2, so the two refuse each other naming rule 10. Without
  // the key the entry stays revision 2 (the released record: the Xtraction services alone are unchanged).
  constexpr std::uint16_t xtraction_services_revision=2, xtraction_services_revival_revision=3;
- // Revision 4 adds the guarded side-return NAV-height filter whenever XtractionShop is requested.
- constexpr std::uint16_t xtraction_return_revision=4;
+ // Revision 4 added the guarded side-return NAV-height filter; revision 5 also retains a certified safe original
+ // destination when the horizontally projected destination has no floor. Requested only by XtractionShop.
+ constexpr std::uint16_t xtraction_return_revision=5;
  constexpr std::uint16_t xtraction_revision(bool shop,bool revival) {
   return shop ? xtraction_return_revision : revival ? xtraction_services_revival_revision : xtraction_services_revision;
  }
