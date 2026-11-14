@@ -40,7 +40,7 @@ int main()
 	check(stat_point_total(32766, 1) == 32767);
 	check(!stat_point_total(32767, 1) && !stat_point_total(-1, 1));
 	check(feature_named("StatPoints") == feature::stat_points);
-	check(table_count + builtin_count <= tree_capacity);
+	check(table_count + builtin_count <= raised_capacity && past_tree(table_count) == 1);
 	check(std::string_view(functions[static_cast<std::size_t>(function::stat_points)].name) == "addStatPoints");
 	std::printf("stat points rules: %d failures\n", failed);
 	return failed ? 1 : 0;

@@ -12,3 +12,7 @@ slow effect matches the original. Neither is an outstanding stop-after-one-burst
 - The Xtraction return filter was reproduced and fixed twice at Interior Quarters, with all seven
   Asteroid M point zones checked in the source job. The broader point census has outstanding cases;
   do not treat those target results as certification of every campaign point.
+
+## Intermittent startup stress result
+
+A stress check of the DirectInput startup fix can still fail intermittently on a PC with exactly 16 or 32 HID devices, then pass unchanged on retry. The stable round records this as a known intermittent fixture result, with a separate investigation pending. If the game fails before the main menu, try starting it again. This is not a claim that every ordinary boot reproduces the stress failure.
