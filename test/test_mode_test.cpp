@@ -2,6 +2,7 @@
 // No game process, graphics, saves, registry or network calls.
 #include "test_mode.cpp"
 #include "xtract.cpp"
+#include "xtraction_return.cpp"
 #include "xtraction_shop_rules.hpp"
 #include <fstream>
 #include <map>
