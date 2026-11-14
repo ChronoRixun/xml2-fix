@@ -42,7 +42,23 @@ namespace
 		void* base;
 		SIZE_T bytes;
 	};
-	std::map<void*, placed> blocks;
+	// dinput's DLL_PROCESS_DETACH calls our LocalFree hook after the EXE's static destructors.
+	// Keep the ledger alive until the OS tears down the process, just like blocks_lock below.
+	// A normal global map here leaves end_free searching freed tree nodes at process exit.
+	bool ledger_alive = false;
+	HLOCAL late_block = nullptr;
+	void check_late_free();
+	struct late_free_check
+	{
+		~late_free_check() { check_late_free(); }
+	} check_after_statics; // constructed before the ledger, so its destructor runs after a global ledger's
+
+	struct placement_ledger : std::map<void*, placed>
+	{
+		placement_ledger() { ledger_alive = true; }
+		~placement_ledger() { ledger_alive = false; }
+	};
+	auto& blocks = *new placement_ledger; // intentionally process lifetime: DLL detach still uses it
 	CRITICAL_SECTION blocks_lock;
 	decltype(&LocalAlloc) system_alloc = &LocalAlloc;
 	decltype(&LocalReAlloc) system_realloc = &LocalReAlloc;
@@ -137,6 +153,29 @@ namespace
 		return system_free(memory);
 	}
 
+
+	// Deterministic stand-in for the LocalFree callback from DLL detach, after EXE static destruction.
+	// Check lifetime before touching the tree: reverting the process-lifetime allocation fails cleanly
+	// instead of relying on the freed tree nodes happening to be overwritten by another allocation.
+	void check_late_free()
+	{
+		if (!ledger_alive)
+		{
+			std::printf("FAIL late-free: placement ledger destroyed before DLL detach\n");
+			std::fflush(stdout);
+			std::_Exit(6);
+		}
+		placed p{};
+		if (!late_block || !find(late_block, p) || end_free(late_block) || find(late_block, p))
+		{
+			std::printf("FAIL late-free: placement block not freed through the live ledger\n");
+			std::fflush(stdout);
+			std::_Exit(7);
+		}
+		std::printf("late-free: ok (placement ledger survives static destruction)\n");
+		std::fflush(stdout);
+	}
+
 	// ---- the walk, as dinput.dll 10.0.26100.8115 writes it: header {count, capacity, ?}, 0x48-byte entries ----
 	struct list_header
 	{
@@ -201,6 +240,43 @@ namespace
 		return walked;
 	}
 
+
+	void print_layout(void* const block, const SIZE_T requested)
+	{
+		placed p{};
+		if (!ledger_alive || !find(block, p))
+		{
+			std::printf("layout block %p not in live placement ledger\n", block);
+			return;
+		}
+		const SIZE_T rounded = (p.bytes + 7) & ~SIZE_T{7};
+		const SIZE_T padding = p.bytes >= requested ? p.bytes - requested : 0;
+		auto* data = static_cast<unsigned char*>(block);
+		bool zero = p.bytes >= requested;
+		for (SIZE_T i = requested; zero && i < p.bytes; ++i) zero = data[i] == 0;
+		std::printf("layout block %p base %p requested %zu allocated %zu slack %zu tail-zero %d guard %p extra-read %p covered %d\n",
+			block, p.base, requested, p.bytes, padding, zero ? 1 : 0, data + rounded, data + requested + 0x44,
+			p.bytes >= requested + 0x48 ? 1 : 0);
+	}
+
+	void print_list_layout(const dinput_heap_slack::hid_list_state& state, const bool fixed)
+	{
+		if (state.count < 0 || state.capacity <= 0) return;
+		const SIZE_T requested = sizeof(list_header) + static_cast<SIZE_T>(state.capacity) * entry;
+		EnterCriticalSection(&blocks_lock);
+		bool found = false;
+		for (const auto& [block, p] : blocks)
+		{
+			if (p.bytes != requested + (fixed ? dinput_heap_slack::slack : 0)) continue;
+			const auto* header = static_cast<const list_header*>(block);
+			if (header->count != state.count || header->capacity != state.capacity) continue;
+			print_layout(block, requested);
+			found = true;
+		}
+		LeaveCriticalSection(&blocks_lock);
+		if (!found) std::printf("layout HID list not found in placement ledger\n");
+	}
+
 	// ---- a PC with fewer HID devices: dinput.dll's SetupDiEnumDeviceInterfaces ends after `interface_limit` ----
 	long interface_limit = -1;
 	using enum_interfaces_t = BOOL(WINAPI*)(HDEVINFO, PSP_DEVINFO_DATA, const GUID*, DWORD, PSP_DEVICE_INTERFACE_DATA);
@@ -249,20 +325,39 @@ namespace
 		iat_hook::hook(module, "KERNEL32.dll", "LocalReAlloc", 0, reinterpret_cast<void*>(&end_realloc));
 		iat_hook::hook(module, "KERNEL32.dll", "LocalFree", 0, reinterpret_cast<void*>(&end_free));
 		const bool limiting = iat_hook::hook(module, "KERNEL32.dll", "GetProcAddress", 0, reinterpret_cast<void*>(&limiting_get_proc_address)) != nullptr;
-		// An access violation in the system dinput.dll is reported as "fault rva <offset> reading <address>" before the
-		// child ends with it.
+		// Keep the old leading fault line parseable; also report faults outside dinput (for example
+		// a fixture callback during DLL detach), rather than mistaking a successful create for a walk AV.
 		static HMODULE watched = nullptr;
 		watched = module;
 		AddVectoredExceptionHandler(1, [](EXCEPTION_POINTERS* e) -> LONG
 		{
+			if (e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
 			const auto at = reinterpret_cast<ULONG_PTR>(e->ExceptionRecord->ExceptionAddress);
 			const auto base = reinterpret_cast<ULONG_PTR>(watched);
 			const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
-			if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && at >= base && at < base + nt->OptionalHeader.SizeOfImage)
+			if (at >= base && at < base + nt->OptionalHeader.SizeOfImage)
 			{
-				std::printf("fault rva %lx reading %08lx\n", static_cast<unsigned long>(at - base), static_cast<unsigned long>(e->ExceptionRecord->ExceptionInformation[1]));
-				std::fflush(stdout);
+				std::printf("fault rva %lx reading %08lx\n", static_cast<unsigned long>(at - base),
+					static_cast<unsigned long>(e->ExceptionRecord->ExceptionInformation[1]));
+				// ECX is the list header at the recognized walk's compare. Only inspect tracked storage.
+				placed p{};
+				auto* block = reinterpret_cast<void*>(e->ContextRecord->Ecx);
+				if (ledger_alive && find(block, p) && p.bytes >= sizeof(list_header))
+				{
+					const auto* header = static_cast<const list_header*>(block);
+					if (header->capacity > 0 && header->capacity <= 0x10000)
+						print_layout(block, sizeof(list_header) + static_cast<SIZE_T>(header->capacity) * entry);
+				}
 			}
+			MEMORY_BASIC_INFORMATION info{};
+			VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info));
+			char path[MAX_PATH]{};
+			GetModuleFileNameA(static_cast<HMODULE>(info.AllocationBase), path, MAX_PATH);
+			std::printf("exception ip %p module %s rva %lx access %lu address %p ledger-alive %d\n",
+				reinterpret_cast<void*>(at), path, static_cast<unsigned long>(at - reinterpret_cast<ULONG_PTR>(info.AllocationBase)),
+				static_cast<unsigned long>(e->ExceptionRecord->ExceptionInformation[0]),
+				reinterpret_cast<void*>(e->ExceptionRecord->ExceptionInformation[1]), ledger_alive ? 1 : 0);
+			std::fflush(stdout);
 			return EXCEPTION_CONTINUE_SEARCH;
 		});
 		if (fixed)
@@ -281,6 +376,8 @@ namespace
 		const auto list = dinput_heap_slack::hid_list(module);
 		std::printf("hr %08lx count %d capacity %d shape-rva %lx limited %d\n", static_cast<unsigned long>(hr), list.count, list.capacity,
 			static_cast<unsigned long>(list.compare_rva), limiting && real_enum_interfaces ? 1 : 0);
+		print_list_layout(list, fixed);
+		std::fflush(stdout);
 		if (input)
 		{
 			static_cast<IUnknown*>(input)->Release();
@@ -343,6 +440,11 @@ namespace
 int main(int argc, char** argv)
 {
 	InitializeCriticalSection(&blocks_lock);
+	late_block = end_alloc(LMEM_ZEROINIT, 32);
+	if (argc > 1 && std::strcmp(argv[1], "--child-ledger-lifetime") == 0)
+	{
+		return 0; // check_after_statics verifies the actual exit order
+	}
 	const long limit = argc > 2 ? std::strtol(argv[2], nullptr, 10) : -1;
 	if (argc > 1 && std::strcmp(argv[1], "--child-unfixed") == 0)
 	{
@@ -354,6 +456,10 @@ int main(int argc, char** argv)
 		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 		return child(true, limit);
 	}
+
+	const child_result lifetime = run_child(L"--child-ledger-lifetime");
+	expect(lifetime.exit_code == 0 && lifetime.output.find("late-free: ok") != std::string::npos,
+		"the placement ledger survives static destruction and services a late LocalFree");
 
 	// 1. The padded functions (before any install they call kernel32's own).
 	{

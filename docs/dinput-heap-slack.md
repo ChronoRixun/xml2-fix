@@ -42,3 +42,25 @@ crashed now and then without the fix. On a `dinput.dll` whose walk is not the kn
 3. the PC's own `dinput.dll` in child processes under the same page-end placement, with the HID interface
    enumeration cut so the list is exactly full (16 and 32): unhooked it faults at the walk's compare every time,
    hooked it succeeds and reports the full list. The PC's natural count is reported as well.
+
+### Fixture teardown lifetime
+
+The page-end allocator's placement ledger must live until process termination. The system `dinput.dll`
+stays loaded after `DirectInputCreateEx` and `Release`; its DLL detach cleanup still calls the fixture's
+`LocalFree` hook **after the executable's C++ static destructors**. A normal global `std::map` ledger was
+therefore already destroyed when `end_free` searched it. Depending on reuse of the freed tree nodes, the
+child could report a successful create and a correctly padded list, then exit with an access violation
+inside the fixture's tree search. This was an intermittent test teardown failure, separate from the
+system walk's unhooked access violation at `dinput.dll+0x1a353`.
+
+The ledger now has process lifetime, as does its critical section. The OS reclaims its remaining storage
+at termination. A synthetic late-free callback runs after an ordinary global ledger would be destroyed;
+`--child-ledger-lifetime` checks that exit order without loading DirectInput. Replacing the process-lifetime
+ledger with an ordinary global makes this regression child fail with exit code 6 before accessing dead
+storage. The parent checks both its exit status and its completion marker.
+
+Each recognized system list now reports its allocation base, requested and allocated bytes, slack,
+zeroed tail, guard boundary and extra-read address. Access violations also report their owning module,
+including faults outside `dinput.dll`, while retaining the leading fault line used by the parent checks.
+These changes are confined to the native fixture. They change no player allocation wrapper, input,
+gameplay, network behavior or gameplay-agreement identity.
