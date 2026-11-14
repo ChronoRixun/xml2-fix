@@ -26,6 +26,23 @@ Xml1WallCling=xml1
 
 ## Telekinesis contract
 
+An admitted scripted target is **used remotely**, without starting a physical
+carry. The native game-entity resolver at `41B0E0` takes the selected World
+handle by value; XML1 `DFD89` likewise passes its selected handle to `27BA0`.
+Passing the resolved pointer skips that activation path and incorrectly lifts
+switches. In original XML1, Phoenix's TK on the astral2_2 bridge switch leaves
+its position unchanged and runs the bridge script. Two xemu trials reproduced
+that behavior, including a held directional input; the port's old path instead
+left the switch below the usable ledge after release.
+
+Rule 46 revision 1 now records value[3] as one only for installed
+`TelekinesisRule`. The former zero value is refused in both directions;
+selections without TK and the absent/native record retain their bytes. The
+regression executes the real native handle resolvers and original XML1 entry
+with synthetic targets, covering admitted/refused scripts and class mismatch.
+It checks activation count, physical ownership, ground state and absence of a
+carry sidecar. Ordinary physical TK keeps its existing entry/control/release.
+
 The owner XML1 callbacks are entry `DFC80`, maintenance `DF5B0`, control/input
 `DFF10` and cancel `DF640`. The PC registrations at `6938A4/AC/B0/B8` are replaced
 as one unit, retaining PC update/input scheduling and the native no-op normal

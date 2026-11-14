@@ -305,7 +305,7 @@ Absent adds no entry and writes nothing; any other value, or a refused install, 
 host/join. Outside the game image (not at 0x400000) the key is ignored and adds no entry, as the `[Limits]`
 capacities. See [actor-pools.md](actor-pools.md).
 
-Rule 46 (SharedHandlersC), revision 1, is the independently selected wave-C mask `{installed_mask,0,0,0}`. It registers only when requested; missing/native keys preserve the OFF record, and invalid or failed requests are unverified. See [handler C keys and verification](shared-handler-c-rules.md). ID 46 is coordinator-assigned and does not replace rule 42 or rule 18.
+Rule 46 (SharedHandlersC), revision 1, records `{installed_mask, guard ? 1 : 0, phase ? 1 : 0, telekinesis ? 1 : 0}`. Its fourth value distinguishes scripted-target activation from the older TK path that carried switches; mixed peers refuse in both directions. Selections without telekinesis retain their prior bytes. It registers only when requested; missing/native keys preserve the OFF record, and invalid or failed requests are unverified. See [handler C keys and verification](shared-handler-c-rules.md). ID 46 is coordinator-assigned and does not replace rule 42 or rule 18.
 
 
 Rule 45 carry extension: revision 3, values `{installed ? 1 : 0, 15, 0, 0}`,

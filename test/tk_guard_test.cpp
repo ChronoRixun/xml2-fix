@@ -67,7 +67,12 @@ __declspec(naked) void grabbable_tail(){__asm {
 }}
 bool __fastcall target_allowed(void*,void*){return target_ok;}
 bool scripted=false;
+int scripted_activations=0;
 bool __fastcall script_allowed(void*,void*,int){return scripted;}
+void __fastcall script_activate(void* object,void*,void* owner){
+ check(object==target.data()&&owner==self_actor(),"script activation preserves target and acting hero");
+ ++scripted_activations;
+}
 bool __fastcall liftable(void*,void*,void*){return can_lift;}
 bool __fastcall fallback(void*,void*,void*,void*){return fallback_result;}
 int native_fallback_parameters=0;
@@ -322,6 +327,38 @@ void entry_tests(const image& pc){
   check(std::equal(std::begin(audit_before),std::end(audit_before),std::begin(audit_after)),"auxiliary entry preserves stack and every native callee-saved register");
   check(auxiliary_calls==1&&auxiliary_events==1,"auxiliary acquisition dispatch agrees with source even on same-team objects");
  }
+}
+// The native game-entity helper takes a World token by value, unlike the
+// pointer-based physical/character casts. Execute both owned native helpers
+// so an always-null cast stub cannot hide the scripted-target entry branch.
+void scripted_activation_tests(const image& pc,const image& x1){
+ for(bool admitted:{false,true})for(bool matching_class:{false,true}){
+  int original_acts=0;u32 original_owner=0,original_ground=0;
+  for(bool original:{true,false}){
+   source=original;reset();bind();target_actor=false;scripted=admitted;scripted_activations=0;
+   field<vec>(target.data(),0x20)={20,0,10};
+   field<u32>(target.data(),4)=original?0x20000u:0x40000u;
+   field<u32>(type.data(),0x18)=matching_class?(original?4u:32u):0u;
+   field<u32>(at(0x70b67c),0)=1;
+   field<u32>(at(bias+0x48338c),0)=1;
+   target_vt[(original?0x94:0x9c)/4]=reinterpret_cast<void*>(&script_activate);
+   field<void*>(event.data(),0x14)=attack.data();
+   if(original){
+    load_source(x1,0x27ba0,0x3e);
+    reinterpret_cast<void(__thiscall*)(void*,void*,void*,void*)>(bias+0xdfc80)(nullptr,source_actor.data(),input.data(),context.data());
+    original_acts=scripted_activations;original_owner=field<u32>(target.data(),0x158);original_ground=field<u32>(target.data(),4)&4;
+    check(original_acts==int(admitted&&matching_class),"source activates only an admitted scripted-class target");
+   }else{
+    pc.load(0x41b0e0,0x3e);
+    tk_guard_bridges::tk_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+    check(scripted_activations==original_acts,"TK selected token reaches native scripted activation exactly as XML1");
+    check(field<u32>(target.data(),0x178)==original_owner&&(field<u32>(target.data(),4)&4)==original_ground,"scripted TK activation preserves source physical owner and ground flag");
+    check(tk_guard_bridges::tk_states.count(111)==unsigned(!(admitted&&matching_class)),"scripted TK activation never starts a carry sidecar");
+    if(admitted&&matching_class)check(!(field<unsigned char>(actor.data(),0x259)&2)&&sounds==0&&publications==0,"remote switch use never starts a lift, TK hold sound or carried-object publication");
+   }
+  }
+ }
+ scripted=false;
 }
 void retail_audio_contract_tests(const image& pc){
  // Execute the real disabled-audio paths through both retail vtable entries.
@@ -915,6 +952,7 @@ int main(int argc,char** argv){
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
  std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("native guard probe");guard_probe_tests(pc,x1);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
  native_admission_tests(pc,x1);source_hit_deadline_tests(pc,x1);live_tk_zero_selection_test(pc);source_throw_value_test(pc,x1);
+ std::puts("scripted TK activation");scripted_activation_tests(pc,x1);
  std::puts("guard fallback contract");guard_fallback_contract_test();std::puts("blocked trace");blocked_trace_test();
  raw_guard_normalization_test(pc);
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
