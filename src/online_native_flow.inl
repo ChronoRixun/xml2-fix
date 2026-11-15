@@ -946,7 +946,10 @@ bool native_flow_tick(screen s) {
     }
     if(native_flow.phase==native_phase::admitting) {
         if(native_flow.refused) {
-            if(native_flow.started_refused) native_flow_error(native_flow.skirmish_refused ? "skirmish_started" : "session_started");
+            if(native_flow.started_refused) {
+                if(native_flow.skirmish_refused) native_flow_error("skirmish_started");
+                else native_flow_error("session_started");
+            }
             else native_flow_error("admission_refused");
             return false;
         }
