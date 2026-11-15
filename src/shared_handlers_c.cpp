@@ -17,8 +17,10 @@ bool verified(){return valid&&wanted==applied;}
 // Guard's corrected admission and private block policy must refuse older peers.
 // AnimationPhaseRule's skin-change resume (1.11.0-beta.8: a running controller keeps its phase instead of jumping a
 // whole stride) changes what every peer simulates, so value 2 refuses peers without it the same way.
+// Telekinesis' native scripted-target resolver takes the selected token. Value 3
+// refuses peers which instead carry a remotely usable switch as a physical object.
 // Unrelated rule46 selections retain their original agreement bytes.
-std::array<std::uint32_t,4> values(){return {applied,(applied&shared_handler_c_rules::guard)?1u:0u,(applied&shared_handler_c_rules::phase)?1u:0u,0};}
+std::array<std::uint32_t,4> values(){return {applied,(applied&shared_handler_c_rules::guard)?1u:0u,(applied&shared_handler_c_rules::phase)?1u:0u,(applied&shared_handler_c_rules::telekinesis)?1u:0u};}
 void install(HMODULE game) {
  using namespace shared_handler_c_rules;
  if(applied)return;

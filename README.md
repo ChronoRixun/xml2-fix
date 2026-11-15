@@ -1,4 +1,4 @@
-> **Current beta: 1.11.0-beta.9**, for Legends Classic 0.6.0-beta.7: fixes the world freeze in busy fights (everything stopped moving at Dark Avalanche). Update XML2 Fix on the Beta channel; no rebuild needed. Back up saves.
+> **Stable: XML2 Fix 1.11.0**, paired with Legends Classic 0.6.0. Update both parts on the Stable channel, then Rebuild. Back up saves.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
@@ -34,19 +34,10 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.1** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
-game as 0.4.0-beta.7; 1.8.0 adds the first game's revival price, so it refuses 1.8.0-beta.7 in co-op) and Ultimate
-Legends launcher 0.4.0. Update the launcher first, then update both parts,
-Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
-([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
-
-**Beta: XML2 Fix 1.11.0-beta.9**, paired with Legends Classic 0.6.0-beta.7.
-Fixes a world freeze in busy fights: everything stopped moving while menus and sound kept working (seen at Dark
-Avalanche), because the game's timed-event list was too small for Legends Classic's larger levels. beta.8's fixes
-(fallen heroes come back when a mission seats them; Juggernaut no longer rubber-bands) are included. Update XML2 Fix on
-Ultimate Legends' **Beta** channel; no rebuild needed. Everyone in an online session needs beta.9; older companions are
-refused. Iceman and Magma skating still stops after one burst on real pads.
-See [beta notes](packaging/release-notes/v1.11.0.md) for the remaining limitations.
+**Current release: XML2 Fix 1.11.0**, paired with Legends Classic 0.6.0 (content 38 / catalogue 8 / LC48).
+Update XML2 Fix first, update the builder, then Rebuild and Play. Beta.1-7 saves load; back up SaveLC.
+Every online player needs the matching stable build. See [release notes](packaging/release-notes/v1.11.0.md)
+and [remaining limits](docs/KNOWN-ISSUES.md). Iceman and Magma skating follows the first game's rank limit.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 

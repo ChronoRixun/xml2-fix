@@ -3405,6 +3405,13 @@ namespace
 		std::map<int, forced_teams_rules::saved_vitals> saved;
 		std::set<int> vitals_fault, clear_fault;
 		std::vector<int> cleared;
+		bool reset_fault = false;
+		bool reset_hero_vitals()
+		{
+			if (reset_fault) return false;
+			for (auto& [index, v] : saved) { v = {}; cleared.push_back(index); }
+			return true;
+		}
 		std::optional<forced_teams_rules::saved_vitals> vitals(const int index)
 		{
 			if (vitals_fault.count(index)) return std::nullopt;
@@ -3811,6 +3818,18 @@ namespace
 			      e.last().find("; ERROR: iceman's saved vitals couldn't be read") != std::string::npos);
 			e.vitals_fault.clear();
 			e.clear_fault.clear();
+			// A fresh mission resets the entire roster, including benched fallen and healthy records.
+			e.cleared.clear();
+			const auto party_before_reset = e.slots;
+			reset_hero_vitals(e, nullptr);
+			CHECK(e.cleared.size() == 4 && !e.saved[12].valid && !e.saved[9].valid && e.slots == party_before_reset);
+			e.saved[12] = {true, -10.0f}; e.cleared.clear();
+			e.forced = false; reset_hero_vitals(e, nullptr);
+			CHECK(e.saved[12].valid && e.cleared.empty());
+			e.forced = true; e.reset_fault = true; reset_hero_vitals(e, nullptr);
+			CHECK(e.saved[12].valid && e.cleared.empty() && e.last().find("unavailable") != std::string::npos);
+			e.reset_fault = false;
+
 			e.saved.clear();
 			e.cleared.clear();
 			script_call back(vtables);
@@ -4250,13 +4269,13 @@ namespace
 
 		// The functions: twelve (setSoloMode the last), signatures the game's compiler knows, room in its tree - the tree is
 		// full now (320 names).
-		CHECK(functions.size() == 12 && table_count == 0x12d && builtin_count + table_count == 320 && table_count + builtin_count <= tree_capacity);
+		CHECK(functions.size() == 13 && table_count == 0x12e && builtin_count + table_count == 321 && table_count + builtin_count <= raised_capacity);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].name) == "setSoloMode" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].args) == "ai");
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
-			signatures_ok &= std::strlen(f.ret) == 1 && std::strchr("nis", f.ret[0]) && std::strlen(f.args) >= 1 && std::strlen(f.args) <= 7 &&
+			signatures_ok &= std::strlen(f.ret) == 1 && std::strchr("nis", f.ret[0]) && std::strlen(f.args) <= 7 &&
 			                 std::strspn(f.args, "sia") == std::strlen(f.args);
 		}
 		CHECK(signatures_ok);
@@ -4265,7 +4284,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12d && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12e && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -4328,7 +4347,7 @@ namespace
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
 		// The two value makers are checked through ScriptPools' published
 		// guards; its native fixture tests their retail and relocated bytes.
-		CHECK(guards_ok && guards.size() == 121);
+		CHECK(guards_ok && guards.size() == 123);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -4408,6 +4427,33 @@ namespace
 			expected[vitals_flags] = 0x06;
 			reinterpret_cast<clear_t>(at(vitals_clear))(extension.data(), nullptr);
 			CHECK(extension == expected);
+			// Execute the retail whole-roster loop on synthetic seated/benched records, with a hole.
+			std::vector<std::uint8_t> registry(stats_layout::stock.manager_size, 0);
+			std::array<std::array<std::uint8_t, 0x40>, 3> roster{};
+			std::array<void*, 8> extension_methods{}; extension_methods[7] = at(vitals_clear);
+			const DWORD extension_vt = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(extension_methods.data())), definitions = 5, mask = stats_layout::stock.pool_mask;
+			const DWORD pool_mask = 31;
+			std::memcpy(registry.data() + mask, &pool_mask, 4);
+			std::memcpy(registry.data() + stats_layout::stock.definition_count, &definitions, 4);
+			for (unsigned i = 0; i < roster.size(); ++i) {
+				roster[i] = extension; roster[i][vitals_flags] |= 1;
+				const float saved_health = i == 0 ? -54.0f : i == 1 ? 42.0f : 0.5f;
+				std::memcpy(roster[i].data() + vitals_health, &saved_health, 4);
+				std::memcpy(roster[i].data() + 0x2c, &energy, 4);
+				std::memcpy(roster[i].data() + 0x30, &seat, 4);
+				std::memcpy(roster[i].data(), &extension_vt, 4);
+				const DWORD handle = i + 1, pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(roster[i].data()));
+				std::memcpy(registry.data() + stats_layout::stock.entries + 0x10 + (i + 1) * 0x1c, &handle, 4);
+				std::memcpy(registry.data() + 4 + handle * 0x4f8 + hero_extension_offset, &pointer, 4);
+			}
+			const auto registry_before = registry;
+			reinterpret_cast<clear_t>(at(registry_reset_vitals))(registry.data(), nullptr);
+			CHECK(registry == registry_before && dword_at(registry_vtable + registry_reset_slot) == registry_reset_vitals);
+			for (const auto& hero : roster) {
+				auto want = expected; std::memcpy(want.data(), &extension_vt, 4);
+				CHECK(hero == want);
+			}
+
 		}
 
 		// The game's names: its 289 functions and 19 builtins; none of the ten is among them, nor
@@ -4486,7 +4532,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682d010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682e010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -4834,7 +4880,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÂ©st"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÆ’Ã‚Â©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())

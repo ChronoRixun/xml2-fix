@@ -168,6 +168,7 @@ add_library(xml2_fix SHARED
 	src/cutscene_mouse.cpp
 	src/personal_item_text.cpp
 	src/xtract.cpp
+	src/xtraction_return.cpp
 	src/forced_teams.cpp
 	src/script_pools.cpp
 	src/script_functions.cpp
@@ -313,6 +314,9 @@ target_include_directories(xml2_stat_points_test PRIVATE src)
 
 add_executable(xml2_solo_mode_test test/solo_mode_test.cpp)
 target_include_directories(xml2_solo_mode_test PRIVATE src)
+add_executable(xml2_solo_mode_regroup_test test/solo_mode_regroup_test.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_solo_mode_regroup_test PRIVATE src)
+target_link_options(xml2_solo_mode_regroup_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 
 # E12: the address space words, the 2 GB guard's straddle test, the high-address test's reservations, the pipe verb
 add_executable(xml2_address_space_test test/address_space_test.cpp)
@@ -1029,7 +1033,7 @@ add_executable(xml2_dr_reward_test test/xml1_dr_reward_test.cpp src/xml1_roll.cp
 target_include_directories(xml2_dr_reward_test PRIVATE src)
 target_link_options(xml2_dr_reward_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
-add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/xtraction_return.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_limits_test PRIVATE src)
 target_link_options(xml2_save_limits_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

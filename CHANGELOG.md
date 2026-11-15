@@ -1,3 +1,37 @@
+## 1.11.0 - 2026-11-18
+
+Legends Classic 0.6.0 and XML2 Fix 1.11.0 are the stable pair. Update XML2 Fix first, update
+Legends Classic, then Rebuild and Play. Back up SaveLC first. Beta.1-7 saves remain compatible;
+older 0.4.x builds cannot read saves written in the larger 0.5/0.6 format. Everyone online needs
+the same stable build and gameplay settings; beta.9 companions are refused.
+
+- The first game's items, drop tables, Forge, Healer, selling, Grab Bag and Danger Room rewards.
+- Online rooms, codes, public games and drop-in at the next area, with controller navigation.
+- The first game's bosses, moves, weapons and damage rules, with larger engine and save limits.
+- Fixed busy-fight world freezes, keyed doors, pre-menu HID crashes and Juggernaut's animation timing.
+- Fresh mission starts that do not keep the party reset saved vitals for the whole roster, including
+  fallen heroes left on the bench. Continuations retain their vitals, as in XML1.
+- Teammates wait while the leader rides a solo platform; returning from Change Team retains a safe
+  floor position at the Interior Quarters and sewer Healer Xtraction Points.
+- Levitating the Forbidden Halls switch no longer carries it off into the void - it activates in place, like the original.
+- Freed Hive Morlocks arriving beside Gateway count toward Liberate and allow the Kincaid scene.
+- The blue Classic conversation background is on by default. Turn it off and rebuild for the PC look.
+- Iceman and Magma skating works: holding jump extends the slide up to its rank limit; releasing ends it.
+  Dark Avalanche's slow effect is faithful to the original, confirmed against XML1 in xemu.
+- Sentinel street saves, forced-hero Danger Room courses, Muir/Brig resident props and mission returns
+  retain the fixes from beta.7. Historical zone progress uses the append-only compatibility ledger.
+
+Owen completed the campaign on November 14 using LC beta.7 with Fix beta.9. That is a human
+campaign completion on those versions; it does not certify the additional stable changes or Internet co-op.
+The release checklist separately records the final stable smoke.
+
+Remaining limits: relay/different home networks, three or four separate PCs, long online sessions,
+slow joins and host loss need wider player testing. Host departure ends the session; there is no host
+migration. Some enemy-rate and control-timing differences remain; see the known-issues page. Guard
+and the 96-live-actor option remain off by default. xemu/XML1-recomp save import remains disabled.
+Both owned games are required; the distributed tools contain no game data.
+
+
 ## 1.11.0-beta.9 - 2026-11-13
 
 XML2 Fix 1.11.0-beta.9 is a companion-only hotfix for Legends Classic 0.6.0-beta.7. Numeric Windows file version remains 1.11.0; the package and tag identify beta.9.
@@ -7,7 +41,7 @@ XML2 Fix 1.11.0-beta.9 is a companion-only hotfix for Legends Classic 0.6.0-beta
 - **No rebuild needed.** Update XML2 Fix on Ultimate Legends' **Beta** channel and keep Legends Classic 0.6.0-beta.7. Existing beta.7 builds and saves remain compatible. A save made in the frozen fight loads normally; replay the fight. Back up SaveLC before updating.
 - **Online: everyone needs XML2 Fix 1.11.0-beta.9.** Older companions are refused in both directions (new rule 65 TimedEvents; this build names "1 entity layout, 65 TimedEvents", beta.8 names "1 entity layout").
 
-**Known issues:** Iceman and Magma skating still stops after one burst on real pads. This update does not fix it. Heroes who are down but not put in a mission's fixed party still need a paid revival at an Xtraction Point. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+**Known issues:** Iceman and Magma skating works, with slide length limited by rank. Heroes who are down but not put in a mission's fixed party still need a paid revival at an Xtraction Point. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
 
 ## 1.11.0-beta.8 - 2026-11-13
 
@@ -18,7 +52,7 @@ XML2 Fix 1.11.0-beta.8 is a companion-only update for Legends Classic 0.6.0-beta
 - **No rebuild needed.** Update XML2 Fix on Ultimate Legends' **Beta** channel and keep Legends Classic 0.6.0-beta.7. Existing beta.7 builds and saves remain compatible; a save that already shows the elimination screen can be loaded from its last save point and the mission finished again. Back up SaveLC before updating.
 - **Online: everyone needs XML2 Fix 1.11.0-beta.8.** Older companions are refused in both directions (new rule 63 for the fixed-party revival; rule 46 records the Juggernaut fix).
 
-**Known issues:** Iceman and Magma skating still stops after one burst on real pads. This update does not fix it. Heroes who are down but not put in a mission's fixed party still need a paid revival at an Xtraction Point. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+**Known issues:** Iceman and Magma skating works, with slide length limited by rank. Heroes who are down but not put in a mission's fixed party still need a paid revival at an Xtraction Point. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
 
 ## 1.11.0-beta.7 - 2026-11-12
 
@@ -28,7 +62,7 @@ XML2 Fix 1.11.0-beta.7 is a companion-only hotfix for Legends Classic 0.6.0-beta
 - **No rebuild needed.** Update XML2 Fix on Ultimate Legends' **Beta** channel and keep Legends Classic 0.6.0-beta.7. Existing beta.7 builds and saves remain compatible. Back up SaveLC before updating.
 - **Online: everyone needs XML2 Fix 1.11.0-beta.7.** Older companions are refused in both directions because the keyed-door rule differs (rule 47 revision 2).
 
-**Known issues:** Iceman and Magma skating still stops after one burst on real pads. This hotfix does not fix it. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
+**Known issues:** Iceman and Magma skating works, with slide length limited by rank. The existing beta.7 limitations remain: full campaign and Internet co-op certification, relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
 
 ## 1.11.0-beta.6 - 2026-11-11
 
@@ -72,7 +106,7 @@ at join because their weapon contact rule differs (capability lc-npc-beam-trace/
 Agent checks on the hand-tested candidate measured ten complete officer power bursts (two hits each, at least
 0.6 seconds apart), natural officer fire, flame hits on two heroes, an online pair with matching hits on both copies,
 and refusal of the older companion in both directions. Not certified: an uninterrupted full flamethrower sweep, an
-officer burst ending on its own during natural fire, and the Iceman skating fallback live. An officer near a breakable
+officer burst ending on its own during natural fire, and further natural-fire comparisons. An officer near a breakable
 object keeps firing at it; the first game does the same. The beta.4 limitations remain in the companion known-issues
 page: startup reliability, four-player pause test-input scope, relay/different home networks, three or four separate
 PCs, long sessions, slow joins and host loss. Save import from xemu and XML1-recomp remains off.

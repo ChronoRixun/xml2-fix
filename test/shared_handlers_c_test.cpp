@@ -609,7 +609,8 @@ int main(int argc,char** argv) {
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
  check(bool(tk_guard_bridges::guard_block_lookup("ch_guard_block"))==bool(mask&shared_handler_c_rules::guard),"only Guard publishes its private block handler");
  check(shared_handlers_c::values()[1]==((mask&shared_handler_c_rules::guard)?1u:0u),"Guard policy agreement distinguishes old peers while unrelated masks retain their bytes");
- check(shared_handlers_c::values()[2]==((mask&shared_handler_c_rules::phase)?1u:0u)&&shared_handlers_c::values()[3]==0,"AnimationPhaseRule skin-resume agreement distinguishes old peers while unrelated masks retain their bytes");
+ check(shared_handlers_c::values()[2]==((mask&shared_handler_c_rules::phase)?1u:0u),"AnimationPhaseRule skin-resume agreement distinguishes old peers while unrelated masks retain their bytes");
+ check(shared_handlers_c::values()[3]==((mask&shared_handler_c_rules::telekinesis)?1u:0u),"only installed TelekinesisRule advertises scripted switch activation");
  using namespace shared_handler_c_bridges;
  const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
   &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate,&skin_resume};
@@ -619,6 +620,20 @@ int main(int argc,char** argv) {
  gameplay_capabilities::record off,on,other;check(off.finalize(),"OFF agreement finalizes");check(gameplay_capabilities::shared_handlers_c_id==46,"coordinator rule 46");
  check(on.add(46,1,shared_handlers_c::values(),true)&&on.finalize()&&on.compare(off.bytes())!=gameplay_capabilities::result::match,"selected C rules refuse OFF peer");
  check(other.add(46,1,{mask^2047u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different C selections refuse peer");
+ {
+  auto legacy_values=shared_handlers_c::values();legacy_values[3]=0;
+  gameplay_capabilities::record legacy,matching;
+  check(shared_handlers_c::revision==1,"TK scripted activation retains assigned rule46 revision one");
+  check(legacy.add(46,1,legacy_values,true)&&legacy.finalize(),"legacy TK agreement fixture finalizes");
+  const auto expected=(mask&shared_handler_c_rules::telekinesis)?gameplay_capabilities::result::value:gameplay_capabilities::result::match;
+  check(on.compare(legacy.bytes())==expected&&legacy.compare(on.bytes())==expected,"scripted TK activation refuses legacy peers in both directions; other selections remain compatible");
+  if(mask&shared_handler_c_rules::telekinesis){
+   gameplay_capabilities::difference diff;char names[128]{};
+   on.compare(legacy.bytes(),&diff);on.describe(diff.buckets,diff.local_only,false,names,sizeof names);
+   check(std::strstr(names,"SharedHandlersC")!=nullptr,"legacy TK refusal names SharedHandlersC");
+  }
+  check(matching.add(46,1,shared_handlers_c::values(),true)&&matching.finalize()&&on.compare(matching.bytes())==gameplay_capabilities::result::match,"matching scripted TK peers agree");
+ }
  if(mask&shared_handler_c_rules::phase)skin_rebuild_clock_tests(pc);
  if(mask!=2047){std::printf("shared handlers C mask %u: %d checks, %d failures\n",mask,checks,failures);return failures?1:0;}
  pc.load(0x4f4ad0,0xc3);load_x1(x1,0xdabe0,0x65);load_x1(x1,0xe11d0,0x100);load_x1(x1,0xdaa00,0x8c);load_x1(x1,0xdad20,0x2e7);

@@ -466,7 +466,10 @@ inline bool tk_acquire(void* actor,void* node,tk_state& s){
  }
  if(!valid(selected))return false;
  auto* target=resolve(selected);if(!target)return false;
- if(auto* scripted=cast(target,0x41b0e0);scripted&&(field<u32>(scripted,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(scripted,0)){
+ // This native game-entity resolver consumes a World token, not an entity
+ // pointer. XML1 DFD89 likewise passes its selected token to 27BA0. Passing
+ // target here misses scripted use and wrongly starts carrying switches.
+ if(auto* scripted=fn<void*(__cdecl*)(u32)>(0x41b0e0)(selected);scripted&&(field<u32>(scripted,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(scripted,0)){
   method<void(__thiscall*)(void*,void*)>(scripted,0x9c)(scripted,actor);field<float>(actor,0x460)=simulation_time();return true;
  }
  s.victim=selected;s.time=simulation_time();field<float>(actor,0x460)=s.time;field<float>(actor,0x5e8)=now();

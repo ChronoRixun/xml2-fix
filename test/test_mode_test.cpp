@@ -2,6 +2,7 @@
 // No game process, graphics, saves, registry or network calls.
 #include "test_mode.cpp"
 #include "xtract.cpp"
+#include "xtraction_return.cpp"
 #include "xtraction_shop_rules.hpp"
 #include <fstream>
 #include <map>
@@ -256,8 +257,10 @@ namespace {
   global(xtract_rules::choice_block+1,xtraction_shop_rules::to_change_team);xtract::xtract_installed=true;
   xtract::set_services(xtraction_shop_rules::no_change_team);
   check(*reinterpret_cast<unsigned char*>(xtract_rules::choice_block+1)==xtraction_shop_rules::to_change_team,"Forge-only leaves Change Team available despite lite-point service bits");
-  seed();ini::shop=true;xtract::shop_installed=xtract::services_installed=false;xtract::install(reinterpret_cast<HMODULE>(0x400000));
+  seed();for(const auto& g:xtraction_return_rules::guards)retail(g.va,g.hex.size()/2);for(const auto& g:xtraction_return_rules::query_guards)retail(g.va,g.hex.size()/2);
+  ini::shop=true;xtract::shop_installed=xtract::services_installed=false;xtract::install(reinterpret_cast<HMODULE>(0x400000));
   check(xtract::shop_installed && xtract::capability(false)[0]==1,"explicit XtractionShop still installs and advertises all services");
+  check(xtract::verified(),"explicit XtractionShop verifies its return filter after restoring the native query ownership entries");
   ini::forge=ini::shop=false;
  }
 

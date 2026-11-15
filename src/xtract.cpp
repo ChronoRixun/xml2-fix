@@ -4,6 +4,7 @@
 #include "log.hpp"
 #include "xtract_rules.hpp"
 #include "xtraction_shop_rules.hpp"
+#include "xtraction_return.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 #include "game_version.hpp"
@@ -184,6 +185,7 @@ namespace xtract
 	void install(const HMODULE game)
 	{
 		install_shop(game);
+		xtraction_return::install(game, shop_installed);
 		if (ini::flag(L"Game", L"Xtract", true))
 		{
 			return; // no key, or 1: the game's own menu
@@ -242,5 +244,5 @@ namespace xtract
 	}
 
 	bool requested() { return ini::flag(L"Game", L"XtractionShop", false); }
-	bool verified() { return !requested() || shop_installed; }
+	bool verified() { return !requested() || (shop_installed && xtraction_return::verified()); }
 }

@@ -30,7 +30,7 @@ namespace gameplay_capabilities
  // 44 = [Limits] ActorPools=124 (ActorAI), docs/actor-pools.md; 45 = [Game] Xml1GrabCarry=xml1, docs/xml1-grab-carry.md; 46 = the wave-C shared handler keys, docs/shared-handler-c-rules.md)
  // participate only when requested; OFF preserves the released digest.
  // 63 = [Game] ForcedTeams: seatParty revives a fallen seated hero (forced_teams_rules::revive_fallen), revision 1
- // {installed ? 1 : 0,0,0,0}; requested only (the key present, ForcedTeams=0 too: the functions still exist), a refused
+ // {installed ? 1 : 0,installed ? 1 : 0,0,0}; second word marks whole-roster reset; requested only (the key present, ForcedTeams=0 too: the functions still exist), a refused
  // install registers unverified.
  // 65 = [Limits] TimedEvents / the timed-event pool raised with the entity capacity (event_pool_rules::agreement_for),
  // revision 1 {installed capacity,0,0,0}; requested only (plain XML2 and a pool kept at 1125 add no entry), a requested
@@ -44,6 +44,16 @@ namespace gameplay_capabilities
  // with RevivalCost=xml1 (1.5.0 to 1.8.0-beta.7) charged 200 * L^2, so the two refuse each other naming rule 10. Without
  // the key the entry stays revision 2 (the released record: the Xtraction services alone are unchanged).
  constexpr std::uint16_t xtraction_services_revision=2, xtraction_services_revival_revision=3;
+ // Revision 4 added the guarded side-return NAV-height filter; revision 5 also retains a certified safe original
+ // destination when the horizontally projected destination has no floor. Requested only by XtractionShop.
+ constexpr std::uint16_t xtraction_return_revision=5;
+ constexpr std::uint16_t xtraction_revision(bool shop,bool revival) {
+  return shop ? xtraction_return_revision : revival ? xtraction_services_revival_revision : xtraction_services_revision;
+ }
+ constexpr std::array<std::uint32_t,4> forced_revival_values(bool installed) {
+  return {installed ? 1u : 0u, installed ? 1u : 0u, 0, 0};
+ }
+
  // Protocol revision 3: the agreement record is a fixed 108-byte digest (docs/gameplay-agreement.md, "Record and
  // transport"): header, SHA-256 over the canonical sorted rule list (ID, revision, four effective values - the
  // revision-2 entry encoding) and a 64-byte rule summary that only names differing rules in refusal messages. Its size
