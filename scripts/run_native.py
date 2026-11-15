@@ -63,6 +63,7 @@ skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test", "lcsave_zone_records",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
     "xml2_danger_room_healthbars_install_test", "xml2_speaker_label_install_test", "xml2_classic_hud_install_test",
+    "xml2_danger_room_prizes_test", # all payload/layout/guard modes run explicitly below
     "xml2_codex_back_install_test", "xml2_resistance_display_install_test", "xml2_economy_test",
     # argument-taking tools run by their own gates: W2's G3 real-saves run (--list/--data/--registry/--out) and the
     # E4 actor-pools host (scripts/test_actor_pools.py); without arguments both only print their usage (exit 2)
@@ -129,6 +130,9 @@ cmds.append([str(b / "xml2_broker_tls_test.exe"), "--pin-offline"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "gamespy"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "checksum"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "admission"])
+cmds += [[str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, mode] for mode in ("skirmish-banner", "skirmish-admission")]
+cmds += [[str(b / "xml2_danger_room_prizes_test.exe"), EXE, mode] for mode in ("on", "wide", "off", "wideoff", *(f"guard{i}" for i in range(15)), *(f"wideguard{i}" for i in range(4))) ]
+installer_modes |= {"xml2_danger_room_prizes_test"}
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "refusal-transport"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "e4-guards"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"])

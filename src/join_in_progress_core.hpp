@@ -50,8 +50,14 @@ namespace join_in_progress_core
 	// before participant/controller allocation (including a race with START).
 	inline bool admission_allowed(bool started, bool allow_late = false) { return !started || allow_late; }
 	inline constexpr std::array<std::uint8_t, 8> started_refusal{{'L','C','L','J',1,0,0,0}};
+	// Same native refusal packet, with a bounded presentation reason. This does
+	// not admit a participant or alter the gameplay agreement/transport.
+	inline constexpr std::array<std::uint8_t, 8> skirmish_refusal{{'L','C','L','J',1,1,0,0}};
+	inline bool is_skirmish_refusal(const void* body, std::size_t size) {
+		return body && size == skirmish_refusal.size() && std::memcmp(body, skirmish_refusal.data(), size) == 0;
+	}
 	inline bool is_started_refusal(const void* body, std::size_t size) {
-		return body && size == started_refusal.size() && std::memcmp(body, started_refusal.data(), size) == 0;
+		return body && size == started_refusal.size() && (std::memcmp(body, started_refusal.data(), size) == 0 || is_skirmish_refusal(body, size));
 	}
 	// The online roster's parentheses name the held hero, not the participant.
 	// A solo-story spectator has no hero; keep the native name when one exists.

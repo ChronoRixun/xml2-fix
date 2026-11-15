@@ -9,6 +9,7 @@ unsigned char frame_clock[0x30]{};
 float camera_a[3]{1.f,2.f,3.f},camera_b[3]{4.f,5.f,6.f};
 unsigned broadcasts=0,hash=0,admission_allocations=0,refusals=0,disconnects=0;
 unsigned short wire_frame=0;
+unsigned skirmish_refusals=0;
 void* __cdecl frame_get() { return frame_clock; }
 void* __cdecl game_get() { return &fake_game; }
 void* __cdecl camera_get() { return &fake_camera; }
@@ -90,6 +91,7 @@ void* __fastcall allocate(void*,void*,int) { ++admission_allocations;return null
 char __fastcall refusal_send(void*,void*,void*,const unsigned char* message,int) {
     assert(message[0x10]==0x1c && message[0xe]==1);
     assert(join_in_progress_core::is_started_refusal(*reinterpret_cast<const void* const*>(message),*reinterpret_cast<const unsigned short*>(message+8)));
+    if(join_in_progress_core::is_skirmish_refusal(*reinterpret_cast<const void* const*>(message),*reinterpret_cast<const unsigned short*>(message+8))) ++skirmish_refusals;
     ++refusals;return 1;
 }
 void __fastcall disconnect(void*,void*,int) { ++disconnects; }

@@ -403,11 +403,12 @@ inline unsigned wait_seconds(std::uint32_t remaining_ms) { return (remaining_ms+
 
 // Native Host setup / admission failures (online_native_flow.inl native_flow_error). Every id the flow can raise is
 // registered; each selects one inline notice. An unregistered id shows the general setup notice.
-enum class native_failure { setup, discovery, refused, service, timeout, silent, started, relay };
-inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent","lc_notice_started","lc_notice_relay"};
+enum class native_failure { setup, discovery, refused, service, timeout, silent, started, relay, skirmish };
+inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent","lc_notice_started","lc_notice_relay","lc_notice_skirmish"};
 struct native_failure_row { const char* why; native_failure kind; };
 inline constexpr native_failure_row native_failure_table[] = {
     {"session_started",native_failure::started},
+    {"skirmish_started",native_failure::skirmish},
     {"native_open_queue_full",native_failure::setup},{"stale_native_activation",native_failure::setup},{"native_open_request",native_failure::setup},
     {"native_open_exception",native_failure::setup},{"native_options_seed",native_failure::setup},{"native_options_unavailable",native_failure::setup},
     {"native_options_activation",native_failure::setup},{"native_options_initialization",native_failure::setup},{"native_options_frame",native_failure::setup},

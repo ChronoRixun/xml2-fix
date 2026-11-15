@@ -101,6 +101,7 @@
 #include "danger_room_gate.hpp"
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
+#include "danger_room_prizes.hpp"
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
@@ -639,6 +640,8 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
 				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
 		danger_room_healthbars::install(game);
+		// Results text only; reward grants, eligibility and earned bits remain native.
+		danger_room_prizes::install(game);
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);

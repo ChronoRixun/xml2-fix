@@ -1,4 +1,4 @@
-> **Stable: XML2 Fix 1.11.0**, paired with Legends Classic 0.6.0. Update both parts on the Stable channel, then Rebuild. Back up saves.
+> **Prepared stable update: XML2 Fix 1.11.1**, paired with Legends Classic 0.6.1. Update Fix first, then LC and Rebuild. Skirmish is experimental; separate-PC acceptance is required before publication. Back up saves.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
@@ -728,6 +728,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ClassicCodex` | `0` | `1`: the Codex's Details opens the list entry under the cursor and Back from a biography returns to the list (1.8.0-beta.5; display only) |
 | `ClassicObjectives` | `0` | `1`: the pause menu's Objectives page lists only visible objectives (no hole for a hidden one) and opens on the current one, as the first game's list does (1.9.0-beta.1; display only, docs/classic-objectives.md) |
 | `ClassicSpeakers` | `0` | `1`: a conversation line the mod marks `speakerLabel="<name>"` shows that name beside the line while its `%TOKEN%` keeps the portrait and talk animation - X-Men Legends I's "Alison" on Magma's lines (1.8.0-beta.7; display only) |
+| `DangerRoomPrizes` | `1` | Hide empty award/prize rows in course results and Overview; real prizes and grants stay native. `0`: original presentation ([details](docs/danger-room-prizes.md)). |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
 | `ResistanceDisplay` | `xml2` | `xml1`: original colored resistance subtitles under a targeted enemy's health gauge, using active scoped modifiers. Display only; no gameplay rule ([details](docs/resistance-display.md)). |

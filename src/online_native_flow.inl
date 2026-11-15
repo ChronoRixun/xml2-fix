@@ -12,7 +12,7 @@ struct native_flow_state {
     int maximum=0,difficulty=-1;
     bool loaded=false,danger_room=false;
     bool callback=false,touched=false,accepted=false,refused=false,lobby_active=false,seeded=false,host_queued=false;
-    bool started_refused=false;
+    bool started_refused=false,skirmish_refused=false;
     // This PC's own participant record (0x6111f0, admitted: 0x614290) while the session is live (review E finding 1): the kick
     // classification compares the removed record with it, because by the 0x612070 call 0x611f50 -> 0x611c10 has already run
     // the record slot's destructor and the record's own fields may be gone.
@@ -708,6 +708,7 @@ bool __cdecl native_started_refusal(const void* event) {
         const auto source=(std::uint32_t(peer[0x14])<<24)|(std::uint32_t(peer[0x15])<<16)|(std::uint32_t(peer[0x16])<<8)|peer[0x17];
         if(source!=target) return false;
         native_flow.started_refused=native_flow.refused=true;
+        native_flow.skirmish_refused=join_in_progress_core::is_skirmish_refusal(body,size);
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -945,7 +946,7 @@ bool native_flow_tick(screen s) {
     }
     if(native_flow.phase==native_phase::admitting) {
         if(native_flow.refused) {
-            if(native_flow.started_refused) native_flow_error("session_started");
+            if(native_flow.started_refused) native_flow_error(native_flow.skirmish_refused ? "skirmish_started" : "session_started");
             else native_flow_error("admission_refused");
             return false;
         }
