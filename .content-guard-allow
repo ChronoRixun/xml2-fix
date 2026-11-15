@@ -169,3 +169,4 @@ DISASM test/online_ready_fixture.inl # Online screens (beta.2): authored stack/r
 DISASM test/npc_weapon_contact_test.hpp # Authored synthetic x86 ABI callers marshal invented victim/attack arguments; native event/copy/filter bytes are loaded from the owned PE at runtime, with no extracted game body or listing.
 
 DISASM test/skate_exit_test.hpp # Authored synthetic x86 ABI caller seeds invented registers/stack and records return, x87/SSE and physical state; owned native routines are loaded from the local PE at runtime, no extracted instruction body or listing.
+DISASM src/danger_room_prizes.cpp # Fix 1.11.1 (Skirmish weekend): authored register/flags-preserving prize-row adapter calls our has_payload() and resumes at the guarded native targets; no extracted game body or instruction listing.
