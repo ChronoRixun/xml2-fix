@@ -24,6 +24,7 @@ namespace
     std::array<std::uint8_t,0x500> another_profile{};
     std::array<std::uint8_t,0x700> game{};
     std::array<std::uint8_t,0x430> session{};
+    std::array<std::uint8_t,0x30> seats{};
     std::array<std::uint8_t,8> registry{};
     std::array<std::array<std::uint8_t,0x300>,5> heroes{};
     int roster_count = 4, bad_index = -1;
@@ -38,6 +39,7 @@ namespace
     void* __cdecl fake_registry() { return registry.data(); }
     void* __cdecl fake_game() { return game.data(); }
     void* __cdecl fake_session() { return session.data(); }
+    void* __cdecl fake_seats() { return seats.data(); }
     int __fastcall count(void*,void*) { return roster_count; }
     short __fastcall index(void*,void*,int n) { return static_cast<short>(n==bad_index ? 0x7fff : n+1); }
     bool __fastcall has(void*,void*,short n) { return has_stats[n]; }
@@ -47,9 +49,10 @@ namespace
     void bind(std::uint32_t vt, unsigned slot, const void* f) { put(memory(vt),slot,address(f)); }
 
     void context(bool online=false,bool host=false,bool story=false,std::uint32_t drmode=0,
-                 std::uint8_t danger=0xff,std::uint32_t kind=0)
+                 std::uint8_t danger=0xff,std::uint32_t kind=0,bool competitive=false)
     {
         session[0x420]=online; session[0x421]=host; game[0x616]=story?4:0;
+        seats[0x10]=competitive?1:0;
         put(memory(skirmish_rules::drmode),0,drmode);
         put(memory(skirmish_rules::danger_state),0,danger);
         put(memory(skirmish_rules::kind),0,kind);
@@ -58,10 +61,11 @@ namespace
     {
         P::progress={};
         P::fallback_active=false;
-        profile.fill(0); game.fill(0); session.fill(0); registry.fill(0);
+        profile.fill(0); game.fill(0); session.fill(0); seats.fill(0); registry.fill(0);
         put(profile.data(),0,R::profile_vtable);
         put(game.data(),0,R::game_vtable);
         put(session.data(),0,R::session_vtable);
+        put(seats.data(),0,R::seats_vtable);
         put(registry.data(),0,R::registry_vtable);
         profile[R::highest_level]=static_cast<std::uint8_t>(history);
         profile[4]=5; std::memcpy(profile.data()+7,"synthetic",10);
@@ -81,6 +85,23 @@ namespace
     { return P::pending_profile(bytes.data(),bytes.size()); }
     void loaded(bool ok=true,int mode=3,bool disk=true)
     { P::begin_load(); P::finish_load(mode,disk,ok); }
+
+    bool legacy_ui_context(R::context& out)
+    {
+        if(!P::native_context(out)) return false;
+        out.campaign = *reinterpret_cast<const std::uint32_t*>(skirmish_rules::drmode)==0 &&
+            *reinterpret_cast<const std::uint8_t*>(skirmish_rules::danger_state)==0xff;
+        return true;
+    }
+    void stale_ui_regression()
+    {
+        std::array<std::uint8_t,R::profile_size> bytes{};
+        setup();context(false,false,false,1,0xff,0);loaded(true,0,true);
+        check(highest()==35 && P::progress.owned && pending(bytes),
+            "actual native mode0 owned load repairs history despite stale drmode1 after visiting Danger Room");
+        heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());
+        check(highest()==36 && pending(bytes),"stale drmode does not suppress subsequent legitimate campaign progress");
+    }
 
     void regression_cases()
     {
@@ -216,11 +237,24 @@ namespace
         {
             setup();loaded();P::profile_written((pending(bytes),bytes.data()),bytes.size());
             heroes[1][R::stats_level]=99;
-            context(false,false,true,1,0xfd,mode);P::observe_level(heroes[1].data());
+            context(false,false,true,1,0xfd,mode,true);P::observe_level(heroes[1].data());
             check(highest()==35 && !pending(bytes),"PvP artificial levels excluded in every native mode");
-            context(false,false,true,1,0xff,0);P::observe_level(heroes[1].data());
-            check(highest()==35,"Danger Room setup also excludes artificial level assignment");
+            context(false,false,true,1,0xff,0,true);P::observe_level(heroes[1].data());
+            check(highest()==35,"native competitive-seat flag excludes fixed levels during inactive-state teardown");
         }
+        stale_ui_regression();
+        for(const auto active_state:{0,1,0xfc,0xfd,0xfe})
+        {
+            setup();loaded();P::profile_written((pending(bytes),bytes.data()),bytes.size());
+            heroes[1][R::stats_level]=99;
+            context(false,false,true,0,static_cast<std::uint8_t>(active_state));P::observe_level(heroes[1].data());
+            check(highest()==35 && !pending(bytes),"native course, Skirmish and practice states exclude artificial progress even with drmode0");
+        }
+        setup();loaded();P::profile_written((pending(bytes),bytes.data()),bytes.size());
+        heroes[1][R::stats_level]=99;context(false,false,true,0,0xff,0,true);P::observe_level(heroes[1].data());
+        check(highest()==35 && !pending(bytes),"native competitive-seat predicate excludes fixed/ladder branch independently of stale UI state");
+        setup();context(false,false,true);put(seats.data(),0,std::uint32_t(0));P::observe_level(heroes[4].data());
+        check(highest()==16 && !pending(bytes),"unknown native seat-manager class fails closed");
         for(unsigned mode=1;mode<=4;++mode)
         {
             setup();context(false,false,false,0,0xff,mode);loaded();
@@ -359,11 +393,16 @@ int main(int argc,char** argv)
     bind(R::registry_vtable,0x78,reinterpret_cast<const void*>(&has));
     bind(R::registry_vtable,0x7c,reinterpret_cast<const void*>(&normal));
     bind(R::registry_vtable,0x84,reinterpret_cast<const void*>(&campaign));
-    P::get_profile=&fake_profile;P::get_registry=&fake_registry;P::get_game=&fake_game;P::get_session=&fake_session;
+    P::get_profile=&fake_profile;P::get_registry=&fake_registry;P::get_game=&fake_game;P::get_session=&fake_session;P::get_seats=&fake_seats;
     if(!FlushInstructionCache(GetCurrentProcess(),union_space,0x700000))
     { std::printf("fixture instruction flush failed: %lu\n",GetLastError());return 2; }
     P::activate();
-    regression_cases();persisted_round_trip();hook_abi(argc>1 && std::strcmp(argv[1],"--legacy")==0);
+    if(argc>1 && std::strcmp(argv[1],"--legacy-context")==0)
+    {
+        P::read_context=&legacy_ui_context;
+        stale_ui_regression(); // faithful old UI predicate: both repaired assertions must fail
+    }
+    else { regression_cases();persisted_round_trip();hook_abi(argc>1 && std::strcmp(argv[1],"--legacy")==0); }
     DWORD ignored=0;
     if(!VirtualProtect(union_space,0x700000,fixture_protection,&ignored))
     { std::printf("fixture protection restore failed: %lu\n",GetLastError());return 2; }

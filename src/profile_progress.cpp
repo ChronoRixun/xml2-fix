@@ -31,6 +31,7 @@ namespace profile_progress
         getter_t get_registry = reinterpret_cast<getter_t>(registry_getter);
         getter_t get_game = reinterpret_cast<getter_t>(game_getter);
         getter_t get_session = reinterpret_cast<getter_t>(session_getter);
+        getter_t get_seats = reinterpret_cast<getter_t>(seats_getter);
 
         template<class T> T read(const void* object, std::size_t offset)
         {
@@ -47,15 +48,18 @@ namespace profile_progress
             {
                 const auto* game = static_cast<const std::uint8_t*>(get_game());
                 const auto* session = static_cast<const std::uint8_t*>(get_session());
-                if (!game || !session || read<std::uint32_t>(game, 0) != game_vtable ||
-                    read<std::uint32_t>(session, 0) != session_vtable) return false;
+                const auto* seats = static_cast<const std::uint8_t*>(get_seats());
+                if (!game || !session || !seats || read<std::uint32_t>(game, 0) != game_vtable ||
+                    read<std::uint32_t>(session, 0) != session_vtable ||
+                    read<std::uint32_t>(seats, 0) != seats_vtable) return false;
                 const auto danger = *reinterpret_cast<const std::uint8_t*>(skirmish_rules::danger_state);
-                const auto drmode = *reinterpret_cast<const std::uint32_t*>(skirmish_rules::drmode);
-                // Exclude preparation and teardown as well as active Skirmish:
-                // its temporary levels must never become personal history.
-                // Native reset leaves the last Skirmish kind cached. It is not
-                // an activity flag: drmode and the active-state sentinel are.
-                out.campaign = drmode == 0 && danger == 0xff;
+                // Native hero creation injects fixed/ladder levels only when
+                // competitive seats are enabled, or in practice state 0xfe.
+                // The raw active state also excludes courses. drmode and kind
+                // can survive a return to a real campaign and are not authority.
+                // The seat flag remains a guard during teardown after raw state
+                // has already returned to 0xff (0x4d17ee..0x4d1876).
+                out.campaign = danger == 0xff && !(seats[0x10] & 1);
                 out.online = session[0x420] != 0;
                 out.host = session[0x421] != 0;
                 out.native_story = (game[0x616] & 4) != 0;
