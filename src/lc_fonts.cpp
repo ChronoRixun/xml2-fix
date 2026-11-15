@@ -2,6 +2,7 @@
 #include "lc_fonts_plan.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "centered_ui_trace.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -163,6 +164,8 @@ void __fastcall render_item(void* item,void* edx) {
  const auto* style=*reinterpret_cast<std::uint8_t**>(bytes+0x94);
  const bool previous=scoped;
  scoped=style&&ready(*reinterpret_cast<const short*>(style+8));
+ if(centered_ui_trace::enabled()) centered_ui_trace::record(centered_ui_trace::owner::menu_text,
+     centered_ui_trace::boundary::render,reinterpret_cast<std::uintptr_t>(item),scoped ? 1u : 0u);
  reinterpret_cast<void(__fastcall*)(void*,void*)>(trampoline)(item,edx);
  scoped=previous;
 }

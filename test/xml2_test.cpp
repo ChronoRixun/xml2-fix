@@ -4881,7 +4881,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÆ’Ã‚Â©st"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())

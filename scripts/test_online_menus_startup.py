@@ -37,6 +37,7 @@ def main():
     for name in ("dll", "host", "retail", "engine", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--fonts", type=Path, required=True, help="owned build folder holding the private font family (UI/fonts, Textures/fonts)")
+    parser.add_argument("--trace-only",action="store_true",help="only C0 startup diagnostic gates")
     args = parser.parse_args()
     fonts = args.fonts.resolve()
     assert all((fonts / name).is_file() for name in FONT_ASSETS), "--fonts lacks the private font family"
@@ -46,7 +47,25 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("navigation-slot-guard", "navigation-entry-guard", "data-resource-close-guard", "data-getter-guard", "data-base-getter-guard", "data-host-close-guard", "data-join-close-guard", "data-fallback-guard", "data-setter-guard", "frontend-intern-guard", "frontend-allocation-guard", "off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy", "pda-mouse-guard", "advanced-back-guard", "advanced-slot-guard", "advanced-close-guard", "advanced-teardown-guard"):
+    modes = ("navigation-slot-guard", "navigation-entry-guard",
+        'data-resource-close-guard', 'data-getter-guard', 'data-base-getter-guard', 'data-host-close-guard',
+        'data-join-close-guard', 'data-fallback-guard', 'data-setter-guard', 'frontend-intern-guard',
+        'frontend-allocation-guard', 'off', 'zero', 'invalid',
+        'on', 'capacity', 'lookup-refused', 'ui-guard',
+        'native-guard', 'post-guard', 'seed-guard', 'queue-guard',
+        'handler-guard', 'teardown-guard', 'script-guard', 'end-lobby-guard',
+        'end-running-guard', 'tokenizer-guard', 'dispatch-guard', 'preset-code',
+        'preset-host-name-invalid', 'name-only-invalid', 'fonts-absent', 'anchor-guard',
+        'anchor-busy', 'pda-mouse-guard', 'advanced-back-guard', 'advanced-slot-guard',
+        'advanced-close-guard', 'advanced-teardown-guard', 'remastered-on', 'remastered-draw-guard',
+        'remastered-prefix-guard', 'remastered-disabled', 'remastered-invalid', 'remastered-components',
+        'remastered-cap-invalid', 'remastered-trace', 'remastered-trace-component-off', 'remastered-trace-invalid',
+        'remastered-trace-profile-off',
+    )
+    new_modes=("remastered-defaults","remastered-point","remastered-point-invalid")+tuple(f"remastered-ui-guard{i}" for i in range(16))
+    modes=tuple(dict.fromkeys(modes+new_modes))
+    for mode in modes:
+        if args.trace_only and mode!="remastered-trace": continue
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -68,6 +87,17 @@ def main():
                 ini += "RoomName=" + "x" * 33 + "\n"
                 if mode == "preset-host-name-invalid": ini += "Host=broker\n"
             ini += "[Save]\nFormat=lc\n"
+        if mode.startswith("remastered-trace"):
+            ini=ini.replace("NoActivate=1\n","NoActivate=1\nRemasteredTrace="+("true" if mode=="remastered-trace-invalid" else "1")+"\n")
+        if mode.startswith("remastered-"):
+            ini += "[Remastered]\n"+("" if mode=="remastered-defaults" else "Anisotropy=16\n")+"MSAASamples=" + ("3" if mode=="remastered-cap-invalid" else "8") + "\n"
+            if mode!="remastered-components":
+                ini += "Enabled=" + ("0" if mode in ("remastered-disabled","remastered-trace-profile-off") else "true" if mode=="remastered-invalid" else "1") + "\n"
+        if mode.startswith("remastered-trace"):
+            ini += "CenteredHud="+("0" if mode=="remastered-trace-component-off" else "1")+"\n"
+        if mode.startswith("remastered-ui-guard"): ini += "CenteredHud=1\n"
+        if mode in ("remastered-point","remastered-point-invalid"):
+            ini += "AnisotropyOnPointArt="+("1" if mode=="remastered-point" else "true")+"\n"
         (folder / "xml2-fix.ini").write_text(ini, encoding="utf-8", newline="\n")
         before, after = folder / "before.reg", folder / "after.reg"
         subprocess.run(["reg", "export", REGISTRY, str(before), "/y"], check=True, capture_output=True)
@@ -91,6 +121,10 @@ def main():
             env["UNION_MUTATE_VA"] = {"data-resource-close-guard":"0x5af5a0", "data-getter-guard":"0x6a1148", "data-base-getter-guard":"0x6a02c0", "data-host-close-guard":"0x69f2bc", "data-join-close-guard":"0x69f384", "data-fallback-guard":"0x5c67f0", "data-setter-guard":"0x5c6850"}[mode]
         if mode.startswith("frontend-"):
             env["UNION_MUTATE_VA"] = "0x41a460" if mode=="frontend-intern-guard" else "0x60220e"
+        if mode in ("remastered-draw-guard","remastered-prefix-guard"):
+            env["UNION_MUTATE_VA"]="0x61939a" if mode=="remastered-draw-guard" else "0x619398"
+        if mode.startswith("remastered-ui-guard"):
+            env["UNION_MUTATE_VA"]=hex((0x621ca0,0x624520,0x621ea0,0x61dcab,0x61ff70,0x6a5804,0x625df0,0x61ed69,0x6260ac,0x626105,0x62611c,0x621d07,0x621d19,0x61fe7b,0x6a3be4,0x6a3be8)[int(mode.removeprefix("remastered-ui-guard"))])
         try:
             done = subprocess.run([str(host), str(folder / "dinput.dll"), str(retail), str(engine),
                                    str(folder / "writes.tsv")], cwd=folder, env=env, capture_output=True,
@@ -106,9 +140,35 @@ def main():
             cells = line.split("\t")
             if cells[0:2] == ["W", "XMen2.exe"]:
                 changed.add(int(cells[2], 16))
-        installed = mode in ("on", "preset-code", "preset-host-name-invalid", "name-only-invalid")
+        installed = mode in ("on", "preset-code", "preset-host-name-invalid", "name-only-invalid", "remastered-on", "remastered-disabled", "remastered-invalid", "remastered-components", "remastered-cap-invalid", "remastered-trace", "remastered-trace-component-off", "remastered-trace-invalid", "remastered-trace-profile-off")
+        installed=installed or mode in new_modes
         for site, size in HOOKS.items():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
+        if mode.startswith("remastered-"):
+            status_owned=mode in ("remastered-on","remastered-cap-invalid","remastered-trace","remastered-trace-component-off","remastered-trace-invalid")
+            status_owned=status_owned or mode in new_modes
+            assert bool(changed.intersection(range(0x61939a,0x61939f)))==status_owned, mode
+            assert ("owns later renderer call 0x61939a" in log)==status_owned, mode
+            if status_owned:
+                assert log.index("74 patch writes and menu-anchors/512 committed atomically") < log.index("owns later renderer call 0x61939a")
+                assert ("selective AF authored-path bridge active" in log)==(mode!="remastered-defaults")
+            if mode in ("remastered-draw-guard","remastered-prefix-guard"):
+                for site in (0x61f356,0x61f8a4,0x61f8be,0x61f667):
+                    assert not changed.intersection(range(site,site+5)), (mode,hex(site))
+            if mode=="remastered-cap-invalid": assert "invalid MSAASamples='3'" in log
+            if mode=="remastered-defaults": assert "AF request=0 point-art=0; Beenox=0" in log
+            if mode=="remastered-point": assert "point art=1" in log
+            if mode=="remastered-point-invalid": assert "invalid AnisotropyOnPointArt='true'" in log and "point art=0" in log
+            if mode.startswith("remastered-ui-guard"):
+                assert "remastered UI: committed" not in log and "native layout retained" in log
+            for site in (0x5eecf0,0x5ef2e0,0x597c90,0x5971a0,0x597200):
+                assert not changed.intersection(range(site,site+5)),(mode,"dialogue changed",hex(site))
+        if mode.startswith("remastered-trace"):
+            assert ("centered-ui: C0 bounded read-only pilot" in log)==(mode=="remastered-trace"), mode
+            ui_owned=mode not in ("remastered-trace-component-off","remastered-trace-profile-off")
+            for site in (0x621ca0,0x61dcab,0x624520,0x621ea0):
+                assert bool(changed.intersection(range(site,site+5)))==ui_owned,(mode,hex(site))
+            assert ("remastered UI: committed" in log)==ui_owned, mode
         if installed:
             assert "script functions: 1024 names" in log
             assert "dispatcher lcOnlineIntent n(i) registered; 74 patch writes and menu-anchors/512 committed atomically" in log

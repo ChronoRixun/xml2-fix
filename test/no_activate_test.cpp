@@ -60,7 +60,8 @@ namespace
     HRESULT STDMETHODCALLTYPE synthetic_present(void*, const RECT*, const RECT*, HWND, const void*) { ++rendered; return S_OK; }
     HRESULT STDMETHODCALLTYPE synthetic_cooperative(void*) { return S_OK; }
     int device_calls = 0, reset_calls = 0;
-    void* device_vtable[16]{};
+    void* device_vtable[34]{};
+    HRESULT STDMETHODCALLTYPE unavailable_backbuffer(void*,UINT,DWORD,void** out) { *out=nullptr;return E_FAIL; }
     void** synthetic_device = device_vtable;
     HRESULT STDMETHODCALLTYPE synthetic_reset(void*, d3d8::present_parameters* pp)
     {
@@ -83,6 +84,7 @@ namespace
         display::opts.run_in_background = true;
         display::stock_fallback = true; // exercise the engine-parameter fallback path
         display::real_create_device = &synthetic_create;
+        device_vtable[d3d8::device_slot::get_back_buffer]=reinterpret_cast<void*>(&unavailable_backbuffer);
         device_vtable[d3d8::device_slot::reset] = reinterpret_cast<void*>(&synthetic_reset);
         device_vtable[d3d8::device_slot::test_cooperative_level] = reinterpret_cast<void*>(&synthetic_cooperative);
         device_vtable[d3d8::device_slot::present] = reinterpret_cast<void*>(&synthetic_present);
@@ -248,6 +250,11 @@ namespace
         std::puts("Private desktop synthetic window: indirect OS activation vetoed; 10 background messages delivered");
     }
 }
+namespace texture_filtering {
+void configure(const remastered_rules::settings&) {}
+void device_ready(void*,std::uint64_t) {} void device_unavailable(void*) {} void device_recovered(void*) {}
+}
+namespace display_settings { int requested_fsaa_index() { return -1; } }
 namespace ini
 {
     bool flag(const wchar_t*, const wchar_t*, bool fallback) { return fallback; }

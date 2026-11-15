@@ -2,6 +2,9 @@
 #include "script_functions_rules.hpp"
 // Retail PE SHA256 146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b.
 // ABI/site guards, independently checked by scripts/check_online_menus_guards.py.
+// Later owned write: Remastered options status replaces only CALL 0x61939a..0x61939e,
+// after this complete retail renderer guard succeeds (exports installs menus before display).
+// The installer must keep this ordering; no arbitrary installed renderer variant is accepted.
 namespace online_menus_guards {
 inline constexpr script_functions_rules::guard guards[]{
     {0x006a2564, "a0a15d00", "manager navigation thiscall ret8 virtual slot"},

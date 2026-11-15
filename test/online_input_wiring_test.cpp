@@ -10,12 +10,17 @@ HWND WINAPI fixture_foreground();
 DWORD WINAPI fixture_window_process(HWND,LPDWORD);
 #define GetForegroundWindow fixture_foreground
 #define GetWindowThreadProcessId fixture_window_process
+#ifdef REMASTERED_BASELINE_INPUT
+#include "../../baseline-source/test_input.cpp"
+#else
 #include "../src/test_input.cpp"
+#endif
 #undef GetForegroundWindow
 #undef GetWindowThreadProcessId
 
 namespace {
 bool menus=false,foreground=true,isolated=false,lc_saves=false;
+int capture_hooks=0,capture_constraints=0;
 int physical_reads=0; DWORD cooperative_flags=0;
 int delivered=0,resets=0,mode_keys=0,samples=0,pumps=0,lost=0,watch=0;
 HRESULT read_result=DI_OK;
@@ -99,8 +104,8 @@ bool flag(const wchar_t*,const wchar_t*,bool) { assert(false);return false; }
 }
 namespace frame_rate { unsigned measured_fps_x10() { assert(false);return 0; } }
 namespace display {
-void set_frame_hook(void(*)(void*)) { assert(false); }
-void disable_multisampling(const char*) { assert(false); }
+void set_frame_hook(void(*)(void*)) { ++capture_hooks; }
+void disable_multisampling(const char*) { ++capture_constraints; }
 void show_without_focus(const char*) { assert(false); }
 void enable_test_pointer() { assert(false); }
 std::string test_pointer(UINT,int,int) { assert(false);return {}; }
@@ -119,6 +124,14 @@ namespace entity_capacity { bool retire_slot(std::uint32_t) { assert(false);retu
 namespace xml1_economy::digest { void enable() { assert(false); } }
 
 int main() {
+#ifndef REMASTERED_BASELINE_INPUT
+    test_input::capture_back_buffer=true;test_input::wire_capture();assert(capture_hooks==1 && capture_constraints==1);
+    test_input::capture_back_buffer=false;test_input::wire_capture();assert(capture_hooks==1 && capture_constraints==1);
+#endif
+    const auto before_capture=test_input::capture_wanted.load();
+    assert(test_input::screenshot("")=="error capture disabled; MSAA preserved");
+    assert(test_input::capture_wanted.load()==before_capture);
+
     di_vt[3]=reinterpret_cast<void*>(&native_create);keyboard_vt[9]=reinterpret_cast<void*>(&native_state);keyboard_vt[13]=reinterpret_cast<void*>(&native_level);
     test_input::hook_direct_input8(&di_object);assert(di_vt[3]==reinterpret_cast<void*>(&native_create)); // Menus OFF, no pipe/hotkeys
     lc_saves=true;test_input::hook_direct_input8(&di_object);

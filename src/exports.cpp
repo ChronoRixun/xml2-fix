@@ -61,6 +61,7 @@
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
+#include "remastered_ui.hpp"
 #include "no_activate.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
@@ -738,6 +739,7 @@ namespace
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
+        remastered_ui::install(game);
 		// [Game] WindowTitle: after the display fix, whose CreateWindowExA hook (borderless / windowed) it then
 		// calls with the new title; either order chains.
 		window_title::install();

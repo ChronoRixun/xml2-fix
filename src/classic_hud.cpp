@@ -6,6 +6,7 @@
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "centered_ui_trace.hpp"
 #include "pad_prompts.hpp"
 #include <intrin.h>
 #include <filesystem>
@@ -71,6 +72,8 @@ namespace classic_hud
                player<0 || player>=4) {
                 reinterpret_cast<wheel_t>(wheel_draw)(self);return;
             }
+            centered_ui_trace::record(centered_ui_trace::owner::wheel,centered_ui_trace::boundary::enqueue,
+                reinterpret_cast<std::uintptr_t>(self),unsigned(player));
             wheel_context context;context.object=object;context.player=player;
             auto* previous=active_wheel;active_wheel=&context;
             reinterpret_cast<wheel_t>(wheel_draw)(self);
@@ -115,6 +118,9 @@ namespace classic_hud
             const float* size,const float* color,float rotation,float fraction,int icon,int channel,int skew)
         {
             const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+            if(centered_ui_trace::enabled() && position && size)
+                centered_ui_trace::record(centered_ui_trace::owner::classic_batch,centered_ui_trace::boundary::enqueue,
+                    reinterpret_cast<std::uintptr_t>(self),unsigned(caller),{position[0],position[2],size[0],size[1]});
             const auto fill=hero_fill(caller);
             std::array<float,4> tint{};
             std::array<float,3> aligned{};

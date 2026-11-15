@@ -14,6 +14,7 @@ namespace display_settings
 	namespace
 	{
 		using namespace display_settings_rules;
+        bool fsaa_admitted=false;
 
 		// The log stub the wipe guard's rerouted call lands on: FUN_0061bef0 takes nothing and its
 		// result is unused (call; call; mov esi,[esp+80h] at 0x5faf56..0x5faf60), so a cdecl function
@@ -83,6 +84,7 @@ namespace display_settings
 		bool safe = true;
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
+            fsaa_admitted=true;
 			logger::write("display settings: the boot FSAA switch knows the panel's 8x option (index 4 -> 8 samples, clamped to what the adapter offers when the "
 			              "device is made)%s",
 			              guard_wipe ? ", and a failed display device no longer resets Resolution/FSAA"
@@ -99,4 +101,6 @@ namespace display_settings
 		logger::write("display settings: the rollback could not be verified - refusing startup rather than run half-patched");
 		game_version::refuse_startup();
 	}
+    int requested_fsaa_index() { return fsaa_admitted ? *reinterpret_cast<const int*>(0xa68c98) : -1; }
+
 }

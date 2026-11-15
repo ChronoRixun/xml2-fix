@@ -19,6 +19,7 @@
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "centered_ui_trace.hpp"
 #include "mod_loader.hpp"
 #include "script_functions.hpp"
 #include "script_function_overflow.hpp"
@@ -2612,6 +2613,8 @@ void trace_end(void* menu,int rx,int ry) {
 // The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason). `lobby`: the
 // skinned lobbies' mouse (0x5ba2b0 / 0x5c8da0), whose own first pass runs before the base walk.
 bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chosen=nullptr,hits::view_point* hit_point=nullptr) {
+    if(centered_ui_trace::enabled()) centered_ui_trace::record(centered_ui_trace::owner::online,
+        centered_ui_trace::boundary::input,reinterpret_cast<std::uintptr_t>(menu),unsigned(which(menu)),{double(x),double(y),double(lobby),0});
     try {
         if(!hits_ready()) return false;
         char name[64]{}; menu_name(menu,name);
@@ -3589,6 +3592,8 @@ void tick_impl(void* menu,bool& native_called) {
     screen_device_prompts(menu,s);
 }
 void __fastcall tick(void* menu,void*) {
+    if(centered_ui_trace::enabled()) centered_ui_trace::record(centered_ui_trace::owner::online,
+        centered_ui_trace::boundary::layout,reinterpret_cast<std::uintptr_t>(menu),unsigned(which(menu)));
     bool native_called=false;
     if(!input_thread("tick",false)) { at<tick_fn>(0x5aaeb0)(menu);return; }
     try { tick_impl(menu,native_called); }

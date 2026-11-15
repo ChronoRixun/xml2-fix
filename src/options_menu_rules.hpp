@@ -420,6 +420,11 @@ namespace options_menu_rules
 	// D  0x61f667  call FUN_006196c0  the revert popup's "yes" loads the defaults
 	inline constexpr call_site revert_site{"the panel's revert call (0x61f667)", 0x21f667,
 	                                       {0xE8, 0x54, 0xA0, 0xFF, 0xFF, 0x8B, 0x0D, 0x34, 0xAD, 0xA6, 0x00, 0x6A, 0x0E, 0xE8, 0xE7, 0x26}, 0x2196c0};
+    // Installed after online_menus' complete retail renderer verification.
+    inline constexpr call_site msaa_draw_site{"main Advanced Options draw (0x61939a)",0x21939a,
+        {0xe8,0x01,0x90,0x00,0x00,0x8b,0x0d,0x38,0xad,0xa6,0x00,0x85,0xc9,0x74,0x05,0xe8},0x2223a0};
+    inline constexpr int msaa_item_id=0x4e, msaa_y=299;
+    inline constexpr std::array<std::uint8_t,10> msaa_draw_prefix{0x8b,0x0d,0x34,0xad,0xa6,0x00,0x85,0xc9,0x74,0x05};
 	inline constexpr std::array<const call_site*, 4> call_sites{&finish_panel_site, &save_site, &cancel_site, &revert_site};
 
 	inline bool matches(const call_site& site, const std::uint8_t* bytes)

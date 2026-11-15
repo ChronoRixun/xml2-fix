@@ -170,3 +170,5 @@ DISASM test/npc_weapon_contact_test.hpp # Authored synthetic x86 ABI callers mar
 
 DISASM test/skate_exit_test.hpp # Authored synthetic x86 ABI caller seeds invented registers/stack and records return, x87/SSE and physical state; owned native routines are loaded from the local PE at runtime, no extracted instruction body or listing.
 DISASM src/danger_room_prizes.cpp # Fix 1.11.1 (Skirmish weekend): authored register/flags-preserving prize-row adapter calls our has_payload() and resumes at the guarded native targets; no extracted game body or instruction listing.
+DISASM src/remastered_ui.cpp # Authored register/flags/FX-state-preserving panel adapter; replays only the guarded displaced store and panel-cell load, then resumes the owned retail code. No extracted function body or instruction listing.
+DISASM test/remastered_ui_test.cpp # Authored synthetic ABI probe seeds invented registers, flags and x87 sentinels to verify the panel adapter; owned retail layout code is read locally at runtime. No extracted game body.

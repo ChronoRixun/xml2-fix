@@ -411,3 +411,12 @@ collider check certifies its floor/body clearance while the horizontal projectio
 only checked height. These peers refuse each other in both directions. Without XtractionShop, revisions 2/3 remain
 unchanged. Rule 63's second value marks resetHeroVitals(), the full registry reset at fresh mission starts;
 beta.9's seated-only revival has zero there. Both mismatches refuse in both directions before play.
+
+## Remastered visual settings (1.12.0 preview)
+
+`[Remastered]` adds no rule: mixed ON/OFF peers are allowed when the existing
+agreement and content match. MSAA/device presentation, draw-scoped world
+sampler overrides and Beenox panel geometry do not change simulation input,
+shared RNG, game time, camera/world projection or assets. Caller FP state and
+D3DCREATE_FPU_PRESERVE are retained. See [Remastered](remastered.md) for scope and
+acceptance checks. The master switch remains off by default.

@@ -34,7 +34,7 @@ class ListModeTests(unittest.TestCase):
             bins.mkdir(parents=True)
             for name in ('xml2_npc_query_scheduler_test.exe', 'xml2_npc_semi_auto_test.exe', 'xml2_log_test.exe',
                          'xml2_speaker_label_install_test.exe', 'xml2_pool_counter_observers_test.exe',
-                         'xml2_pad_hotplug_test.exe', 'xml2_pad_hotplug_live_test.exe'):
+                         'xml2_pad_hotplug_test.exe', 'xml2_pad_hotplug_live_test.exe', 'union_host.exe'):
                 (bins / name).write_bytes(b'MZ')
             (bins / 'xml2-fix.ini').write_bytes(b'[Game]\r\nKeep=1\r\n')
             vectors = Path(td) / 'vectors'
@@ -58,6 +58,7 @@ class ListModeTests(unittest.TestCase):
                 for mode in ('', ' 1', ' 0'):
                     expected = fixture + '.exe X:/game/XMen2.exe' + mode
                     self.assertEqual(sum(l.endswith(expected) for l in lines), 1, expected)
+            self.assertFalse(any('union_host.exe' in l for l in lines), 'the union utility requires DLL/retail/engine/output inputs and runs through startup/OFF gates')
             self.assertFalse(any('deleted a stale' in l for l in lines))
             from test_online_menus import host_modes
             listed=[line.split()[-1] for line in lines if 'xml2_online_menus_test.exe' in line]
