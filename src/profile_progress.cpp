@@ -50,11 +50,12 @@ namespace profile_progress
                 if (!game || !session || read<std::uint32_t>(game, 0) != game_vtable ||
                     read<std::uint32_t>(session, 0) != session_vtable) return false;
                 const auto danger = *reinterpret_cast<const std::uint8_t*>(skirmish_rules::danger_state);
-                const auto kind = *reinterpret_cast<const std::uint32_t*>(skirmish_rules::kind);
                 const auto drmode = *reinterpret_cast<const std::uint32_t*>(skirmish_rules::drmode);
                 // Exclude preparation and teardown as well as active Skirmish:
                 // its temporary levels must never become personal history.
-                out.campaign = drmode == 0 && danger == 0xff && kind == 0;
+                // Native reset leaves the last Skirmish kind cached. It is not
+                // an activity flag: drmode and the active-state sentinel are.
+                out.campaign = drmode == 0 && danger == 0xff;
                 out.online = session[0x420] != 0;
                 out.host = session[0x421] != 0;
                 out.native_story = (game[0x616] & 4) != 0;

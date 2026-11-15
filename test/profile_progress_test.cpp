@@ -221,6 +221,13 @@ namespace
             context(false,false,true,1,0xff,0);P::observe_level(heroes[1].data());
             check(highest()==35,"Danger Room setup also excludes artificial level assignment");
         }
+        for(unsigned mode=1;mode<=4;++mode)
+        {
+            setup();context(false,false,false,0,0xff,mode);loaded();
+            check(highest()==35 && pending(bytes),"native reset leaves a stale Skirmish kind; owned campaign load still repairs history");
+            heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());
+            check(highest()==36,"campaign level-up after Skirmish remains eligible");
+        }
         setup();heroes[4][R::stats_flags]=R::xpexempt;heroes[3][R::stats_kind]=8;
         in_campaign[2]=false;loaded();
         check(highest()==32,"load filters exempt, nonhero and out-of-campaign records");
