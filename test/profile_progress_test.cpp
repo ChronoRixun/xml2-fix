@@ -61,6 +61,8 @@ namespace
     {
         P::progress={};
         P::fallback_active=false;
+        P::private_disk_proof=P::host_start_handoff=P::handoff_loading=P::handoff_was_owned=false;
+        P::private_disk_owner=P::handoff_owner=nullptr;
         profile.fill(0); game.fill(0); session.fill(0); seats.fill(0); registry.fill(0);
         put(profile.data(),0,R::profile_vtable);
         put(game.data(),0,R::game_vtable);
@@ -93,6 +95,12 @@ namespace
             *reinterpret_cast<const std::uint8_t*>(skirmish_rules::danger_state)==0xff;
         return true;
     }
+    bool legacy_online_context(R::context& out)
+    {
+        if(!P::native_context(out)) return false;
+        out.empty_setup=false; // old authority recognized only offline or already-posted host
+        return true;
+    }
     void stale_ui_regression()
     {
         std::array<std::uint8_t,R::profile_size> bytes{};
@@ -101,6 +109,90 @@ namespace
             "actual native mode0 owned load repairs history despite stale drmode1 after visiting Danger Room");
         heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());
         check(highest()==36 && pending(bytes),"stale drmode does not suppress subsequent legitimate campaign progress");
+    }
+
+    void session_members(unsigned count,std::uint32_t first)
+    { put(session.data(),0x278,count);put(session.data(),0x26c,first); }
+    void online_setup_regression()
+    {
+        std::array<std::uint8_t,R::profile_size> bytes{};
+        setup();context(true,false,false);session_members(0,0);
+        loaded(true,3,true);
+        check(highest()==35 && P::progress.owned && !P::progress.remote && pending(bytes),
+            "validated local disk load during empty online host setup repairs personal history before Post Game");
+        context(true,true,false);session_members(1,0x12340);
+        loaded(true,0,false);
+        check(highest()==35 && P::progress.owned && !P::progress.remote && pending(bytes),
+            "proven host mode0 canonical self-restore preserves owned campaign and pending history");
+        heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());
+        check(highest()==36 && pending(bytes),"legitimate progress remains eligible after online setup mode3 then host mode0");
+
+        setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+        check(highest()==16 && P::progress.owned && !pending(bytes),"validated setup establishes ownership even before eligible campaign heroes are available");
+        context(true,true,false);session_members(1,0x12340);roster_count=4;loaded(true,0,false);
+        check(highest()==35 && P::progress.owned && pending(bytes),"proven host mode0 self-restore immediately reconciles newly available eligible heroes");
+        setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+        context(true,true,false);session_members(1,0x12340);P::reset_campaign();roster_count=4;loaded(true,0,false);
+        check(highest()==35 && P::progress.owned && pending(bytes),
+            "actual host-start reset between private disk mode3 and canonical mode0 preserves only the proven setup handoff");
+        auto handoff=[] {
+            setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+            context(true,true,false);session_members(1,0x12340);P::reset_campaign();roster_count=4;
+        };
+        handoff();P::reset_campaign();loaded(true,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"second reset invalidates private host-start handoff");
+        handoff();context();pending(bytes);context(true,true,false);session_members(1,0x12340);loaded(true,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"cancelled host flow leaving online-host context invalidates handoff");
+        setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+        P::reset_campaign();context(true,true,false);session_members(1,0x12340);roster_count=4;loaded(true,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"nonhost reset cannot create host-start handoff");
+        setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+        context(true,true,false);session_members(1,0x12340);another_profile=profile;P::get_profile=&other_profile;
+        P::reset_campaign();P::get_profile=&fake_profile;roster_count=4;loaded(true,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"profile replacement cannot carry private disk proof through reset");
+        for(const int mode:{1,2,3})
+        {
+            handoff();loaded(true,mode,false);loaded(true,0,false);
+            check(highest()==16 && !P::progress.owned && !pending(bytes),"other native load mode consumes and invalidates private host-start handoff");
+        }
+        handoff();loaded(false,0,false);loaded(true,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"failed mode0 application cannot reuse consumed host-start handoff");
+        handoff();context(true,true,true);P::observe_level(heroes[1].data());
+        check(!P::host_start_handoff && !P::private_disk_proof && P::progress.owned,
+            "genuine fresh-story notification replaces rather than reuses suspended host-start proof");
+
+        setup();context(true,false,false);session_members(0,0);loaded(true,3,true);
+        heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());
+        P::begin_load();profile[R::highest_level]=90;P::finish_load(3,true,false);
+        check(highest()==36 && pending(bytes) && bytes[R::serialized_highest_level]==36,
+            "failed second private setup load preserves only previously owned pending personal history");
+        setup();context(true,false,false);session_members(0,0);loaded(true,3,true);
+        heroes[1][R::stats_level]=36;P::observe_level(heroes[1].data());loaded(true,2,false);
+        check(highest()==36 && P::progress.remote && !pending(bytes),
+            "unproven guest mode2 still invalidates pending metadata from previously owned private setup");
+
+        setup();context(true,false,false);session_members(0,0);loaded(false,3,true);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"failed local disk application in empty online setup grants nothing");
+        setup();context(true,false,false);session_members(0,0);loaded(true,3,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"empty online setup without validated disk proof grants nothing");
+        setup();context(true,false,true);session_members(0,0);P::observe_level(heroes[4].data());
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"empty online setup is not general local or native-story authority");
+        setup();context(true,true,false);session_members(1,0x12340);loaded(true,0,false);P::observe_level(heroes[4].data());
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"hosting mode0 without prior owned proof grants nothing");
+        setup();context(true,false,false);session_members(0,0);roster_count=0;loaded(true,3,true);
+        context(true,true,false);session_members(1,0x12340);roster_count=4;loaded(false,0,false);
+        check(highest()==16 && !P::progress.owned && !pending(bytes),"failed proven host mode0 self-restore grants no new campaign progress");
+        setup();context(true,false,true);session_members(0,0);loaded(true,2,true);P::observe_level(heroes[4].data());
+        check(highest()==16 && P::progress.remote && !pending(bytes),"remote mode2 stays borrowed even in empty setup with a staged local disk");
+        for(const auto members:{std::pair{1u,0x12340u},std::pair{0u,0x12340u},std::pair{1u,0u}})
+        {
+            setup();context(true,false,false);session_members(members.first,members.second);loaded(true,3,true);
+            check(highest()==16 && !P::progress.owned && !pending(bytes),
+                "guest or inconsistent participant list cannot establish local setup disk ownership");
+        }
+        setup(60);context(true,false,false);session_members(0,0);loaded(true,3,true);
+        context(true,true,false);session_members(1,0x12340);P::begin_load();profile[R::highest_level]=16;P::finish_load(0,false,true);
+        check(highest()==60,"online setup and canonical self-restore never lower existing personal history");
     }
 
     void regression_cases()
@@ -242,7 +334,7 @@ namespace
             context(false,false,true,1,0xff,0,true);P::observe_level(heroes[1].data());
             check(highest()==35,"native competitive-seat flag excludes fixed levels during inactive-state teardown");
         }
-        stale_ui_regression();
+        stale_ui_regression();online_setup_regression();
         for(const auto active_state:{0,1,0xfc,0xfd,0xfe})
         {
             setup();loaded();P::profile_written((pending(bytes),bytes.data()),bytes.size());
@@ -397,7 +489,13 @@ int main(int argc,char** argv)
     if(!FlushInstructionCache(GetCurrentProcess(),union_space,0x700000))
     { std::printf("fixture instruction flush failed: %lu\n",GetLastError());return 2; }
     P::activate();
-    if(argc>1 && std::strcmp(argv[1],"--legacy-context")==0)
+    if(argc>1 && std::strcmp(argv[1],"--legacy-online")==0)
+    {
+        P::read_context=&legacy_online_context;
+        online_setup_regression(); // old pre-host authority fails the three positive live-flow assertions
+    }
+    else if(argc>1 && std::strcmp(argv[1],"--online-setup")==0) online_setup_regression();
+    else if(argc>1 && std::strcmp(argv[1],"--legacy-context")==0)
     {
         P::read_context=&legacy_ui_context;
         stale_ui_regression(); // faithful old UI predicate: both repaired assertions must fail

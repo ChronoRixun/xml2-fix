@@ -27,6 +27,10 @@ namespace profile_progress
         std::array<std::uint8_t,profile_size> snapshot_before_load{}, fallback_profile{};
         bool snapshot_known = false, fallback_active = false;
         void* fallback_owner = nullptr;
+        bool private_disk_proof = false, host_start_handoff = false, handoff_loading = false;
+        bool handoff_was_owned = false;
+        void* private_disk_owner = nullptr;
+        void* handoff_owner = nullptr;
         getter_t get_profile = reinterpret_cast<getter_t>(profile_getter);
         getter_t get_registry = reinterpret_cast<getter_t>(registry_getter);
         getter_t get_game = reinterpret_cast<getter_t>(game_getter);
@@ -62,6 +66,8 @@ namespace profile_progress
                 out.campaign = danger == 0xff && !(seats[0x10] & 1);
                 out.online = session[0x420] != 0;
                 out.host = session[0x421] != 0;
+                // Observe without the native list walk's cursor side effect.
+                out.empty_setup = read<std::uint32_t>(session,0x278)==0 && read<std::uint32_t>(session,0x26c)==0;
                 out.native_story = (game[0x616] & 4) != 0;
                 out.known = true;
                 return true;
@@ -69,6 +75,17 @@ namespace profile_progress
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
         bool (*read_context)(context&) = &native_context;
+
+        bool profile_matches(void* expected)
+        {
+            __try
+            {
+                void* profile=get_profile();
+                return expected && profile==expected && read<std::uint32_t>(profile,0)==profile_vtable;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        bool host_campaign(const context& c) { return c.known && c.online && c.host && c.campaign; }
 
         bool hero_level(void* stats, unsigned& level)
         {
@@ -103,7 +120,11 @@ namespace profile_progress
                     // The native new-story predicate already authorizes this
                     // local campaign. Retain that proof across a hosted restart
                     // even when its hero has not exceeded personal history yet.
-                    if (c.native_story) progress.owned = true;
+                    if (c.native_story)
+                    {
+                        progress.owned = true;
+                        private_disk_proof = host_start_handoff = false;
+                    }
                     // A new eligible campaign notification establishes live
                     // personal metadata again after an earlier rejected load.
                     fallback_active = false;
@@ -192,6 +213,16 @@ namespace profile_progress
     {
         if (active)
         {
+            context c{};read_context(c);
+            // Host Start resets the campaign immediately before restoring its
+            // own selected disk image as mode 0. Suspend only the prior private
+            // setup proof; reset itself never authorizes hero notifications.
+            const bool handoff = private_disk_proof && progress.owned && !progress.loading &&
+                !progress.failed && !progress.remote && host_campaign(c) && profile_matches(private_disk_owner);
+            handoff_owner = handoff ? private_disk_owner : nullptr;
+            host_start_handoff = handoff;
+            handoff_loading = handoff_was_owned = false;
+            private_disk_proof = false;private_disk_owner = nullptr;
             progress.reset(); history_before_load = pending_before_load = 0;
             history_profile = nullptr; history_known = false;
             snapshot_known = false;
@@ -202,7 +233,21 @@ namespace profile_progress
         if (!active) return;
         context prior{};
         if (read_context(prior) && progress.permits(prior) && prior.native_story)
+        {
             progress.owned = true; // trusted pre-load Begin Story state, never an incoming transfer's flag
+            host_start_handoff = private_disk_proof = false;
+        }
+        handoff_loading = false;
+        if (host_start_handoff)
+        {
+            if (host_campaign(prior) && profile_matches(handoff_owner))
+            {
+                handoff_was_owned = progress.owned;
+                progress.owned = true;
+                handoff_loading = true;
+            }
+            host_start_handoff = false; // exactly the next native application may consume it
+        }
         pending_before_load = progress.pending_level;
         progress.begin_load();
         history_before_load = 0;
@@ -239,11 +284,15 @@ namespace profile_progress
         if (!active) return;
         context c{};
         read_context(c);
+        if (handoff_loading && (mode != 0 || !native_ok || !host_campaign(c) || !profile_matches(handoff_owner)))
+            progress.was_owned = handoff_was_owned;
+        handoff_loading = false;handoff_owner = nullptr;
         progress.finish_load(mode, validated_owned_disk, native_ok, c);
         unsigned imported = 0;
         const bool same_profile = history_target(imported);
         if (!same_profile) { progress.owned = false; progress.failed = true; }
-        const bool accepted_owned = native_ok && mode != 1 && validated_owned_disk && mode != 2 &&
+        const bool owned_host_restore = mode == 0 && c.known && c.online && c.host && progress.was_owned;
+        const bool accepted_owned = native_ok && ((mode != 1 && mode != 2 && validated_owned_disk) || owned_host_restore) &&
             progress.owned && progress.permits(c) && same_profile;
         if (mode != 1 && mode != 2 && !accepted_owned) reject_imported_history();
         if (accepted_owned)
@@ -260,6 +309,10 @@ namespace profile_progress
             if (history_target(final_level) && final_level > history_before_load && final_level <= max_level)
                 progress.raised(final_level);
         }
+        if (accepted_owned && validated_owned_disk && c.private_setup())
+        { private_disk_proof = true;private_disk_owner = history_profile; }
+        else if (mode != 1 || !native_ok || !same_profile || !progress.owned)
+        { private_disk_proof = false;private_disk_owner = nullptr; }
         // A load may invalidate new campaign notifications while already earned
         // personal metadata remains unsaved. Restore only that captured queue,
         // after verifying its original profile and retained/rolled-back byte.
@@ -268,7 +321,8 @@ namespace profile_progress
         const bool retained_path = accepted_owned || (mode == 1 && native_ok) ||
             (mode == 2 && native_ok && progress.owned && c.online && c.host) ||
             (mode != 1 && !native_ok) || (mode != 1 && mode != 2 && !accepted_owned);
-        if (pending_before_load && same_profile && c.local() && !progress.remote && retained_path &&
+        if (pending_before_load && same_profile && (c.local() || (c.private_setup() && progress.was_owned)) &&
+            !progress.remote && retained_path &&
             history_target(retained_level) && retained_level >= pending_before_load &&
             (accepted_owned || retained_level == history_before_load) &&
             (accepted_owned || mode == 1 || mode == 2 || snapshot_known))
@@ -293,6 +347,12 @@ namespace profile_progress
 
     bool pending_profile(std::uint8_t* bytes, std::size_t size)
     {
+        if (active && host_start_handoff)
+        {
+            context c{};
+            if (!read_context(c) || !host_campaign(c) || !profile_matches(handoff_owner))
+            { host_start_handoff = false;handoff_owner = nullptr; }
+        }
         if (!active || !progress.pending_level || progress.loading || size != profile_size || !bytes) return false;
         __try
         {

@@ -26,7 +26,10 @@ namespace profile_progress_rules
     struct context
     {
         bool known = false, campaign = false, online = false, host = false, native_story = false;
+        bool empty_setup = false; // both native participant count and first-node pointer are empty
         bool local() const { return known && (!online || host); }
+        bool private_setup() const { return known && online && empty_setup; }
+        bool local_disk() const { return local() || private_setup(); }
     };
 
     constexpr bool eligible_hero(std::uint32_t kind, std::uint8_t flags, unsigned level)
@@ -52,20 +55,23 @@ namespace profile_progress_rules
             loading = false;
             failed = !ok || !c.known;
             const bool prior_remote = remote;
-            const bool owned_restart = mode == 2 && c.known && c.online && c.host && was_owned;
-            const bool owned_disk = ok && validated_disk && mode != 1 && mode != 2 && c.local() && c.campaign;
+            const bool owned_restart = (mode == 0 || mode == 2) && c.known && c.online && c.host && was_owned;
+            const bool owned_disk = ok && validated_disk && mode != 1 && mode != 2 && c.local_disk() && c.campaign;
+            // Before Post Game the host's local disk selection has no native
+            // participants and no host flag yet. Only a validated full disk
+            // completion can establish this private proof; emptiness alone is
+            // never native-story or incoming-transfer authority.
+            owned = ok && ((mode == 1 && was_owned && (c.local() || c.private_setup())) || owned_disk || owned_restart);
             // Partial stats do not replace a borrowed campaign. Neither a
             // disconnect nor another unproven transfer establishes ownership.
-            remote = (prior_remote && !owned_disk) || (c.known && c.online && !c.host) ||
+            remote = (prior_remote && !owned_disk) ||
+                (c.known && c.online && !c.host && !((owned || was_owned) && c.private_setup())) ||
                 (mode == 2 && !owned_restart);
-            // mode 1 is saved-stats-only. A host's mode 2 cohort restart may
-            // retain proof of its own campaign; hosting alone never creates it.
-            owned = ok && c.local() && (mode == 1 ? was_owned :
-                (validated_disk && mode != 2) || (mode == 2 && c.online && c.host && was_owned));
             if (failed || remote) pending_level = 0;
         }
         bool permits(const context& c) const
-        { return !loading && !failed && !remote && c.local() && c.campaign && (owned || c.native_story); }
+        { return !loading && !failed && !remote && (c.local() || (owned && c.private_setup())) &&
+            c.campaign && (owned || c.native_story); }
         void raised(unsigned level) { if (level > pending_level) pending_level = level; }
         void persisted(unsigned level) { if (level >= pending_level) pending_level = 0; }
     };
@@ -73,7 +79,7 @@ namespace profile_progress_rules
     // Exact retail interoperability signatures, read-only verified against the
     // owned PC executable. The replacement starts AFTER the native hero/exempt
     // checks and ends BEFORE the native return-value calculation.
-    inline constexpr std::array<limits_rules::guard, 36> guards{{
+    inline constexpr std::array<limits_rules::guard, 38> guards{{
         {0x4b7e03, "83bea00200001d5f5d752df686ad020000207524", "native normal-hero and xpexempt eligibility"},
         {notification_site, "e8c45efbff8b108bc8ff927c02000084c07411e8a180fdff0fb64e1c8b10518bc8ff522c", "native profile notification only"},
         {0x4b7e3b, "0fb6461c2b4424045e59c3", "level recompute return and stack cleanup"},
@@ -99,6 +105,8 @@ namespace profile_progress_rules
         {session_getter, "64a1000000008a0db834a5006aff68", "native session getter"},
         {0x6123e4, "8a8620040000", "native online session byte"},
         {0x612963, "8a8621040000", "native hosted-here byte"},
+        {0x6110b0, "8b8178020000c3", "native session participant count +0x278"},
+        {0x611160, "8b817802000085c0750333c0c38b816c020000", "native first participant node +0x26c only when count is nonzero"},
         {seats_getter, "8a0d20c57200b80100000084c87510", "native competitive-seat manager getter"},
         {0x48dd25, "c700c4986800", "native seat manager class"},
         {0x689920, "f0db480000dc4800", "competitive-seat getter and setter slots +0x5c/+0x60"},
