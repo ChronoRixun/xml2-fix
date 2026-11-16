@@ -198,14 +198,7 @@ namespace profile_progress
     {
         // At this point native EDI/EBP have already been restored. ESI is CStats;
         // cdecl preserves it, and the original level-delta return follows intact.
-        std::vector<std::uint8_t> bytes(notification_size, 0x90);
-        bytes[0] = 0x56; // push esi
-        bytes[1] = 0xe8;
-        const auto target = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&observe_level));
-        const std::uint32_t rel = target - (notification_site + 6);
-        std::memcpy(bytes.data() + 2, &rel, 4);
-        bytes[6] = 0x83; bytes[7] = 0xc4; bytes[8] = 4;
-        return bytes;
+        return notification_bytes_for(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&observe_level)));
     }
 
     void activate() { active = true; }

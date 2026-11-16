@@ -3,6 +3,7 @@
 // retail objects; all eligibility, scanning, notification and queuing is real.
 #include "../src/profile_progress.cpp"
 #include "lcsave/internal.hpp"
+#include "xp_curve_rules.hpp"
 #include <array>
 #include <cstdio>
 #include <fstream>
@@ -452,6 +453,54 @@ namespace
         check(reinterpret_cast<tail_t>(0x4b7e00)(35,heroes[1].data())==1 && highest()==36,
             "production notification patch preserves stack and native level-delta return");
     }
+
+    // [Game] XPCurve's level-recompute guard spans this module's notification
+    // site. Lay every XPCurve guard's interoperability signature, then the
+    // production notification patch, and decide as xp_curve::install does.
+    // legacy: the 1.11.1 decision (retail bytes only), which refused the curve.
+    void xp_curve_coexistence(bool legacy)
+    {
+        namespace X = xp_curve_rules;
+        for(const auto& g:X::guards)
+            for(std::size_t i=0;i<limits_rules::hex_size(g.hex);++i) memory(g.va)[i]=limits_rules::hex_byte(g.hex,i);
+        const auto* image=memory(X::image_base);
+        const std::vector<X::byte_write> resident{{R::notification_site,P::notification_bytes()}};
+        check(X::first_mismatch(image)==nullptr && X::first_mismatch(image,resident)==nullptr && !X::carries_resident(image,resident),
+            "XPCurve guards match the retail level recompute before profile progress installs");
+        const auto patch=P::notification_bytes();
+        check(patch==R::notification_bytes_for(address(reinterpret_cast<const void*>(&P::observe_level))),
+            "production notification bytes are the shared rule's bytes for observe_level");
+        std::memcpy(memory(R::notification_site),patch.data(),patch.size());
+        const auto* old_decision=X::first_mismatch(image);
+        check(old_decision && old_decision->va==X::resident_guard_va,
+            "retail-only XPCurve check refuses once profile progress is installed (the 1.11.1 level-99 cause)");
+        const auto* decision=legacy?old_decision:X::first_mismatch(image,resident);
+        check(decision==nullptr && X::resident_allowed(resident) && X::carries_resident(image,resident),
+            "XPCurve installs over the installed profile progress notification");
+        // Anything else at the site still refuses: another call target, one stray byte.
+        const std::vector<X::byte_write> other{{R::notification_site,R::notification_bytes_for(0x10001000)}};
+        auto* last=memory(R::notification_site+R::notification_size-1);
+        *last=0xcc;
+        check(X::first_mismatch(image,resident)!=nullptr && X::first_mismatch(image,other)!=nullptr,
+            "a changed notification byte or a different call target still refuses XPCurve");
+        *last=0x90;
+        // Resident writes are bounded: never over XPCurve's own sites, never outside the recompute guard.
+        const std::vector<X::byte_write> over_site{{0x4b7d6b,{0x2d}}}, outside{{0x4b7d0f,{0x90,0x90}}}, empty{{R::notification_site,{}}};
+        check(!X::resident_allowed(over_site) && !X::resident_allowed(outside) && !X::resident_allowed(empty) &&
+            X::first_mismatch(image,over_site)!=nullptr,
+            "resident writes over XPCurve sites, outside the guard or empty are refused");
+        // Both orders: XPCurve's writes leave profile progress's guards (other than its own replaced site) intact.
+        X::addresses fake;fake.level_table=0x10000000;fake.kill_xp_function=0x10002000;fake.far_teammate=0x10003000;
+        fake.teammate_floor=0x10003004;fake.teammate_falloff=0x10003008;
+        bool apart=true;
+        for(const auto& w:X::writes_for(fake))
+            for(const auto& g:R::guards)
+                apart&=!X::overlaps(w.va,w.bytes.size(),g.va,limits_rules::hex_size(g.hex));
+        X::apply(memory(X::image_base),X::writes_for(fake));
+        check(apart && std::memcmp(memory(R::notification_site),patch.data(),patch.size())==0,
+            "XPCurve writes never touch a profile progress guard or the installed notification");
+        check(X::first_mismatch(image,resident)!=nullptr,"an already patched curve is not patched twice");
+    }
 }
 
 int main(int argc,char** argv)
@@ -500,7 +549,8 @@ int main(int argc,char** argv)
         P::read_context=&legacy_ui_context;
         stale_ui_regression(); // faithful old UI predicate: both repaired assertions must fail
     }
-    else { regression_cases();persisted_round_trip();hook_abi(argc>1 && std::strcmp(argv[1],"--legacy")==0); }
+    else if(argc>1 && std::strcmp(argv[1],"--legacy-xp-curve")==0) xp_curve_coexistence(true);
+    else { regression_cases();persisted_round_trip();hook_abi(argc>1 && std::strcmp(argv[1],"--legacy")==0);xp_curve_coexistence(false); }
     DWORD ignored=0;
     if(!VirtualProtect(union_space,0x700000,fixture_protection,&ignored))
     { std::printf("fixture protection restore failed: %lu\n",GetLastError());return 2; }

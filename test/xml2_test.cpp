@@ -102,6 +102,7 @@
 #include "test_state_rules.hpp"
 #include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
+#include "profile_progress_rules.hpp"
 #include "balance_rules.hpp"
 #include "window_title_rules.hpp"
 #include "xtract_rules.hpp"
@@ -8550,6 +8551,23 @@ namespace
 		const guard* mismatch = first_mismatch(image);
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
+		// Fix 1.11.1's profile progress replaces 0x4b7e17..0x4b7e3a inside the level recompute guard and installs
+		// first: the retail-only check refused the curve (the level-99 regression); the resident form accepts
+		// exactly that notification and nothing else.
+		{
+			namespace pp = profile_progress_rules;
+			const std::vector<std::uint8_t> keep(at(pp::notification_site), at(pp::notification_site) + pp::notification_size);
+			const auto note = pp::notification_bytes_for(0x10004000);
+			const std::vector<byte_write> resident{{pp::notification_site, note}};
+			CHECK(resident_allowed(resident) && first_mismatch(image, resident) == nullptr && !carries_resident(image, resident));
+			std::memcpy(at(pp::notification_site), note.data(), note.size());
+			const guard* retail_only = first_mismatch(image);
+			CHECK(retail_only && retail_only->va == resident_guard_va);
+			CHECK(first_mismatch(image, resident) == nullptr && carries_resident(image, resident));
+			const std::vector<byte_write> other{{pp::notification_site, pp::notification_bytes_for(0x10005000)}};
+			CHECK(first_mismatch(image, other) != nullptr);
+			std::memcpy(at(pp::notification_site), keep.data(), keep.size());
+		}
 		int cap = 0;
 		CHECK(run_level_cap(at(0x44b690), cap) && cap == xml2_max_level);
 

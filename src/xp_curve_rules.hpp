@@ -432,6 +432,76 @@ namespace xp_curve_rules
 		return nullptr;
 	}
 
+	// Another module's verified write that may already sit inside one of these guards when this install checks them.
+	// Fix 1.11.1's profile progress (profile_progress_rules.hpp) replaces 0x4b7e17..0x4b7e3a inside the level
+	// recompute guard at 0x4b7d10, and save_format installs it before this module; checked against the retail bytes
+	// alone, the guard refused and the campaign ran on XML2's table and cap 99 (an LC hero of level 35 holds XML1's
+	// 26,544,400 XP, which XML2's table reads as level 99 at its next XP gain). Only the level recompute guard may
+	// carry such a write, only exactly the bytes its owner writes, wholly inside the guard and never over one of
+	// this module's sites; every other byte of the guard is still the retail one.
+	inline constexpr DWORD resident_guard_va = 0x4b7d10;
+
+	inline bool overlaps(const DWORD a, const std::size_t a_size, const DWORD b, const std::size_t b_size)
+	{
+		return std::uint64_t(a) < std::uint64_t(b) + b_size && std::uint64_t(b) < std::uint64_t(a) + a_size;
+	}
+
+	// The resident writes this module can coexist with: none empty, none over a site of its own, each wholly inside
+	// the level recompute guard.
+	inline bool resident_allowed(const std::vector<byte_write>& resident)
+	{
+		const guard* recompute = nullptr;
+		for (const auto& g : guards)
+		{
+			if (g.va == resident_guard_va) recompute = &g;
+		}
+		if (!recompute) return false;
+		const std::size_t guard_size = limits_rules::hex_size(recompute->hex);
+		for (const auto& r : resident)
+		{
+			if (r.bytes.empty() || r.va < recompute->va || std::uint64_t(r.va) + r.bytes.size() > std::uint64_t(recompute->va) + guard_size)
+			{
+				return false;
+			}
+			for (const auto& s : sites)
+			{
+				if (overlaps(r.va, r.bytes.size(), s.va, limits_rules::hex_size(s.retail))) return false;
+			}
+		}
+		return true;
+	}
+
+	// As first_mismatch, except that the level recompute guard also matches with the resident writes laid over its
+	// retail bytes (all of them; a partial or different write still refuses).
+	inline const guard* first_mismatch(const std::uint8_t* image, const std::vector<byte_write>& resident)
+	{
+		if (!resident_allowed(resident)) return &guards[0];
+		for (const auto& g : guards)
+		{
+			const auto expected = stats_layout::expected(g.va, g.hex);
+			if (!expected) return &g;
+			const std::uint8_t* at = image + (g.va - image_base);
+			if (limits_rules::matches(at, expected->c_str())) continue;
+			if (g.va != resident_guard_va || resident.empty()) return &g;
+			std::vector<std::uint8_t> want(limits_rules::hex_size(*expected));
+			for (std::size_t i = 0; i < want.size(); ++i) want[i] = limits_rules::hex_byte(*expected, i);
+			for (const auto& r : resident) std::memcpy(want.data() + (r.va - g.va), r.bytes.data(), r.bytes.size());
+			if (std::memcmp(at, want.data(), want.size()) != 0) return &g;
+		}
+		return nullptr;
+	}
+
+	// Whether the level recompute guard holds the resident writes (true) or its retail bytes (false); only
+	// meaningful once first_mismatch(image, resident) has passed.
+	inline bool carries_resident(const std::uint8_t* image, const std::vector<byte_write>& resident)
+	{
+		for (const auto& r : resident)
+		{
+			if (std::memcmp(image + (r.va - image_base), r.bytes.data(), r.bytes.size()) != 0) return false;
+		}
+		return !resident.empty();
+	}
+
 	inline void apply(std::uint8_t* image, const std::vector<byte_write>& writes)
 	{
 		for (const auto& w : writes)

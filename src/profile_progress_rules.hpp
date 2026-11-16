@@ -4,6 +4,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 // Personal profile metadata only. The native level calculation, campaign flags,
 // character unlock bits and the serialized campaign format are unchanged.
@@ -22,6 +24,20 @@ namespace profile_progress_rules
     constexpr std::uint32_t hero_kind = 0x1d;
     constexpr std::uint8_t xpexempt = 0x20;
     constexpr unsigned max_level = 99, max_roster = 0x129;
+
+    // The replacement written over notification_site: push esi; call target (cdecl);
+    // add esp, 4; nop to the native level-delta return at 0x4b7e3b. Shared with
+    // [Game] XPCurve, whose level-recompute guard spans these bytes.
+    inline std::vector<std::uint8_t> notification_bytes_for(std::uint32_t target)
+    {
+        std::vector<std::uint8_t> bytes(notification_size, 0x90);
+        bytes[0] = 0x56;
+        bytes[1] = 0xe8;
+        const std::uint32_t rel = target - (notification_site + 6);
+        std::memcpy(bytes.data() + 2, &rel, 4);
+        bytes[6] = 0x83; bytes[7] = 0xc4; bytes[8] = 4;
+        return bytes;
+    }
 
     struct context
     {
