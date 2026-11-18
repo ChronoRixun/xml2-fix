@@ -2819,7 +2819,7 @@ void show_notice(void* menu) {
         // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
         "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard",
         // 0.6 preview fix E: the host removed this guest (its native Kick).
-        "lc_notice_removed","lc_notice_service_silent","lc_notice_started","lc_notice_relay"};
+        "lc_notice_removed","lc_notice_service_silent","lc_notice_started","lc_notice_relay","lc_notice_skirmish"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;

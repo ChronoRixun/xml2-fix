@@ -114,6 +114,7 @@ void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_execution_fixture.inl"
 #include "join_in_progress_restart.inl"
 #include "join_in_progress_refusal_transport.inl"
+#include "join_in_progress_skirmish.inl"
 // int31: AS + online menus - the 0x6141e0 accessor guard accepts retail bytes or exactly `e9 rel32` to
 // online_menus::display_name_getter(); a JMP elsewhere, another opcode or any other altered AS byte still refuses.
 void as_menus_composition() {
@@ -329,6 +330,8 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
+        if(std::string_view(argv[2])=="skirmish-banner") { skirmish_fixture::banner();return 0; }
+        if(std::string_view(argv[2])=="skirmish-admission") { skirmish_fixture::admission();return 0; }
         const std::string_view mode=argv[2];
         if(mode=="e4-guards" || mode=="actorpools" || mode=="turrets")
             join_in_progress::execution_observer=join_in_progress::execution_wrapper=true;

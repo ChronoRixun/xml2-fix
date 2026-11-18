@@ -265,8 +265,10 @@ namespace test_input
 			if (enabled) {
 				test_state::sample();
 				pump_console(); // the game's own thread, between two runs of its console queue
-				save_format::pump();
 			}
+			// LC profile persistence also runs in ordinary player sessions. Keep
+			// this game-thread service independent of the test input pipe.
+			save_format::pump();
 			if (FAILED(result))
 			{
 				test_mode::input_lost();
@@ -765,7 +767,7 @@ namespace test_input
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled() && !online_menus::installed()) || !direct_input)
+		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled() && !online_menus::installed() && !save_format::campaign_load_checked()) || !direct_input)
 		{
 			return;
 		}

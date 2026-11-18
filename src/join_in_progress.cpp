@@ -4,6 +4,7 @@
 #include "e4_core.hpp"
 #include "e4_core_sites.hpp"
 #include "join_in_progress.hpp"
+#include "skirmish_rules.hpp"
 #include "frame_rate.hpp"
 #include "frame_rate_rules.hpp"
 #include "join_in_progress_core.hpp"
@@ -47,6 +48,13 @@ namespace join_in_progress
 		std::atomic<int> state{-1};
 		bool trace = false; // [Dev] JoinInProgressTrace=1
 		bool allow_late_join = false; // [Online] LateJoin=0 is the release fallback
+		bool skirmish_active()
+		{
+			__try {
+				return skirmish_rules::active(*reinterpret_cast<const std::uint8_t*>(skirmish_rules::danger_state),
+					*reinterpret_cast<const std::uint32_t*>(skirmish_rules::kind));
+			} __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
 		bool restart_reset_enabled = true; // [Dev] LateJoinRestartReset=0: the warm/cold restart of 060y (A/B control only)
 		join_in_progress_core::restart_reset restart; // the canonical cohort restart (camera image, first-frame RNG epoch)
 		bool late_restart = false;         // this epoch restarts a running session for a late joiner (host: its own image; guests: the 0x47 marker)
@@ -1197,7 +1205,8 @@ namespace join_in_progress
 
 		bool __cdecl refuse_started_admission(const void* event)
 		{
-			if (join_in_progress_core::admission_allowed(machine.started, allow_late_join)) return false;
+			const bool fixed_roster = skirmish_active();
+			if (join_in_progress_core::admission_allowed(machine.started, allow_late_join && !fixed_roster)) return false;
 			// Before 0x612a40 allocates any participant or activates an AI hero.
 			// The native refusal opcode already allows a body; retail ignores it.
 			// Current menus recognize this fixed marker only from their proven host.
@@ -1206,7 +1215,7 @@ namespace join_in_progress
 				if (!peer) return true;
 				alignas(4) std::uint8_t message[0x20]{};
 				fn<init_t>(message_init)(message);
-				at<const void*>(message, 0) = join_in_progress_core::started_refusal.data();
+				at<const void*>(message, 0) = fixed_roster ? join_in_progress_core::skirmish_refusal.data() : join_in_progress_core::started_refusal.data();
 				at<std::uint16_t>(message, 8) = std::uint16_t(join_in_progress_core::started_refusal.size());
 				at<std::uint8_t>(message, 0xe) = 1;
 				at<std::uint8_t>(message, 0x10) = 0x1c;
@@ -1217,6 +1226,7 @@ namespace join_in_progress
 				if(queued) fn<void(__thiscall*)(void*,void*)>(flush_peer)(native_session,peer);
 				fn<void(__thiscall*)(void*, int)>(0x6106f0)(peer, 0);
 				logger::write_capped("late-refusal", "online: LateJoinPolicyV1 refused after START before participant allocation; native 0x1c queued=%u flush_requested=%u before disconnect", unsigned(queued),unsigned(queued));
+				if(fixed_roster) logger::write_capped("skirmish-refusal", "online: Skirmish fixed roster; join everyone in the lobby before starting a round");
 			} __except (EXCEPTION_EXECUTE_HANDLER) {
 				logger::write_capped("late-refusal", "online: late admission closed; refusal delivery unavailable");
 			}
@@ -2715,6 +2725,9 @@ namespace join_in_progress
                     }
                 }
 				const DWORD now = GetTickCount();
+				// Only the local story message changes. Seat tracking, ownership,
+				// readiness and all native Skirmish actors remain untouched.
+				if (skirmish_active()) { spectator = {}; return; }
 				if (has_hero)
 				{
 					if (spectator.watching)
@@ -2763,7 +2776,7 @@ namespace join_in_progress
 	}
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
-	bool late_join_enabled() { return installed() && allow_late_join; }
+	bool late_join_enabled() { return installed() && allow_late_join && !skirmish_active(); }
 	bool late_join_configurable() { return installed() && !machine.started && !machine.any(); }
 	bool set_late_join_enabled(bool enabled) {
 		if (!late_join_configurable()) return false;

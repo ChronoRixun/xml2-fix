@@ -15,7 +15,7 @@ DWORD WINAPI fixture_window_process(HWND,LPDWORD);
 #undef GetWindowThreadProcessId
 
 namespace {
-bool menus=false,foreground=true,isolated=false;
+bool menus=false,foreground=true,isolated=false,lc_saves=false;
 int physical_reads=0; DWORD cooperative_flags=0;
 int delivered=0,resets=0,mode_keys=0,samples=0,pumps=0,lost=0,watch=0;
 HRESULT read_result=DI_OK;
@@ -54,7 +54,7 @@ bool console_frame_hook_matches() { return false; }
 namespace test_state { void sample() { ++samples; } }
 // NoActivate starts off so Menus-only installation is tested, then varies in the agent matrix.
 namespace no_activate { bool enabled() { return isolated; } }
-namespace save_format { void pump() { ++pumps; } }
+namespace save_format { void pump() { ++pumps; } bool campaign_load_checked() { return lc_saves; } }
 // The included TU also defines the automation service. These dependencies are
 // deliberately unreachable here; an accidental install/command/capture fails.
 #define UNUSED_TEXT(ns,fn) namespace ns { std::string fn() { assert(false);return {}; } }
@@ -121,6 +121,8 @@ namespace xml1_economy::digest { void enable() { assert(false); } }
 int main() {
     di_vt[3]=reinterpret_cast<void*>(&native_create);keyboard_vt[9]=reinterpret_cast<void*>(&native_state);keyboard_vt[13]=reinterpret_cast<void*>(&native_level);
     test_input::hook_direct_input8(&di_object);assert(di_vt[3]==reinterpret_cast<void*>(&native_create)); // Menus OFF, no pipe/hotkeys
+    lc_saves=true;test_input::hook_direct_input8(&di_object);
+    assert(di_vt[3]!=reinterpret_cast<void*>(&native_create)); // ordinary LC, menus/pipe/hotkeys all OFF
     menus=true;test_input::hook_direct_input8(&di_object);assert(di_vt[3]!=reinterpret_cast<void*>(&native_create));
     auto create=reinterpret_cast<test_input::create_device_t>(di_vt[3]);void* keyboard=nullptr;
     assert(SUCCEEDED(create(&di_object,GUID_SysKeyboard,&keyboard,nullptr)) && keyboard==&keyboard_object);
@@ -128,9 +130,10 @@ int main() {
     auto read=reinterpret_cast<test_input::get_device_state_t>(keyboard_vt[9]);std::array<unsigned char,256> state{};
     physical[0x1e]=physical[0x1c]=128;
     assert(SUCCEEDED(read(keyboard,256,state.data())) && delivered==1 && observed[0x1e]==128 && !state[0x1c]);
+    assert(pumps==1 && samples==0); // profile durability does not require InputPipe
     foreground=false;read(keyboard,256,state.data());assert(delivered==2 && observed[0x1e]==0);
     read_result=DIERR_INPUTLOST;read(keyboard,256,state.data());assert(resets==1 && lost==1 && delivered==2);read_result=DI_OK;
-    read(keyboard,128,state.data());read(&other_object,256,state.data());read(keyboard,256,nullptr);assert(delivered==2 && resets==1);
+    read(keyboard,128,state.data());read(&other_object,256,state.data());read(keyboard,256,nullptr);assert(delivered==2 && resets==1 && pumps==3);
     auto level=reinterpret_cast<test_input::set_cooperative_level_t>(keyboard_vt[13]);level(keyboard,reinterpret_cast<HWND>(1),DISCL_FOREGROUND);assert(watch==1);
     // Actual COM hooks: NoActivate agent copies deliver only pipe keys, with no physical read,
     // whether foreground or background, even when the native device is unacquired.
@@ -140,7 +143,9 @@ int main() {
         test_input::keys.release_all();test_input::keys.press(0x30,GetTickCount64()+10000);
         const bool synthetic=noactivate || (pipe&&!focus);
         physical_reads=0;read_result=synthetic ? DIERR_NOTACQUIRED : DI_OK;
+        const auto prior_pumps=pumps;
         assert(SUCCEEDED(read(keyboard,256,state.data())));
+        assert(pumps==prior_pumps+1);
         assert(physical_reads==(synthetic?0:1));
         assert(observed[0x1e]==((!noactivate&&focus)?128:0));
         assert(observed[0x30]==(pipe?128:0));
@@ -151,6 +156,7 @@ int main() {
         // Unrelated device, size and null calls still chain to the native device.
         read(keyboard,128,state.data());read(&other_object,256,state.data());read(keyboard,256,nullptr);
         assert(physical_reads==(synthetic?3:4));
+        assert(pumps==prior_pumps+1); // non-keyboard reads never service saves
     }
     // Focused player kit + pipe retains native failure/reacquisition behavior too.
     test_input::enabled=true;isolated=false;foreground=true;read_result=DIERR_INPUTLOST;

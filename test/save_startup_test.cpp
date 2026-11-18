@@ -10,6 +10,7 @@
 #include <vector>
 #include "save_format_rules.hpp"
 #include "save_core_rules.hpp"
+#include "profile_progress_rules.hpp"
 #include "game_version_rules.hpp"
 
 // Keep every guarded address inside this fixture's image. The bytes are generated
@@ -77,6 +78,7 @@ std::vector<limits_rules::guard> save_guards()
  std::vector<limits_rules::guard> out(save_format_rules::guards.begin(),save_format_rules::guards.end());
  for(const auto& site:save_format_rules::flag_sites) out.push_back({site.va,site.hex,site.what});
  out.insert(out.end(),save_core_rules::guards.begin(),save_core_rules::guards.end());
+ out.insert(out.end(),profile_progress_rules::guards.begin(),profile_progress_rules::guards.end());
  out.push_back(save_core_rules::ordinal_write_guard); return out;
 }
 void seed(const limits_rules::guard& guard)

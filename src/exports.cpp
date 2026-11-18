@@ -101,6 +101,7 @@
 #include "danger_room_gate.hpp"
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
+#include "danger_room_prizes.hpp"
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
@@ -406,8 +407,9 @@ namespace
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
-		// so every read of the table and the cap is the patched one. Independent of the other patches here: none of
-		// its sites or guards is anyone else's.
+		// so every read of the table and the cap is the patched one. None of its sites is anyone else's; its level
+		// recompute guard spans profile progress's notification (0x4b7e17, written earlier by save_format), which it
+		// accepts in exactly that module's bytes (xp_curve_rules.hpp, resident writes).
 		xp_curve::install(game);
 		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
 		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
@@ -639,6 +641,8 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
 				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
 		danger_room_healthbars::install(game);
+		// Results text only; reward grants, eligibility and earned bits remain native.
+		danger_room_prizes::install(game);
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);

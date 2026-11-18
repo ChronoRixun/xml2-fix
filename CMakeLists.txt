@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.11.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.11.1 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -119,6 +119,7 @@ add_library(xml2_fix SHARED
 	src/shared_handlers_c.cpp
 	src/danger_room_party.cpp
 	src/danger_room_healthbars.cpp
+	src/danger_room_prizes.cpp
 	src/resistance_display.cpp
 	src/classic_hud.cpp
 	src/codex_menu.cpp
@@ -153,6 +154,7 @@ add_library(xml2_fix SHARED
 	src/options_menu.cpp
 	src/new_game.cpp
 	src/save_format.cpp
+	src/profile_progress.cpp
 	src/zone_strings.cpp
 	src/save_content_guards.cpp
 	src/save_trace.cpp
@@ -371,6 +373,13 @@ target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"
 # Trivia cursors must never alias the native answer bitmap.
 add_executable(xml2_trivia_test test/trivia_test.cpp)
 target_include_directories(xml2_trivia_test PRIVATE src)
+
+# Personal profile progress only; synthetic owned-load, notification and durable
+# LC profile round trips, without starting a game or touching player files.
+add_executable(xml2_profile_progress_test test/profile_progress_test.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_profile_progress_test PRIVATE src src/lcsave)
+target_link_libraries(xml2_profile_progress_test PRIVATE lcsave)
+target_link_options(xml2_profile_progress_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 
 # Real DLL initialization against an owned synthetic Win32 image; no game/save inputs.
 add_executable(xml2_save_startup_test test/save_startup_test.cpp)
@@ -1030,6 +1039,12 @@ target_include_directories(xml2_roll_test PRIVATE src)
 target_link_options(xml2_roll_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_dr_reward_test test/xml1_dr_reward_test.cpp src/xml1_roll.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+
+add_executable(xml2_danger_room_prizes_test test/danger_room_prizes_test.cpp src/danger_room_prizes.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_danger_room_prizes_test PRIVATE src)
+target_compile_options(xml2_danger_room_prizes_test PRIVATE /UNDEBUG)
+target_link_options(xml2_danger_room_prizes_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+target_link_libraries(xml2_danger_room_prizes_test PRIVATE bcrypt)
 target_include_directories(xml2_dr_reward_test PRIVATE src)
 target_link_options(xml2_dr_reward_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

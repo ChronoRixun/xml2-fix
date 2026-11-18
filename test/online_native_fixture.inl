@@ -341,14 +341,16 @@ void run(const script_functions_rules::func_entry* registration) {
     // AC: execute the production refusal entry with a host marker. It must
     // select the player-facing started notice without allocating a participant.
     // Wrong source, size and marker retain the ordinary native refusal.
-    for(int kind:{0,1,2,3}) {
+    for(int kind:{0,1,2,3,4,5,6}) {
         resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
         std::array<unsigned char,8> refusal{{'L','C','L','J',1,0,0,0}};
         std::array<unsigned char,0x1c> packet{};packet[0]=0x1c;
         if(kind==3) refusal[0]='?';
+        if(kind>=4) refusal[5]=1;
+        if(kind==6) refusal[6]=1; // unsupported reason payload is not trusted
         put(packet.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(refusal.data())));put(packet.data(),8,static_cast<unsigned short>(kind==2 ? 7 : 8));
         put(packet.data(),0xc,0xa3bc40);put(packet.data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(peer.data())));
-        put(peer.data(),0x14,kind==1 ? 0x02004d0au : 0x01004d0au);
+        put(peer.data(),0x14,kind==1 || kind==5 ? 0x02004d0au : 0x01004d0au);
         const auto allocated=allocations;const auto resolves=menu_resolves,leaves=menu_leaves;
         const auto joins_before=std::count(calls.begin(),calls.end(),"request:join");
         reinterpret_cast<int(__cdecl*)(void*)>(0x609ad0)(packet.data());
@@ -358,8 +360,9 @@ void run(const script_functions_rules::func_entry* registration) {
         // refusal leaves the broker room once and sends no new resolve; the Code screen keeps the notice.
         assert(menu_leaves==leaves+1 && menu_resolves==resolves);
         assert(std::count(calls.begin(),calls.end(),"request:join")==joins_before); // no waiting Join screen after refusal
-        assert(vis(kind==0 ? "lc_notice_started" : "lc_notice_refused"));
+        assert(vis(kind==0 ? "lc_notice_started" : kind==4 ? "lc_notice_skirmish" : "lc_notice_refused"));
         assert(kind==0 || !vis("lc_notice_started"));
+        assert(kind==4 || !vis("lc_notice_skirmish"));
         if(kind==0) std::cout<<"PASS AN2 path: resolved code join, tagged host refusal -> lc_notice_started on the Code screen, room left once, no participant, no Join screen, no new resolve\n";
         cancel();
     }

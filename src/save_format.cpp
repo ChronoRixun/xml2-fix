@@ -14,6 +14,8 @@
 #include "save_content_guards.hpp"
 #include "mod_loader.hpp"
 #include "save_trace.hpp"
+#include "profile_progress.hpp"
+#include "profile_progress_rules.hpp"
 #include "trivia_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -92,6 +94,7 @@ namespace save_format
 			std::uint32_t sequence = 0;
 			float play_time = 0;
 			int slot = -1;
+			const void* native_buffer = nullptr; // the validated disk image, never a remote transfer's buffer
 		} current;
 
 		// CORE-BEGIN: recording metadata and lifetime (independent of Guards' file protection).
@@ -1172,6 +1175,7 @@ namespace save_format
 		void __cdecl campaign_reset_hook()
 		{
 			if (native_loading) return; // a reset performed as part of native load belongs to the pending load
+			profile_progress::reset_campaign();
 			current={}; pending_campaign={};cached_captures.clear();pending_captures.clear();
 			trivia_cursors.clear();
 			core_lifetime.new_game(); campaign_origin=0; visit_known=false;active_visit={};restore_record=nullptr;
@@ -1190,6 +1194,8 @@ namespace save_format
 
 		void __fastcall native_load_hook(void* game,void*,void* buffer,const int mode)
 		{
+			profile_progress::begin_load();
+			const bool owned_disk = pending_campaign.loaded && pending_campaign.native_buffer == buffer;
 			logger::write("save core: load entry diagnostic mode=%d pending=%d cached=%zu pending_metadata=%zu buffer=%p",mode,pending_campaign.loaded?1:0,cached_captures.size(),pending_captures.size(),buffer);
 			const bool campaign_load=core_lifetime.begin_native(mode,pending_campaign.loaded);
 			if (campaign_load && !pending_campaign.loaded)
@@ -1204,6 +1210,7 @@ namespace save_format
 				   !lcsave::native_zone_metadata(source,tables,cached_captures,error,*native_layout))
 				{
 					core_lifetime.finish_native(mode,false);
+					profile_progress::finish_load(mode,false,false);
 					refuse("native transfer metadata could not be validated: "+(error.empty()?std::string("unreadable stream"):error));return;
 				}
 				std::size_t fresh_count=0;
@@ -1230,6 +1237,7 @@ namespace save_format
 			if(completed.refuse_campaign)
 				write_refusals.refuse(slot_path(loaded_slot),"native application failed; original remains protected");
 			if (campaign_load){pending_campaign={};pending_captures.clear();}
+			profile_progress::finish_load(mode,owned_disk && completed.confirm_campaign,ok);
 			if (!ok) {current={};cached_captures.clear();refuse("native load failed or skipped stream bytes; campaign writes blocked; return to menu");}
 			else native_loads_completed.fetch_add(1);
 			logger::write("save core: native load mode %d returned=%d overflow=%u; retained state committed=%d; W11 remains unverified",
@@ -1473,6 +1481,7 @@ namespace save_format
 				pending_campaign.sequence = file.info.save_sequence;
 				pending_campaign.play_time = file.info.play_time;
 				pending_campaign.slot = slot;
+				pending_campaign.native_buffer = data;
 				core_lifetime.stage_load();
 			}
 			if (kind==kind_profile) retained_profile=file.bytes; // CORE: independent profile retention
@@ -1502,7 +1511,9 @@ namespace save_format
 				refuse("the game offered " + std::to_string(size) + " profile bytes, not " + std::to_string(profile_size));
 				return 0;
 			}
-			return write_lc(kind_profile, -1, "Settings", data, size) ? 1 : 0;
+			if (!write_lc(kind_profile, -1, "Settings", data, size)) return 0;
+			profile_progress::profile_written(data,size);
+			return 1;
 		}
 
 		std::uint32_t __fastcall card_read_profile(void* card, void*, const int device, std::uint32_t* size, std::uint8_t* data)
@@ -1968,6 +1979,21 @@ namespace save_format
 		{
 			return;
 		}
+		// Recompute only queues personal metadata. Use the same guarded, atomic
+		// profile writer as the native card, after load completion on the game thread.
+		// A failed write remains pending and is retried at a bounded rate.
+		static ULONGLONG profile_retry_at = 0;
+		const auto now = GetTickCount64();
+		if (ready == readiness::ok && !native_loading && now >= profile_retry_at)
+		{
+			std::array<std::uint8_t,profile_progress_rules::profile_size> profile{};
+			if (profile_progress::pending_profile(profile.data(),profile.size()))
+			{
+				profile_retry_at = now + 5000;
+				if (write_lc(kind_profile,-1,"Settings",profile.data(),profile.size()))
+					profile_progress::profile_written(profile.data(),profile.size());
+			}
+		}
 		std::string kind, path;
 		{
 			std::lock_guard lock(job_mutex);
@@ -2179,6 +2205,13 @@ namespace save_format
 		}
 		// CORE-END
 
+		for (const auto& g : profile_progress_rules::guards)
+		{
+			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+			if (!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
+			{ reject_install(install_guard_error(g,"LC profile progress guard mismatch")); return false; }
+		}
+
 		// The stubs and bridges go in one block of the fix's own, made executable once written.
 		std::vector<std::uint8_t> block;
 		std::vector<address> stub_at(flag_sites.size());
@@ -2192,6 +2225,7 @@ namespace save_format
 		const address base = address_of(memory);
 		const address flag = address_of(const_cast<std::uint8_t*>(&overflow_flag));
 		std::vector<write> writes;
+		writes.push_back({profile_progress_rules::notification_site,profile_progress::notification_bytes()});
 		writes.push_back({0x46a690, jump(0x46a690, address_of(&trivia_cursor_get), 12)});
 		writes.push_back({0x46a6a0, jump(0x46a6a0, address_of(&trivia_cursor_set), 15)});
 		writes.push_back({0x469e10, jump(0x469e10, address_of(&trivia_get), 7)});
@@ -2277,6 +2311,7 @@ namespace save_format
 		for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
 		for (const auto& site : flag_sites) c.guards.push_back({site.va, patch_transaction::bytes_of(site.hex), site.what});
 		for (const auto& g : save_core_rules::guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
+		for (const auto& g : profile_progress_rules::guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
 		c.guards.push_back({save_core_rules::ordinal_write_guard.va, patch_transaction::bytes_of(save_core_rules::ordinal_write_guard.hex), save_core_rules::ordinal_write_guard.what});
 		c.guards.push_back({zone_open_call, patch_transaction::bytes_of(zone_open_call_hex), "zone placement reader call"});
 		c.guards.push_back({xmlb_convert_call, patch_transaction::bytes_of(xmlb_convert_call_hex), "XMLB convert call"});
@@ -2285,6 +2320,7 @@ namespace save_format
 		{
 			(void)memory;
 			enabled = true;
+			profile_progress::activate();
 			published_profile = layout_profile;
 			installation_failure.clear();
 			logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");

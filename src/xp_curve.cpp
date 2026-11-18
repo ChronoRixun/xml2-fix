@@ -2,6 +2,8 @@
 
 #include "ini.hpp"
 #include "log.hpp"
+#include "profile_progress.hpp"
+#include "profile_progress_rules.hpp"
 #include "xp_curve_rules.hpp"
 
 #include <Windows.h>
@@ -36,11 +38,18 @@ namespace xp_curve
 			return static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(pointer));
 		}
 
-		const guard* first_mismatch_guarded()
+		// The writes of other modules that may already be in the level recompute when this checks it: profile
+		// progress's notification (save_format installs it earlier in the same start-up), exactly its own bytes.
+		std::vector<byte_write> resident_writes()
+		{
+			return {{profile_progress_rules::notification_site, profile_progress::notification_bytes()}};
+		}
+
+		const guard* first_mismatch_guarded(const std::vector<byte_write>& resident)
 		{
 			__try
 			{
-				return first_mismatch(game_image());
+				return first_mismatch(game_image(), resident);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -117,11 +126,19 @@ namespace xp_curve
 			logger::write("xp curve: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", as_before);
 			return;
 		}
-		if (const guard* g = first_mismatch_guarded())
+		const auto resident = resident_writes();
+		if (!resident_allowed(resident))
+		{
+			logger::write("xp curve: profile progress's notification at 0x%08lX would overlap the curve's own sites - %s",
+			              static_cast<unsigned long>(profile_progress_rules::notification_site), as_before);
+			return;
+		}
+		if (const guard* g = first_mismatch_guarded(resident))
 		{
 			logger::write("xp curve: 0x%08lX isn't the retail code (%s) - %s", g->va, g->what, as_before);
 			return;
 		}
+		const bool shares_recompute = carries_resident(game_image(), resident);
 
 		addresses dll;
 		dll.level_table = address_of(xml1_level_xp.data());
@@ -133,6 +150,12 @@ namespace xp_curve
 		if (!patch(writes))
 		{
 			return;
+		}
+		if (shares_recompute)
+		{
+			logger::write("xp curve: the level recompute carries profile progress's notification (0x%08lX..0x%08lX), apart from the curve's sites",
+			              static_cast<unsigned long>(profile_progress_rules::notification_site),
+			              static_cast<unsigned long>(profile_progress_rules::notification_site + profile_progress_rules::notification_size - 1));
 		}
 		logger::write("xp curve: X-Men Legends 1's levels ([Game] XPCurve=xml1): XML1's XP table, levels 1-45 (2,000,000 XP is level %d; on XML2's table %d), "
 		              "the cap 45 (was 99) in the level recompute, level-up-by-N, the shop's level-up item and the every-hero-to-the-top cheat, at most %lu XP",
