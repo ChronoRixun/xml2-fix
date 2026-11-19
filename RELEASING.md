@@ -30,8 +30,8 @@ highest semver release including prereleases and download assets from the select
 ## Cut a beta
 
 First commit and review the workflow changes and put the base version and base notes in the
-candidate commit. For the current
-`1.8.0` base, from this repository:
+candidate commit. From this repository (the example tags are from the 1.8.0 line; use the current
+base from `CMakeLists.txt`, 1.12.0 for the Remastered betas):
 
 ```powershell
 python scripts/test_release_metadata.py
