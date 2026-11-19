@@ -61,6 +61,7 @@ namespace test_input
 
 		std::string pipe_path; // \\.\pipe\ + [Test] PipeName (choose_pipe), set before the pipe thread starts
 		constexpr DWORD read_wait_ms = 500;     // for the game to poll the keyboard once
+		bool capture_back_buffer=true;
 		constexpr DWORD capture_wait_ms = 3000; // for the game to draw a frame
 		constexpr DWORD console_wait_ms = 2000; // for the game to read its keyboard with room in its console queue
 
@@ -360,8 +361,16 @@ namespace test_input
 			SetEvent(capture_done);
 		}
 
+        void wire_capture() {
+            if(capture_back_buffer) {
+                display::set_frame_hook(&on_frame);
+                display::disable_multisampling("the test pipe copies the back buffer");
+            } else logger::write("test: CaptureBackBuffer=0; capture disabled; MSAA preserved");
+        }
+
 		std::string screenshot(const std::string& utf8_path)
 		{
+            if(!capture_back_buffer) return "error capture disabled; MSAA preserved";
 			const int length = MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, nullptr, 0);
 			std::wstring wide(length > 0 ? length - 1 : 0, L'\0');
 			if (length > 1)
@@ -737,6 +746,7 @@ namespace test_input
 			return;
 		}
 
+        capture_back_buffer=ini::text(L"Test",L"CaptureBackBuffer").value_or("1")!="0";
 		const auto pipe = choose_pipe(ini::text(L"Test", L"PipeName").value_or("")); // non-ASCII comes as 0x7f: not a pipe name character
 		if (!pipe.error.empty())
 		{
@@ -758,8 +768,7 @@ namespace test_input
 		CloseHandle(thread);
 
 		pad_input::enable(); // the pad commands' reads, merged and counted from now on
-		display::set_frame_hook(&on_frame);
-		display::disable_multisampling("the test pipe copies the back buffer");
+        wire_capture();
 		display::show_without_focus("the test pipe drives the game in the background");
 		display::enable_test_pointer();
 		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - pipe keys reach the game without focus; NoActivate copies use only pipe keys", pipe_path.c_str(), pipe.name.c_str());

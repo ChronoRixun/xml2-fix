@@ -34,6 +34,7 @@ if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
     "xml2_solo_mode_regroup_test",
+    "xml2_remastered_options_test", "xml2_remastered_ui_test",
     "xml2_guard_block_native_test",
     "xml2_lc_fonts_host",
     "xml2_roll_test", "xml2_dr_reward_test", "xml2_online_menus_test",
@@ -67,14 +68,22 @@ skip = {
     "xml2_codex_back_install_test", "xml2_resistance_display_install_test", "xml2_economy_test",
     # argument-taking tools run by their own gates: W2's G3 real-saves run (--list/--data/--registry/--out) and the
     # E4 actor-pools host (scripts/test_actor_pools.py); without arguments both only print their usage (exit 2)
-    "lcsave_real_saves", "actor_pools_host",
+    "lcsave_real_saves", "actor_pools_host", "union_host", # union utility takes DLL/retail/engine/output inputs in startup/OFF gates
     "xml2_e4_core_host", # its boundary/fault/encoding matrix runs through test_e4_core.py below
 }
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
+    if name == "xml2_texture_filtering_runtime_test":
+        cmds.append([str(exe), _os.environ.get("XML2_FIX_TEST_GFX", str(Path(env["XML2_FIX_TEST_GAME_DIR"]) / "libIGGfx.dll"))])
+        continue
     if name not in skip:
         cmds.append(([str(exe), EXE] + ([_need("XML2_FIX_GUARD_NODE")] if name == "xml2_guard_block_native_test"
                                      else [XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
+cmds += [[str(b / "xml2_remastered_options_test.exe"), EXE, mode] for mode in
+         ["off", "collision"] + [f"guard{i}" for i in range(15)]]
+cmds += [[str(b / "xml2_remastered_device_test.exe"), mode] for mode in ("stock-reset", "second-lost")]
+cmds += [[str(b / "xml2_remastered_ui_test.exe"), EXE, mode] for mode in ["off"] + [f"guard{i}" for i in range(16)]]
+cmds += [[str(b / "xml2_texture_filtering_runtime_test.exe"), _os.environ.get("XML2_FIX_TEST_GFX", str(Path(env["XML2_FIX_TEST_GAME_DIR"]) / "libIGGfx.dll")), f"guard{i}"] for i in range(8)]
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
 if (b / "xml2_online_broker_test.exe").is_file():
     cmds.append([str(b / "xml2_online_broker_test.exe"), "--room-closed-offline"])
@@ -98,6 +107,7 @@ _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\}
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
 # Suites run once per mode beside the exe: their logs need the mode in the tag (else the second run overwrites the first).
 installer_modes = {"xml2_xml1_air_carry_test", "xml2_pad_hotplug_test", "xml2_pad_hotplug_live_test"}
+installer_modes |= {"xml2_remastered_options_test", "xml2_remastered_ui_test", "xml2_texture_filtering_runtime_test"}
 for fixture in ("xml2_pad_hotplug_test", "xml2_pad_hotplug_live_test"):
     cmds += [[str(b / (fixture + ".exe")), EXE, mode] for mode in ("1", "0")]
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
@@ -171,6 +181,8 @@ for cmd in cmds:
     if len(cmd)>1 and tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
         tag += "-" + cmd[-1]
     if Path(cmd[0]).stem in installer_modes and len(cmd)>2:
+        tag += "-" + cmd[-1]
+    if Path(cmd[0]).stem == "xml2_remastered_device_test" and len(cmd)==2:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"

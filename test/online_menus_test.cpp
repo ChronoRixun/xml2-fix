@@ -566,6 +566,8 @@ bool online_body_ready() { return active() && body_ready; }
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace display {
 void set_network_overlay(void (*draw)(void*)) { network_fixture::draw_hook=draw; }
+bool remastered_enabled() { return false; }
+applied_state applied_snapshot() { return {}; }
 display_rules::options test_options;
 display_rules::options read_ini_options() { return test_options; }
 const display_rules::options& current_options() { return test_options; }

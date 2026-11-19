@@ -80,6 +80,13 @@ Skating uses agreement rule 42 revision 2; old skating peers are refused in both
 
 # Changelog
 
+## 1.12.0-beta.1 - unreleased Remastered preview
+
+Optional MSAA, selective world-texture anisotropy and centered Beenox panels,
+all behind an OFF-by-default Remastered switch. See [beta notes](packaging/release-notes/v1.12.0.md)
+and [settings](docs/remastered.md). Built on 1.11.1; its gameplay agreement and LC 0.6.1 content identity are unchanged;
+mixed ON/OFF visual settings are permitted. Promotion requires the release checklist.
+
 ## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2 / beta.3 / beta.4 / beta.5 / beta.6)
 
 ### 1.11.0-beta.5

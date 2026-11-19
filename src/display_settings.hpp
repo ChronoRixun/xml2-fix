@@ -10,4 +10,6 @@ namespace display_settings
 	// Direct3D device is hooked: 8 samples rely on the device hook's clamp, and the wipe guard on
 	// its fallbacks. Nothing here hooks Direct3D or the window. See display_settings_rules.hpp.
 	void install(HMODULE game, bool guard_wipe);
+	// -1 unless the existing retail guards and FSAA transaction succeeded.
+	int requested_fsaa_index();
 }

@@ -210,3 +210,18 @@ The production DLL startup check and full W2 OFF proof remain applicable.
 The latter must compare against the committed 3a DLL/map, include all roller
 pages, and run absent-key and explicit-zero cases. Outputs belong in a local
 work folder; never add binary fixtures, source game assets or listings to git.
+
+Remastered 1c adds `xml2_remastered_1c_rules_test`, `xml2_remastered_ui_test`
+(owned retail EXE, `all/off/guard0..guard15`) and
+`xml2_texture_filtering_runtime_test` (owned Gfx DLL, `all/guard0..guard7`).
+`XML2_FIX_TEST_GFX` optionally selects the Gfx input for `run_native.py`;
+otherwise it uses `XML2_FIX_TEST_GAME_DIR/libIGGfx.dll`.
+
+For a full-image union proof, `UNION_CODE_OUT` plus the optional
+`UNION_CAPTURE_RW_ALLOCATIONS=1` also captures complete non-heap private RW
+VirtualAlloc regions (at most 16 MiB each), including writable tails of executable
+allocations. This closes ASLR evidence gaps for existing model/name/spill owners
+without changing the production DLL. The host only captures; it never normalizes
+an address. The comparer must identify the same native/cave operand on both sides
+and verify every backing byte before accepting pointer relocation. Default host
+behavior is unchanged.

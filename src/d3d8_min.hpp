@@ -4,6 +4,7 @@
 // they are declared here: the public D3D8 structure layouts, constants and vtable slots.
 
 #include <Windows.h>
+#include <cstddef>
 
 namespace d3d8
 {
@@ -33,6 +34,7 @@ namespace d3d8
 	constexpr DWORD clear_target = 1;          // D3DCLEAR_TARGET
 
 	constexpr HRESULT err_device_lost = static_cast<HRESULT>(0x88760868);
+	constexpr HRESULT err_device_not_reset = static_cast<HRESULT>(0x88760869);
 	constexpr HRESULT err_invalid_call = static_cast<HRESULT>(0x8876086C);
 
 	struct display_mode
@@ -75,6 +77,7 @@ namespace d3d8
 		UINT height;
 	};
 	static_assert(sizeof(surface_desc) == 32);
+	static_assert(offsetof(surface_desc,multi_sample_type)==0x14 && offsetof(surface_desc,width)==0x18 && offsetof(surface_desc,height)==0x1c);
 
 	// D3DVIEWPORT8 and D3DRECT.
 	struct viewport
@@ -94,18 +97,26 @@ namespace d3d8
 		void* bits;
 	};
 
-	// D3DCAPS8 (220 bytes): only PresentationIntervals is read.
+	// D3DCAPS8: 53 DWORD-sized fields (floats occupy one field), x86 public ABI.
 	struct caps8
 	{
-		DWORD device_type;
-		DWORD adapter_ordinal;
-		DWORD caps;
-		DWORD caps2;
-		DWORD caps3;
-		DWORD presentation_intervals; // present_interval_* bits the adapter supports
-		DWORD rest[49];
+		DWORD device_type, adapter_ordinal, caps, caps2, caps3, presentation_intervals;
+		DWORD cursor_caps, dev_caps, primitive_misc_caps, raster_caps;
+		DWORD z_cmp_caps, src_blend_caps, dest_blend_caps, alpha_cmp_caps, shade_caps, texture_caps;
+		DWORD texture_filter_caps, cube_texture_filter_caps, volume_texture_filter_caps;
+		DWORD texture_address_caps, volume_texture_address_caps, line_caps;
+		DWORD max_texture_width, max_texture_height, max_volume_extent, max_texture_repeat, max_texture_aspect_ratio, max_anisotropy;
+		float max_vertex_w, guard_band_left, guard_band_top, guard_band_right, guard_band_bottom, extents_adjust;
+		DWORD stencil_caps, fvf_caps, texture_op_caps, max_texture_blend_stages, max_simultaneous_textures;
+		DWORD vertex_processing_caps, max_active_lights, max_user_clip_planes, max_vertex_blend_matrices, max_vertex_blend_matrix_index;
+		float max_point_size;
+		DWORD max_primitive_count, max_vertex_index, max_streams, max_stream_stride, vertex_shader_version, max_vertex_shader_const, pixel_shader_version;
+		float max_pixel_shader_value;
 	};
-	static_assert(sizeof(caps8) == 220);
+	static_assert(sizeof(caps8) == 212);
+	static_assert(offsetof(caps8, raster_caps) == 0x24 && offsetof(caps8, texture_filter_caps) == 0x40);
+	static_assert(offsetof(caps8, max_anisotropy) == 0x6c && offsetof(caps8, max_texture_blend_stages) == 0x94);
+	static_assert(offsetof(caps8, max_simultaneous_textures) == 0x98);
 
 	// IDirect3D8 vtable slots.
 	namespace d3d_slot
@@ -115,6 +126,7 @@ namespace d3d8
 		constexpr int get_adapter_display_mode = 8;
 		constexpr int check_device_type = 9;
 		constexpr int check_device_multi_sample_type = 11;
+		constexpr int check_depth_stencil_match = 12;
 		constexpr int get_device_caps = 13;
 		constexpr int create_device = 15;
 	}
@@ -148,6 +160,8 @@ namespace d3d8
 	using get_adapter_display_mode_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, display_mode*);
 	using check_device_type_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, DWORD, DWORD, BOOL);
 	using check_device_multi_sample_type_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, DWORD, BOOL, DWORD);
+	using get_depth_stencil_surface_t = HRESULT(STDMETHODCALLTYPE*)(void*, void**);
+	using check_depth_stencil_match_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, DWORD, DWORD, DWORD);
 	using get_device_caps_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, caps8*);
 	using create_device_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, HWND, DWORD, present_parameters*, void**);
 	using test_cooperative_level_t = HRESULT(STDMETHODCALLTYPE*)(void*);

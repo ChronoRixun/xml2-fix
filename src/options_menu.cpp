@@ -2,6 +2,7 @@
 #include "display.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "centered_ui_trace.hpp"
 #include "options_menu_rules.hpp"
 
 #include <Windows.h>
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace options_menu
 {
@@ -114,6 +116,9 @@ namespace options_menu
 			panel_choices shown;                  // what the rows offered and showed when the panel opened
 			std::array<bool, row_count> present{}; // which of the rows' keys xml2-fix.ini had then
 			std::string resolution;               // native setting when this panel opened
+            bool msaa_created=false;
+            std::uint64_t msaa_revision=~std::uint64_t(0);
+            int pending_fsaa=-1;
 			bool reverted = false;                // "Revert to default" ran since
 		};
 		open_panel current;
@@ -176,6 +181,21 @@ namespace options_menu
 			const bool vsync_waits = changes_row(changes, row::vsync) && !display_rules::manages_window(display::current_options().window_mode);
 			set_text(status, status_text(changes_row(changes, row::mode), vsync_waits).c_str());
 		}
+
+        void update_msaa(void* panel) {
+            if(!panel || panel!=current.panel || panel!=current_panel() || !current.msaa_created) return;
+            const auto snapshot=display::applied_snapshot(); // lock released before calling native widgets
+            void* fsaa=find_item(panel,fsaa_item_id);
+            const int pending=fsaa ? field<int>(fsaa,game::cycle_selected) : -1;
+            if(current.msaa_revision==snapshot.observation_revision && pending==current.pending_fsaa) return;
+            current.msaa_revision=snapshot.observation_revision; current.pending_fsaa=pending;
+            if(void* label=find_item(panel,msaa_item_id)) set_text(label,display::msaa_status(snapshot).c_str());
+        }
+        bool __fastcall draw_panel(void* panel,void*) {
+            centered_ui_trace::record(centered_ui_trace::owner::bxig,centered_ui_trace::boundary::render,reinterpret_cast<std::uintptr_t>(panel));
+            update_msaa(panel);
+            return game_function<bool(__fastcall*)(void*,void*)>(msaa_draw_site.target_rva)(panel,nullptr);
+        }
 
 		// ---- The highlight bar --------------------------------------------------------------------
 		// The game's own highlight function (FUN_00617f10) knows only its rows (slots 2/3/4), so ours
@@ -356,6 +376,18 @@ namespace options_menu
 				field<int>(status, game::item_anim_current) = -1;
 			}
 
+            if(display::remastered_enabled()) {
+                if(find_item(panel,msaa_item_id)) logger::write("options: MSAA label id 0x4e already owned; skipping");
+                else if(void* label=op_new(game::label_size)) {
+                    game_function<label_ctor_t>(game::label_ctor)(label,nullptr,panel,msaa_item_id);
+                    set_rect(label,status_x,msaa_y,status_w,status_h);
+                    set_style(label,status_style); set_colour(label,colour_idle);
+                    std::memcpy(&slot_of(label,0),&slot_of(fsaa,0),2*sizeof(anim_slot));
+                    field<int>(label,game::item_anim_current)=-1;
+                    current.msaa_created=true;
+                }
+            }
+
 			// Keyboard navigation: FSAA > our rows > Accept. The window frees the records with operator delete.
 			const auto register_nav = game_function<register_nav_t>(game::register_nav);
 			int registered = 0;
@@ -376,6 +408,7 @@ namespace options_menu
 
 			current.panel = panel;
 			current.bar = bar;
+            update_msaa(panel);
 			logger::write("options: rows added to Advanced Options - Display mode %s, Frame rate %s, VSync %s, Run in background %s (%d navigation records, %d relinked%s)",
 			              text_of(row::mode, current.shown.rows[0].selected), text_of(row::frame_rate, current.shown.rows[1].selected),
 			              text_of(row::vsync, current.shown.rows[2].selected), text_of(row::background, current.shown.rows[3].selected), registered, relinked,
@@ -384,6 +417,9 @@ namespace options_menu
 
 		void __fastcall finish_panel(void* panel, void* /*edx*/, const int slot)
 		{
+			if(centered_ui_trace::enabled() && panel) centered_ui_trace::record(centered_ui_trace::owner::bxig,
+                centered_ui_trace::boundary::layout,reinterpret_cast<std::uintptr_t>(panel),unsigned(slot),
+                {field<float>(panel,0x38),field<float>(panel,0x3c),field<float>(panel,0x40),0});
 			build_rows(panel, slot);
 			game_function<set_all_anim_t>(game::set_all_anim)(panel, nullptr, slot); // the enter animation, as the builder meant to
 		}
@@ -561,22 +597,29 @@ namespace options_menu
 			}
 		}
 
+        const bool msaa=display::remastered_enabled();
+        if(msaa && (!bytes_match(msaa_draw_site.rva-10,msaa_draw_prefix.data(),msaa_draw_prefix.size()) ||
+                    !bytes_match(msaa_draw_site.rva,msaa_draw_site.expected.data(),msaa_draw_site.expected.size()) ||
+                    !bytes_match(msaa_draw_site.target_rva,reinterpret_cast<const std::uint8_t*>("\x8b\x01\xff\x10\xb0\x01\xc3"),7))) {
+            logger::write("options: MSAA draw guard mismatch; refusing options transaction"); return;
+        }
 		struct replacement
 		{
 			const call_site* site;
 			const void* function;
 		};
-		const std::array<replacement, 4> replacements{{{&finish_panel_site, reinterpret_cast<const void*>(&finish_panel)},
+		std::vector<replacement> replacements{{&finish_panel_site, reinterpret_cast<const void*>(&finish_panel)},
 		                                               {&save_site, reinterpret_cast<const void*>(&on_save)},
 		                                               {&cancel_site, reinterpret_cast<const void*>(&on_cancel)},
-		                                               {&revert_site, reinterpret_cast<const void*>(&on_revert)}}};
-		std::array<DWORD, 4> protection{};
+		                                               {&revert_site, reinterpret_cast<const void*>(&on_revert)}};
+        if(msaa) replacements.push_back({&msaa_draw_site,reinterpret_cast<const void*>(&draw_panel)});
+		std::vector<DWORD> protection(replacements.size());
 		for (std::size_t i = 0; i < replacements.size(); ++i)
 		{
 			if (!VirtualProtect(base + replacements[i].site->rva, 5, PAGE_EXECUTE_READWRITE, &protection[i]))
 			{
 				logger::write("options: can't unprotect %s (error %lu) - the Advanced Options panel is left as it is", replacements[i].site->what, GetLastError());
-				for (std::size_t j = 0; j < i; ++j)
+				for (std::size_t j = i; j-- > 0;)
 				{
 					VirtualProtect(base + replacements[j].site->rva, 5, protection[j], &protection[j]);
 				}
@@ -599,6 +642,7 @@ namespace options_menu
 			VirtualProtect(base + replacements[i].site->rva, 5, protection[i], &protection[i]);
 		}
 		patched = true;
+        if(msaa) logger::write("options: owns later renderer call 0x61939a after online menus retail guards; MSAA label enabled");
 		logger::write("options: Advanced Options gets the rows Display mode, Frame rate, VSync and Run in background (four call sites patched); Accept writes the changed ones to [Display] in xml2-fix.ini");
 	}
 

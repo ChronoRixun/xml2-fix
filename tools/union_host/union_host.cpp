@@ -326,6 +326,19 @@ int wmain(int argc, wchar_t** argv)
 	wchar_t code_out[MAX_PATH]{};
 	if (GetEnvironmentVariableW(L"UNION_CODE_OUT", code_out, MAX_PATH))
 	{
+		// Optional complete RW-allocation evidence for full-image proofs. Some
+		// existing owners (ModelPools, ResourceNames, primitive spill rows) use
+		// ordinary VirtualAlloc blocks without guard pages. Omitting them makes
+		// a legitimate relocated pointer impossible to compare under ASLR.
+		// Heap arenas and stacks are excluded; no address is normalized here.
+		const bool capture_rw=GetEnvironmentVariableW(L"UNION_CAPTURE_RW_ALLOCATIONS",nullptr,0)!=0;
+		std::vector<void*> heap_bases;
+		if(capture_rw) {
+			std::vector<HANDLE> heaps(GetProcessHeaps(0,nullptr));
+			const DWORD count=GetProcessHeaps(DWORD(heaps.size()),heaps.data());
+			if(count>heaps.size()) return 7;
+			for(DWORD i=0;i<count;++i) {MEMORY_BASIC_INFORMATION h{};if(VirtualQuery(heaps[i],&h,sizeof h)) heap_bases.push_back(h.AllocationBase);}
+		}
 		SYSTEM_INFO system{}; GetSystemInfo(&system);
 		auto cursor = reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress);
 		const auto end = reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress);
@@ -349,15 +362,23 @@ int wmain(int argc, wchar_t** argv)
 				// save_limits leaves both guard pages reserved, not committed.
 				if(has_before_guard && has_after_guard && info.AllocationBase!=info.BaseAddress && before_guard.State==MEM_RESERVE && after_guard.State==MEM_RESERVE && before_guard.RegionSize==4096 && after_guard.RegionSize==4096)guarded_data=true;
 			}
+			MEMORY_BASIC_INFORMATION allocation_first{};
+			const bool code_tail=capture_rw && VirtualQuery(info.AllocationBase,&allocation_first,sizeof allocation_first) &&
+			    allocation_first.State==MEM_COMMIT && allocation_first.Type==MEM_PRIVATE &&
+			    ((allocation_first.Protect&0xff)==PAGE_EXECUTE_READ || (allocation_first.Protect&0xff)==PAGE_EXECUTE_READWRITE);
+			const bool owned_rw=capture_rw && info.State==MEM_COMMIT && info.Type==MEM_PRIVATE &&
+			    protection==PAGE_READWRITE && !(info.Protect&PAGE_GUARD) && (info.BaseAddress==info.AllocationBase || code_tail) &&
+			    info.RegionSize<=16u*1024u*1024u && std::find(heap_bases.begin(),heap_bases.end(),info.AllocationBase)==heap_bases.end();
 			if (info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && !(info.Protect & PAGE_GUARD) &&
-			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ || guarded_data))
+			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ || guarded_data || owned_rw))
 			{
 				wchar_t path[MAX_PATH]{};
-				swprintf_s(path, guarded_data?L"%s/data-%08x.bin":L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
+				swprintf_s(path, (guarded_data||owned_rw)?L"%s/data-%08x.bin":L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
 				if (FILE* f = _wfopen(path, L"wb"))
 				{
 					std::fwrite(info.BaseAddress, 1, info.RegionSize, f); std::fclose(f);
 				}
+				if(owned_rw) std::printf("union capture: complete RW %08x %zu bytes\n",unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)),info.RegionSize);
 			}
 			if (next <= cursor) break;
 			cursor = next;

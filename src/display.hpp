@@ -37,6 +37,7 @@
 // runs, through set_* below.
 
 #include "display_rules.hpp"
+#include "applied_msaa.hpp"
 
 #include <string>
 
@@ -48,6 +49,9 @@ namespace display
 	// in-game rows (which need the device to start the frame limiter live), with every call passed
 	// through unchanged, and Present only once something paces or pauses frames.
 	void install(HMODULE game);
+	// Value only: options never holds a device or a surface.
+	applied_state applied_snapshot();
+	bool remastered_enabled();
 
 	// [Display] as xml2-fix.ini has it now (the in-game rows show this when the panel opens; the
 	// launcher may have edited the file since the game started). Unknown values are logged.

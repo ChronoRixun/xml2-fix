@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.11.1 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.12.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -148,6 +148,8 @@ add_library(xml2_fix SHARED
 	src/plugin_scan.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+    src/remastered_ui.cpp
+    src/texture_filtering.cpp
 	src/no_activate.cpp
 	src/display_settings.cpp
 	src/frame_rate.cpp
@@ -1079,3 +1081,63 @@ target_link_options(xml2_e4_x1_real_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO 
 add_executable(xml2_resolution_active_test test/resolution_active_test.cpp)
 target_include_directories(xml2_resolution_active_test PRIVATE src)
 target_compile_options(xml2_resolution_active_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_remastered_device_test test/remastered_device_test.cpp)
+target_include_directories(xml2_remastered_device_test PRIVATE src)
+target_compile_options(xml2_remastered_device_test PRIVATE /UNDEBUG)
+target_link_libraries(xml2_remastered_device_test PRIVATE user32 advapi32)
+
+add_executable(xml2_texture_filtering_test test/texture_filtering_test.cpp src/texture_filtering.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_texture_filtering_test PRIVATE src)
+target_compile_options(xml2_texture_filtering_test PRIVATE /UNDEBUG)
+if(DEFINED XML2_AF_SAMPLER_BASELINE_HEADER)
+    add_executable(xml2_af_sampler_baseline_test EXCLUDE_FROM_ALL test/texture_filtering_test.cpp src/texture_filtering.cpp src/patch_transaction.cpp)
+    target_include_directories(xml2_af_sampler_baseline_test PRIVATE src)
+    target_compile_definitions(xml2_af_sampler_baseline_test PRIVATE AF_SAMPLER_RULES_HEADER="${XML2_AF_SAMPLER_BASELINE_HEADER}")
+    target_compile_options(xml2_af_sampler_baseline_test PRIVATE /UNDEBUG)
+    set_target_properties(xml2_af_sampler_baseline_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/regression-control")
+endif()
+
+add_executable(xml2_remastered_options_test test/remastered_options_test.cpp)
+target_include_directories(xml2_remastered_options_test PRIVATE src)
+target_compile_options(xml2_remastered_options_test PRIVATE /UNDEBUG)
+target_link_libraries(xml2_remastered_options_test PRIVATE user32)
+
+# Section C0: read-only ownership diagnostics and pure canvas math (no game).
+add_executable(xml2_centered_ui_test test/centered_ui_test.cpp)
+target_include_directories(xml2_centered_ui_test PRIVATE src)
+target_compile_options(xml2_centered_ui_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_remastered_1c_rules_test test/remastered_1c_rules_test.cpp)
+target_include_directories(xml2_remastered_1c_rules_test PRIVATE src)
+target_compile_options(xml2_remastered_1c_rules_test PRIVATE /UNDEBUG)
+target_link_libraries(xml2_remastered_1c_rules_test PRIVATE user32)
+
+add_executable(xml2_remastered_ui_test test/remastered_ui_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_remastered_ui_test PRIVATE src)
+target_compile_options(xml2_remastered_ui_test PRIVATE /UNDEBUG)
+target_link_options(xml2_remastered_ui_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+target_link_libraries(xml2_remastered_ui_test PRIVATE user32)
+if(DEFINED XML2_UI_BASELINE_SOURCE)
+    add_executable(xml2_ui_review_control EXCLUDE_FROM_ALL test/remastered_ui_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+    target_include_directories(xml2_ui_review_control PRIVATE src)
+    target_compile_definitions(xml2_ui_review_control PRIVATE REMASTERED_UI_BASELINE_SOURCE="${XML2_UI_BASELINE_SOURCE}")
+    target_compile_options(xml2_ui_review_control PRIVATE /UNDEBUG)
+    target_link_options(xml2_ui_review_control PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+    target_link_libraries(xml2_ui_review_control PRIVATE user32)
+    set_target_properties(xml2_ui_review_control PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/regression-control")
+endif()
+
+add_executable(xml2_texture_filtering_runtime_test test/texture_filtering_runtime_test.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_texture_filtering_runtime_test PRIVATE src)
+target_compile_options(xml2_texture_filtering_runtime_test PRIVATE /UNDEBUG)
+
+# Optional regression control: compile a caller-supplied stored baseline display.cpp.
+if(DEFINED XML2_CENTERED_UI_BASELINE_SOURCE)
+    add_executable(xml2_centered_ui_baseline_device_test EXCLUDE_FROM_ALL test/remastered_device_test.cpp)
+    target_include_directories(xml2_centered_ui_baseline_device_test PRIVATE src)
+    target_compile_definitions(xml2_centered_ui_baseline_device_test PRIVATE CENTERED_UI_BASELINE_DISPLAY="${XML2_CENTERED_UI_BASELINE_SOURCE}")
+    target_compile_options(xml2_centered_ui_baseline_device_test PRIVATE /UNDEBUG)
+    target_link_libraries(xml2_centered_ui_baseline_device_test PRIVATE user32 advapi32)
+    set_target_properties(xml2_centered_ui_baseline_device_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/regression-control")
+endif()

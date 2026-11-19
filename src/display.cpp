@@ -1,5 +1,6 @@
 #include "online_menus.hpp"
 #include "display.hpp"
+#include "texture_filtering.hpp"
 #include "no_activate.hpp"
 #include "pool_counters.hpp"
 #include "script_pools.hpp"
@@ -11,6 +12,7 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "centered_ui_trace.hpp"
 #include "options_menu.hpp"
 #include "resolution_list.hpp"
 #include "resolution_rules.hpp"
@@ -20,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -33,6 +36,13 @@ namespace display
 		size_t mode_slots = resolution_rules::stock_slots; // the resolution table's slots: the game's 20, or the fix's 64 (resolution_list.hpp)
 
 		options opts;
+        remastered_rules::settings profile;
+        applied_state published;
+        std::map<void*,applied_state> observations;
+        struct device_context {void* d3d_object=nullptr;UINT adapter=0;DWORD type=1;bool stock=false;};
+        std::map<void*,device_context> device_contexts;
+        std::uint64_t next_generation=0, next_revision=0;
+
 		std::recursive_mutex mutex; // hooks re-enter through window messages
 
 		d3d8::display_mode desktop{}; // the desktop at start; the display mode never changes in our modes
@@ -95,20 +105,32 @@ namespace display
 
 		// Replaces one COM vtable slot in place (the vtable is shared by every object of the class),
 		// keeping the original. Does nothing if it is already ours.
-		template <typename T>
-		void hook_slot(void* object, const int slot, T replacement, T& original)
-		{
-			auto** vtable = *static_cast<void***>(object);
-			if (vtable[slot] == reinterpret_cast<void*>(replacement))
-			{
-				return;
-			}
-			DWORD old_protect = 0;
-			VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old_protect);
-			original = reinterpret_cast<T>(vtable[slot]);
-			vtable[slot] = reinterpret_cast<void*>(replacement);
-			VirtualProtect(&vtable[slot], sizeof(void*), old_protect, &old_protect);
-		}
+        // Originals are keyed by COM class vtable and slot, never by the most recent device.
+        std::map<std::pair<void**,int>,void*> com_originals;
+        template<class T> T original_for(void* object,int slot,T fallback) {
+            if (!object) return fallback;
+            auto it=com_originals.find({*static_cast<void***>(object),slot});
+            return it==com_originals.end() ? fallback : reinterpret_cast<T>(it->second);
+        }
+        template <typename T>
+        bool hook_slot(void* object, const int slot, T replacement, T& original) {
+            auto** table=*static_cast<void***>(object);
+            const auto key=std::pair{table,slot};
+            auto it=com_originals.find(key);
+            if (table[slot]==reinterpret_cast<void*>(replacement)) return it!=com_originals.end();
+            if (it!=com_originals.end()) { logger::write("display: COM slot changed by another owner; refusing hook %d",slot); return false; }
+            DWORD protection=0;
+            if (!VirtualProtect(&table[slot],sizeof(void*),PAGE_READWRITE,&protection)) return false;
+            void* before=table[slot];
+            com_originals.emplace(key,before);
+            table[slot]=reinterpret_cast<void*>(replacement);
+            const bool installed=table[slot]==reinterpret_cast<void*>(replacement);
+            DWORD ignored=0;
+            const bool restored=VirtualProtect(&table[slot],sizeof(void*),protection,&ignored)!=0;
+            original=reinterpret_cast<T>(before);
+            if (!installed || !restored) logger::write("display: COM slot %d hook/protection failure",slot);
+            return installed && restored;
+        }
 
 		std::string describe(const d3d8::present_parameters& pp)
 		{
@@ -256,9 +278,9 @@ namespace display
 				return;
 			}
 			raw_modes.clear();
-			const auto count_fn = real_get_adapter_mode_count ? real_get_adapter_mode_count
+			const auto count_fn = real_get_adapter_mode_count ? original_for(self,6,real_get_adapter_mode_count)
 			                                                  : d3d8::method<d3d8::get_adapter_mode_count_t>(self, d3d8::d3d_slot::get_adapter_mode_count);
-			const auto enum_fn = real_enum_adapter_modes ? real_enum_adapter_modes
+			const auto enum_fn = real_enum_adapter_modes ? original_for(self,7,real_enum_adapter_modes)
 			                                             : d3d8::method<d3d8::enum_adapter_modes_t>(self, d3d8::d3d_slot::enum_adapter_modes);
 			const UINT count = count_fn(self, which);
 			for (UINT i = 0; i < count && i < 4096; ++i)
@@ -308,6 +330,78 @@ namespace display
 			return pp;
 		}
 
+        struct scoped_reset_context {
+            void* previous_d3d=d3d;UINT previous_adapter=adapter;DWORD previous_type=device_type;
+            bool previous_stock=stock_fallback;device_context* selected=nullptr;
+            explicit scoped_reset_context(void* self) {
+                if(!profile.enabled) return;
+                auto it=device_contexts.find(self);if(it==device_contexts.end()) return;
+                selected=&it->second;d3d=selected->d3d_object;adapter=selected->adapter;device_type=selected->type;stock_fallback=selected->stock;
+            }
+            ~scoped_reset_context() {
+                if(!selected) return;
+                selected->stock=stock_fallback;d3d=previous_d3d;adapter=previous_adapter;device_type=previous_type;stock_fallback=previous_stock;
+            }
+        };
+        void publish_success(void* self,const d3d8::present_parameters& raw,
+                             const d3d8::present_parameters& attempt,const d3d8::present_parameters& success,
+                             const std::string& reason) {
+            auto& state=observations[self];
+            state={}; state.device_generation=++next_generation; state.observation_revision=++next_revision;
+            state.requested_saved_index=display_settings::requested_fsaa_index();
+            if(profile.enabled) state.requested_profile_samples=profile.msaa_samples;
+            state.engine_pp_before_constraints=raw; state.final_attempt_pp=attempt; state.successful_pp=success;
+            state.effective_windowed=success.windowed!=FALSE; state.capture_constraint=no_multisampling!=nullptr;
+            state.fallback_reason=reason; observe_applied(self,state); published=state; centered_ui_trace::applied(state);
+            texture_filtering::device_ready(self,state.device_generation);
+            logger::write("display: MSAA profile=%d saved-index=%d engine=%lu attempt=%lu successful=%lu actual=%lu verified=%s reason=%s windowed=%d format=%lu depth=%lu swap=%lu flags=%lu generation=%llu observation=%08lX depth-query=%08lX depth-match=%d",
+                state.requested_profile_samples ? int(*state.requested_profile_samples) : -1,state.requested_saved_index,
+                raw.multi_sample_type,attempt.multi_sample_type,success.multi_sample_type,state.observed_backbuffer.multi_sample_type,
+                state.source==observation_source::backbuffer_desc ? "backbuffer" : "unknown",reason.c_str(),state.effective_windowed,
+                success.back_buffer_format,success.auto_depth_stencil_format,success.swap_effect,success.flags,
+                state.device_generation,state.observation_hresult,state.depth_hresult,state.depth_matches);
+        }
+        void publish_failure(void* self,HRESULT hr) {
+            auto it=observations.find(self);
+            if(it==observations.end()) return;
+            auto& state=it->second;
+            const auto validity=(hr==d3d8::err_device_lost || hr==d3d8::err_device_not_reset) ? observation_validity::lost : observation_validity::unavailable;
+            if(state.validity==validity && state.last_hresult==hr) return;
+            state.validity=validity; state.last_hresult=hr; state.observation_revision=++next_revision;
+            published=state; centered_ui_trace::applied(state);
+            texture_filtering::device_unavailable(self);
+        }
+        void recover_observation(void* self) {
+            auto it=observations.find(self);
+            if(it==observations.end() || SUCCEEDED(it->second.last_hresult)) return;
+            auto& state=it->second;
+            state.last_hresult=S_OK;observe_applied(self,state);state.observation_revision=++next_revision;
+            published=state; centered_ui_trace::applied(state);
+            texture_filtering::device_recovered(self);
+            logger::write("display: MSAA recovery generation=%llu revision=%llu actual=%lu observation=%08lX",
+                state.device_generation,state.observation_revision,state.observed_backbuffer.multi_sample_type,state.observation_hresult);
+        }
+        void sanitize_attempt(void* d3d_object,d3d8::present_parameters& pp,std::string& reason) {
+            no_activate::presentation(pp,"D3D8 Remastered final attempt");
+            if (!profile.enabled) return;
+            bool adapter_format_query_failed=false;
+            remastered_rules::constrain_msaa(pp,no_multisampling!=nullptr,
+                [&](DWORD format,BOOL windowed,unsigned n) {
+                    return d3d_object && SUCCEEDED(d3d8::method<d3d8::check_device_multi_sample_type_t>(d3d_object,11)
+                        (d3d_object,adapter,device_type,format,windowed,n));
+                },[&](DWORD color,DWORD depth) {
+                    DWORD adapter_format=color;
+                    if(pp.windowed) {
+                        d3d8::display_mode mode{};
+                        if(!d3d_object || FAILED(d3d8::method<d3d8::get_adapter_display_mode_t>(d3d_object,8)
+                            (d3d_object,adapter,&mode)) || !mode.format) {adapter_format_query_failed=true;return false;}
+                        adapter_format=mode.format;
+                    }
+                    return d3d_object && SUCCEEDED(d3d8::method<d3d8::check_depth_stencil_match_t>(d3d_object,12)
+                        (d3d_object,adapter,device_type,adapter_format,color,depth));
+                },reason);
+            if(adapter_format_query_failed) reason="adapter-format-query-failed";
+        }
 		void remember_applied(const d3d8::present_parameters& pp)
 		{
 			if (!have_applied || applied.back_buffer_width != pp.back_buffer_width || applied.back_buffer_height != pp.back_buffer_height)
@@ -391,6 +485,34 @@ namespace display
 			return result;
 		}
 
+        template<class Call>
+        HRESULT profile_fallbacks(Call call,void* d3d_object,d3d8::present_parameters& wanted,
+                                  const d3d8::present_parameters& raw,const d3d8::present_parameters* desktop_candidate,
+                                  bool reset,d3d8::present_parameters& final_attempt,std::string& reason) {
+            auto first=wanted;
+            if(raw.swap_effect==d3d8::swap_copy || raw.swap_effect==d3d8::swap_copy_vsync) first.swap_effect=raw.swap_effect;
+            reason="requested";sanitize_attempt(d3d_object,first,reason);
+            const auto first_reason=reason;
+            auto plain=first; plain.multi_sample_type=0; plain.flags=raw.flags;
+            auto engine=raw;
+            if(profile.msaa_samples && engine.multi_sample_type>profile.msaa_samples) engine.multi_sample_type=profile.msaa_samples;
+            const d3d8::present_parameters candidates[]={first,plain,engine,desktop_candidate ? *desktop_candidate : engine};
+            HRESULT result=E_FAIL;
+            for(unsigned i=0;i<(desktop_candidate ? 4u : 3u);++i) {
+                if(i==1 && !first.multi_sample_type) continue;
+                auto candidate=candidates[i]; // never reuse an API-mutated failed candidate
+                reason=i==0 ? first_reason : i==1 ? "sample-fallback" : i==2 ? "engine-fallback" : "desktop-fallback";
+                if(i) sanitize_attempt(d3d_object,candidate,reason);
+                final_attempt=candidate;
+                result=call(candidate);
+                logger::write("display: %s attempt %u: %s HRESULT=%08lX",reset ? "reset" : "create",i,
+                              describe(final_attempt).c_str(),result);
+                if(SUCCEEDED(result)) { wanted=candidate; if(i>=2) stock_fallback=true; return result; }
+                if(reset && result==d3d8::err_device_lost) return result;
+            }
+            return result;
+        }
+
 		// The desktop mode in the requested parameters' shell: fullscreen's last resort, the one mode
 		// the adapter certainly offers.
 		d3d8::present_parameters desktop_mode_fallback(void* d3d8_object, const d3d8::present_parameters& requested)
@@ -411,11 +533,17 @@ namespace display
 			{
 				return d3d8::err_device_lost;
 			}
-			return real_test_cooperative_level(self);
+            std::lock_guard lock(mutex);
+            const HRESULT result=original_for(self,3,real_test_cooperative_level)(self);
+            if(result==d3d8::err_device_lost || result==d3d8::err_device_not_reset) publish_failure(self,result);
+            else if(SUCCEEDED(result)) recover_observation(self);
+            return result;
 		}
 
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
+            std::lock_guard lock(mutex);
+			centered_ui_trace::next_frame();
 			script_pools::sample(); // guarded D0 snapshot on the game's render thread
 			if (overlay_hook)
 			{
@@ -444,9 +572,11 @@ namespace display
 				paused = false;
 				logger::write("display: resuming - RunInBackground is on now");
 			}
-			const HRESULT result = real_present(self, source, destination, override, dirty);
+			const HRESULT result = original_for(self,15,real_present)(self, source, destination, override, dirty);
+            if(result==d3d8::err_device_lost || result==d3d8::err_device_not_reset) publish_failure(self,result);
 			if (SUCCEEDED(result))
 			{
+                recover_observation(self);
 				pool_counters::sample(); // fixed-storage reads, between simulation steps
                 e4_observe::sample();
 				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
@@ -463,62 +593,65 @@ namespace display
 			{
 				return;
 			}
-			hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
-			present_hooked = true;
+			present_hooked=hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
 			logger::write("display: Present hooked (%s)", why);
 		}
 
-		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
-		{
-			if (pp) no_activate::presentation(*pp, "D3D8 Reset exclusive parameters");
-			if (!pp || stock_fallback)
-			{
-				return real_reset(self, pp);
-			}
-
-			std::lock_guard lock(mutex);
-			const auto requested = *pp;
-			std::string notes;
-			if (opts.window_mode == mode::fullscreen && d3d)
-			{
-				ensure_raw_modes(d3d, adapter);
-			}
-			auto wanted = d3d ? rewrite(d3d, requested, notes) : requested;
-
-			// Restoring a minimised window makes the engine reset with the same parameters; nothing to do then.
-			if (manages_window(opts.window_mode) && have_applied && std::memcmp(&wanted, &applied, sizeof(wanted)) == 0 &&
-			    real_test_cooperative_level && real_test_cooperative_level(self) == S_OK)
-			{
-				logger::write("display: reset with unchanged parameters skipped");
-				return S_OK;
-			}
-
-			logger::write("display: reset requested %s", describe(requested).c_str());
-			if (std::memcmp(&wanted, &requested, sizeof(wanted)) != 0)
-			{
-				logger::write("display: reset applied   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());
-			}
-			const d3d8::present_parameters guaranteed =
-			    opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d, requested) : requested;
-			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 Reset fallback"); return real_reset(self, &pp_to_use); }, wanted, requested,
-			                                            opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr, "reset", true);
-			if (SUCCEEDED(result))
-			{
-				remember_applied(wanted);
-				copy_back(*pp, wanted);
-				logger::write("display: reset ok");
-			}
-			else if (result != d3d8::err_device_lost)
-			{
-				logger::write("display: ERROR: reset failed (%08lX)", result);
-			}
-			return result;
-		}
+        HRESULT STDMETHODCALLTYPE hooked_reset(void* self,d3d8::present_parameters* pp) {
+            std::lock_guard lock(mutex);
+            const auto reset=original_for(self,14,real_reset);
+            if(!pp) return reset(self,pp);
+            const auto engine_raw=*pp;
+            scoped_reset_context selected(self);
+            no_activate::presentation(*pp,"D3D8 Reset exclusive parameters");
+            if(stock_fallback && !profile.enabled) {
+                const auto attempt=*pp;
+                const HRESULT hr=reset(self,pp);
+                if(SUCCEEDED(hr)) { if(self) publish_success(self,engine_raw,attempt,*pp,"stock-fallback"); }
+                else publish_failure(self,hr);
+                return hr;
+            }
+            const auto requested=*pp;
+            std::string notes;
+            if(opts.window_mode==mode::fullscreen && d3d) ensure_raw_modes(d3d,adapter);
+            auto wanted=d3d && !stock_fallback ? rewrite(d3d,requested,notes) : requested;
+            if(profile.enabled && profile.msaa_samples) wanted.multi_sample_type=profile.msaa_samples;
+            if(profile.enabled) {
+                if(engine_raw.swap_effect==d3d8::swap_copy || engine_raw.swap_effect==d3d8::swap_copy_vsync) wanted.swap_effect=engine_raw.swap_effect;
+                sanitize_attempt(d3d,wanted,notes);
+            }
+            const auto observed=observations.find(self);
+            const auto* previous=profile.enabled ? (observed==observations.end() ? nullptr : &observed->second.successful_pp) : (have_applied ? &applied : nullptr);
+            if(manages_window(opts.window_mode) && previous && std::memcmp(&wanted,previous,sizeof(wanted))==0 &&
+               original_for(self,3,real_test_cooperative_level) && original_for(self,3,real_test_cooperative_level)(self)==S_OK) {
+                recover_observation(self);
+                logger::write("display: reset with unchanged parameters skipped"); return S_OK;
+            }
+            logger::write("display: reset requested %s; attempt %s",describe(requested).c_str(),describe(wanted).c_str());
+            const auto guaranteed=opts.window_mode==mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d,requested) : requested;
+            const auto* fallback=opts.window_mode==mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr;
+            auto final_attempt=wanted; std::string reason=notes;
+            const auto call=[&](d3d8::present_parameters& candidate) {
+                no_activate::presentation(candidate,"D3D8 Reset fallback");
+                if(!profile.enabled) final_attempt=candidate;
+                return reset(self,&candidate);
+            };
+            const HRESULT result=profile.enabled ? profile_fallbacks(call,d3d,wanted,engine_raw,fallback,true,final_attempt,reason)
+                : apply_with_fallbacks(call,wanted,requested,fallback,"reset",true);
+            if(SUCCEEDED(result)) {
+                remember_applied(wanted); copy_back(*pp,wanted);
+                if(self) publish_success(self,engine_raw,final_attempt,wanted,reason);
+            } else publish_failure(self,result);
+            return result;
+        }
 
 		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD engine_behaviour,
 		                                               d3d8::present_parameters* pp, void** out)
 		{
+            std::lock_guard lock(mutex);
+            const auto engine_raw=pp ? *pp : d3d8::present_parameters{};
 			if (pp) no_activate::presentation(*pp, "D3D8 CreateDevice exclusive parameters");
+            const auto create=original_for(self,15,real_create_device);
 			// The simulation's x87 word is XMen2.exe's 53-bit one only while Direct3D preserves it: the engine asks for
 			// D3DCREATE_FPU_PRESERVE (alchemy.ini preserveFPU, true unless edited), and the fix keeps it set, because the
 			// lockstep weapon brain runs the game's routines under exactly that word (det_math::game_x87_cw).
@@ -531,12 +664,12 @@ namespace display
 			}
 			if (!pp || !out)
 			{
-				return real_create_device(self, which, type, focus, behaviour, pp, out);
+				return create(self, which, type, focus, behaviour, pp, out);
 			}
 
-			std::lock_guard lock(mutex);
 			adapter = which;
 			device_type = type;
+            if(profile.enabled) stock_fallback=false;
 			const auto requested = *pp;
 			std::string notes;
 			if (opts.window_mode == mode::fullscreen && !stock_fallback)
@@ -544,18 +677,24 @@ namespace display
 				ensure_raw_modes(self, which);
 			}
 			auto wanted = stock_fallback ? requested : rewrite(self, requested, notes);
+            if(profile.enabled && profile.msaa_samples) wanted.multi_sample_type=profile.msaa_samples;
 
 			logger::write("display: device requested %s (adapter %u type %lu behaviour %lX)", describe(requested).c_str(), which, type, engine_behaviour);
 			if (std::memcmp(&wanted, &requested, sizeof(wanted)) != 0)
 			{
-				logger::write("display: device applied   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());
+				logger::write("display: device attempt   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());
 			}
 
 			const bool fullscreen = opts.window_mode == mode::fullscreen && !requested.windowed;
 			const auto guaranteed = fullscreen ? desktop_mode_fallback(self, requested) : requested;
-			const HRESULT result = apply_with_fallbacks(
-				[&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 CreateDevice fallback"); return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
-				wanted, requested, fullscreen ? &guaranteed : nullptr, "device creation", false);
+            auto final_attempt=wanted; std::string reason=notes;
+            const auto call=[&](d3d8::present_parameters& candidate) {
+                no_activate::presentation(candidate,"D3D8 CreateDevice fallback");
+                if(!profile.enabled) final_attempt=candidate;
+                return create(self,which,type,focus,behaviour,&candidate,out);
+            };
+            const HRESULT result=profile.enabled ? profile_fallbacks(call,self,wanted,engine_raw,fullscreen ? &guaranteed : nullptr,false,final_attempt,reason)
+                : apply_with_fallbacks(call,wanted,requested,fullscreen ? &guaranteed : nullptr,"device creation",false);
 			if (FAILED(result) || !*out)
 			{
 				logger::write("display: ERROR: device creation failed (%08lX)", result);
@@ -570,6 +709,8 @@ namespace display
 			copy_back(*pp, wanted);
 
 			device = *out;
+            device_contexts[device]={self,which,type,stock_fallback};
+            publish_success(device,engine_raw,final_attempt,wanted,reason);
 			hook_slot(device, d3d8::device_slot::reset, &hooked_reset, real_reset);
 			if (const auto current = d3d8::method<d3d8::test_cooperative_level_t>(device, d3d8::device_slot::test_cooperative_level);
 			    current != &hooked_test_cooperative_level)
@@ -580,12 +721,12 @@ namespace display
 			// window of ours gets both hooks whatever RunInBackground says now. Otherwise Present waits
 			// until something needs it (hook_present; the rows' frame rate, for one).
 			const bool can_pause = manages_window(opts.window_mode) && !stock_fallback;
-			if (can_pause)
+			if (can_pause || profile.enabled)
 			{
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || overlay_hook || network_overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
+			if (can_pause || profile.enabled || frame_hook || overlay_hook || network_overlay_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
 				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : overlay_hook ? "the join hold's on-screen message" : network_overlay_hook ? "the online network notice" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
@@ -598,11 +739,11 @@ namespace display
 		void build_modes(void* self, const UINT which)
 		{
 			std::vector<d3d8::display_mode> adapter_modes;
-			const UINT count = real_get_adapter_mode_count(self, which);
+			const UINT count = original_for(self,6,real_get_adapter_mode_count)(self, which);
 			for (UINT i = 0; i < count; ++i)
 			{
 				d3d8::display_mode mode{};
-				if (SUCCEEDED(real_enum_adapter_modes(self, which, i, &mode)))
+				if (SUCCEEDED(original_for(self,7,real_enum_adapter_modes)(self, which, i, &mode)))
 				{
 					adapter_modes.push_back(mode);
 				}
@@ -640,7 +781,7 @@ namespace display
 		{
 			if (!out)
 			{
-				return real_enum_adapter_modes(self, which, index, out);
+				return original_for(self,7,real_enum_adapter_modes)(self, which, index, out);
 			}
 			std::lock_guard lock(mutex);
 			if (modes_adapter != which)
@@ -919,6 +1060,8 @@ namespace display
 		{
 			const in_flight_pointer saved = in_flight;
 			in_flight = {GetCurrentThreadId(), {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))}, engine_screen(), saved.depth + 1};
+			centered_ui_trace::record(centered_ui_trace::owner::raw_pointer,centered_ui_trace::boundary::input,0,what,
+                {double(in_flight.point.x),double(in_flight.point.y),double(in_flight.screen.width),double(in_flight.screen.height)});
 			const LRESULT result = call_engine_window(handle,what,w,converted);
 			in_flight = saved;
 			return result;
@@ -1349,6 +1492,9 @@ namespace display
 		}
 	}
 
+    applied_state applied_snapshot() { std::lock_guard lock(mutex); return published; }
+    bool remastered_enabled() { return profile.enabled; }
+
 	void set_frame_hook(void (*hook)(void* device))
 	{
 		frame_hook = hook;
@@ -1525,6 +1671,28 @@ namespace display
 		if (online_menus::installed() && !real_create_window_ex_a &&
 		    !hook_import(GetModuleHandleA("libIGDisplay.dll"),"USER32.dll","CreateWindowExA",&hooked_create_window_ex_a,real_create_window_ex_a))
 			logger::write("display: LC text input could not hook the engine's window creation");
+        profile={};
+        const auto enabled_text=ini::text(L"Remastered",L"Enabled").value_or("0");
+        profile.enabled=enabled_text=="1";
+        if(enabled_text!="0" && enabled_text!="1") logger::write("remastered: invalid Enabled; profile disabled");
+        if(profile.enabled) {
+            const auto read_choice=[](const wchar_t* key,unsigned fallback,std::initializer_list<unsigned> allowed) {
+                const auto text=ini::text(L"Remastered",key);
+                if(!text) return fallback;
+                const auto value=remastered_rules::choice(*text,allowed);
+                if(!value) logger::write("remastered: invalid %ls='%s'; component disabled",key,text->c_str());
+                return value.value_or(0);
+            };
+            profile.msaa_samples=read_choice(L"MSAASamples",4,{0,2,4,6,8});
+            profile.anisotropy=read_choice(L"Anisotropy",0,{0,2,4,8,16});
+            profile.anisotropy_on_point_art=read_choice(L"AnisotropyOnPointArt",0,{0,1})!=0;
+            profile.centered_hud=read_choice(L"CenteredHud",0,{0,1})!=0;
+            profile.trace=ini::text(L"Test",L"RemasteredTrace").value_or("0")=="1";
+            logger::write("remastered: MSAA request=%u AF request=%u point-art=%u; Beenox=%u",profile.msaa_samples,profile.anisotropy,unsigned(profile.anisotropy_on_point_art),unsigned(profile.centered_hud));
+        }
+        centered_ui_trace::configure(profile.enabled,profile.centered_hud,profile.trace);
+        if(centered_ui_trace::enabled()) logger::write("centered-ui: C0 bounded read-only pilot; adapter observations only; Beenox correction is separate; other HUD/menu camera/queue ownership unresolved; limit=256 records, 16 per owner/boundary");
+        texture_filtering::configure(profile);
 		if (no_activate::enabled())
 		{
 			opts.window_mode = mode::windowed;
@@ -1549,7 +1717,7 @@ namespace display
 			// the device to start the frame limiter live, but every hook passes the engine's calls
 			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
-			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{overlay_hook != nullptr, "the join hold's on-screen message"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
+			for (const auto& [wanted, reason] : {std::pair{profile.enabled, "Remastered"}, std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{overlay_hook != nullptr, "the join hold's on-screen message"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
 			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{
@@ -1610,7 +1778,8 @@ namespace display
 		// the fix's modes - where the hook falls back without multisampling and, fullscreen, to the
 		// desktop mode - a failed device no longer resets Resolution/FSAA. In the game's own mode that
 		// reset stays: it is the game's recovery from a setting the adapter can't show.
-		display_settings::install(game, opts.window_mode != mode::stock);
+		display_settings::install(game, opts.window_mode != mode::stock || profile.enabled);
+
 
 		// The resolution table is only ever relocated behind the mode-list hooks, which keep the list
 		// within its slots (the game's writer has no bounds check): they are certain from here on.
