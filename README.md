@@ -1,6 +1,4 @@
-> **Unreleased Remastered preview: 1.12.0-beta.1.** Optional MSAA, selective world filtering and centered Beenox panels; off by default. See [preview settings](docs/remastered.md). Remastered is visual only: the preview keeps the 1.11.1 gameplay agreement and Legends Classic content identity, so it can play online with stable 1.11.1. The stable line is below.
-
-> **Prepared stable update: XML2 Fix 1.11.1**, paired with Legends Classic 0.6.1. Update Fix first, then LC and Rebuild. Skirmish is experimental; separate-PC acceptance is required before publication. Back up saves.
+> **Beta: Remastered preview 1.12.0-beta.1** ([pre-release](https://github.com/ChronoRixun/xml2-fix/releases/tag/v1.12.0-beta.1)). Optional MSAA, selective world filtering and centered Beenox panels; off by default and turned on in `xml2-fix.ini` for now. See [preview settings](docs/remastered.md). Remastered is visual only: the preview keeps the 1.11.1 gameplay agreement and Legends Classic content identity, so it can play online with stable 1.11.1. DXVK is not included. The stable line is below.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
@@ -21,7 +19,7 @@
 
 **X-Men Legends II: Rise of Apocalypse** on PC detects your controller and then leaves it completely unbound. The PC version only ships keyboard defaults, so the game sends you to *Advanced options* to assign all 42 actions by hand, for every player. And its online mode has been dead since GameSpy shut down in 2014.
 
-**XML2 Fix** takes care of the controls and the display, shows what you're playing on Discord, lets mods live in their own folder, and is working on online play:
+**XML2 Fix** takes care of the controls and the display, shows what you're playing on Discord, lets mods live in their own folder, and runs Legends Classic's online co-op:
 
 |                       | Without the fix | With the fix |
 | --------------------- | --------------- | ------------ |
@@ -29,28 +27,28 @@
 | Local co-op           | bind every pad yourself | players 2–4 get pads 2–4 automatically |
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
 | Button prompts        | keyboard keys everywhere, pad or not ("[E] Talk") | the pad's buttons for a player on a pad, **A B X Y** in their colours ([details](#button-prompts)) |
-| Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net), with the right address on PCs with WSL, Hyper-V, Docker or a VPN (lobby: [in progress](#-online)) |
+| Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net), with the right address on PCs with WSL, Hyper-V, Docker or a VPN; Legends Classic adds rooms with codes, public games and drop-in ([online](#-online)) |
 | Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list, 60 fps | borderless or windowed at your desktop's resolution, frame rate and vsync of your choosing, [set in the game's own options](#%EF%B8%8F-display) |
 | Discord               | — | shows what you're playing on your profile: the zone, your heroes, online co-op ([details](#-discord), easy to switch off) |
 | Mods                  | copied over the game's files, hard to undo | a `mods` folder with a load order; the game's files stay untouched ([details](#-mods)) |
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.11.0**, paired with Legends Classic 0.6.0 (content 38 / catalogue 8 / LC48).
-Update XML2 Fix first, update the builder, then Rebuild and Play. Beta.1-7 saves load; back up SaveLC.
-Every online player needs the matching stable build. See [release notes](packaging/release-notes/v1.11.0.md)
-and [remaining limits](docs/KNOWN-ISSUES.md). Iceman and Magma skating follows the first game's rank limit.
+**Current release: XML2 Fix 1.11.1**, paired with Legends Classic 0.6.1 (content 39 / catalogue 8 / LC49).
+Update XML2 Fix first, update the builder, then Rebuild and Play. 0.6.0 and beta saves load; back up SaveLC.
+Every online player needs the matching stable build (1.12.0-beta.1 Remastered players can join too). See
+[release notes](packaging/release-notes/v1.11.1.md) and [remaining limits](docs/KNOWN-ISSUES.md). Skirmish is
+experimental ([notes](docs/skirmish-weekend.md)): a fixed roster per round, unlocked by campaign progress. Iceman and
+Magma skating follows the first game's rank limit.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
-Online codes, public games, default-on drop-in in the port and solo-story watchers. Four-player start is fixed;
-hero swaps survive level changes, with solo hand-back only through the segment and its end (rule 26 revision 6).
-Slow-player drops are disabled; LAG warnings may remain. Frozen or disconnected guests are removed by agreement
-while survivors continue (rule 25 revision 4). Host drop/freeze ends the joiners' session with "lost connection to
-the host"; no host migration. Includes 1.7.1. Online was tested on one PC with two instances of the game; play
-between separate PCs and four-player WAN coverage are not certified here.
-See [CHANGELOG.md](CHANGELOG.md), [1.8.0 release notes](packaging/release-notes/v1.8.0.md),
-and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
+Online (Legends Classic, since 1.8.0): codes, public games, default-on drop-in at the host's next area and
+solo-story watchers, from the game's own Play Online screens since 1.11.0. Slow-player drops are disabled; LAG
+warnings may remain. Frozen or disconnected guests are removed by agreement while survivors continue. Host
+drop/freeze ends the joiners' session; no host migration. Co-op was tested on one PC and on two PCs at home; the
+relay, different home networks, three or four separate PCs and long sessions are not certified here.
+See [CHANGELOG.md](CHANGELOG.md) and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
 
 ## ⚡ Install
 
@@ -113,6 +111,8 @@ PromptColors=1     ; 0: every pad button as [A]-style text
 **Controllers:** tested with an Xbox Wireless Controller (Series X|S) over Bluetooth. Other Xbox One / Series and Xbox 360 pads, and third-party XInput pads, use the same path and are expected to work. PlayStation and Switch pads work through a tool that presents them as an Xbox pad (Steam Input, DS4Windows); untested. Tried one? Please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and say how it went.
 
 ## 🌐 Online
+
+> **Legends Classic:** online co-op runs from its own Play Online screens through the project's rooms (codes, public games, drop-in): [online rooms](docs/online-rooms.md), [drop-in](docs/join-in-progress.md) and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md). The status below is the stock X-Men Legends II / OpenSpy path.
 
 > **Status:** hosting works on OpenSpy (the game registers and shows in Join Game's list; the PC version has no region step), and host-to-join co-op sessions were tested end to end. A join across two different home networks (NAT traversal) hasn't been tested yet - reports welcome. Details: [docs/online-status.md](docs/online-status.md).
 

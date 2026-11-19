@@ -1,4 +1,28 @@
-## 1.11.0 - 2026-11-18
+# Changelog
+
+## 1.12.0-beta.1 - 2026-11-18 (pre-release, Remastered preview)
+
+Optional MSAA, selective world-texture anisotropy and centered Beenox panels,
+all behind an OFF-by-default Remastered switch, set in `xml2-fix.ini` for now. See
+[beta notes](packaging/release-notes/v1.12.0.md) and [settings](docs/remastered.md). Built on 1.11.1;
+its gameplay agreement and LC 0.6.1 content identity are unchanged, so beta players (Remastered on or off)
+and stable 1.11.1 players can host and join each other. DXVK is not included.
+
+## 1.11.1 - 2026-11-18
+
+Paired with Legends Classic 0.6.1 (content 39 / catalogue 8 / LC49). Update XML2 Fix first, then
+Legends Classic, then Rebuild. Everyone online needs the same paired build and gameplay settings.
+
+- Experimental Skirmish keeps the four native competitive modes; campaign progress and character unlocks
+  are required. Skirmish keeps a fixed roster: mid-round joins explain why they were refused; the
+  configured Drop-in choice remains available for campaign sessions ([notes](docs/skirmish-weekend.md)).
+- Owned loaded campaigns repair stale personal profile level history and keep legitimate later progress.
+- Active competitors no longer see the co-op solo-story spectator banner.
+- Danger Room results and Overview omit empty award/prize rows while keeping real prizes.
+
+The gameplay agreement is unchanged from 1.11.0. Details: [release notes](packaging/release-notes/v1.11.1.md).
+
+## 1.11.0 - 2026-11-14
 
 Legends Classic 0.6.0 and XML2 Fix 1.11.0 are the stable pair. Update XML2 Fix first, update
 Legends Classic, then Rebuild and Play. Back up SaveLC first. Beta.1-7 saves remain compatible;
@@ -77,15 +101,6 @@ Legends Classic 0.6.0-beta.7 needs XML2 Fix 1.11.0-beta.6. Update BOTH parts on 
 This is a beta, not a full campaign or Internet co-op certification. Local acceptance is tracked by the release round. Relay/different networks, three/four separate PCs, long sessions, slow joins and host loss still need player testing. Optional Classic conversation remains off; xemu/XML1-recomp save import remains disabled. Both owned games are required; distributed tools contain no game data.
 
 Skating uses agreement rule 42 revision 2; old skating peers are refused in both directions. No Internet or long-session acceptance is claimed.
-
-# Changelog
-
-## 1.12.0-beta.1 - unreleased Remastered preview
-
-Optional MSAA, selective world-texture anisotropy and centered Beenox panels,
-all behind an OFF-by-default Remastered switch. See [beta notes](packaging/release-notes/v1.12.0.md)
-and [settings](docs/remastered.md). Built on 1.11.1; its gameplay agreement and LC 0.6.1 content identity are unchanged;
-mixed ON/OFF visual settings are permitted. Promotion requires the release checklist.
 
 ## 1.11.0 - beta (Legends Classic 0.6.0-beta.1 / beta.2 / beta.3 / beta.4 / beta.5 / beta.6)
 
@@ -745,6 +760,14 @@ are newest first.
   the wall cling) sweeps 60 units ahead of Rogue, drains the first character it finds (`ability_drain`, with the
   target lock) or plays `drain_notarget`, and charges the energy once on the decide move, as default.xbe 0xDBD30.
   Needs the matching Legends Classic heroes output. Not yet played.
+
+## 1.8.2 - 2026-11-02
+
+A hotfix for 1.8.1 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged). Steam Deck / Proton: the game no
+longer stops on a black screen at start; under Proton / Wine the controller check runs the old way by default
+(`[Input] CacheDeviceScan=1` turns the background check back on), and a controller list that takes over 10 seconds
+no longer stalls the game. Windows: nothing changes. No gameplay rule changes, so 1.8.2, 1.8.1 and 1.8.0 PCs play
+together; no Rebuild.
 
 ## 1.8.1 - 2026-10-26
 

@@ -183,8 +183,9 @@ Present preserves the released linked-frame pacing and successful-frame callback
 order. There is therefore no new agreement rule for this visual profile.
 The live ON+ON, mixed-peer and late-join checks remain acceptance requirements.
 
-The companion launcher edits only [Remastered] keys, validates every requested
-value before writes, preserves comments/unrelated settings and requires Fix
+A Remastered page in Ultimate Legends is planned (not released yet); until then
+set these keys by hand. That page is to edit only [Remastered] keys, validate every
+requested value before writes, preserve comments/unrelated settings and require Fix
 1.12.0 or newer. Its CenteredHud label is "Centered Beenox menus": this switch
 does not scale dialogue or the gameplay HUD. Internal resolution scaling and
 bundling a D3D wrapper require separate owner decisions.
