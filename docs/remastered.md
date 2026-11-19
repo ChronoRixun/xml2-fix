@@ -181,7 +181,7 @@ camera/world projection or gameplay-capability entries. Device creation retains
 FPU_PRESERVE, and panel/classification arithmetic preserves caller FP state.
 Present preserves the released linked-frame pacing and successful-frame callback
 order. There is therefore no new agreement rule for this visual profile.
-The live ON+ON, mixed-peer and late-join checks remain acceptance requirements.
+Live checks done for 1.12.0-beta.1 (11-15 to 11-18, one PC plus the two-PC node): ON+ON late join with the host Xtraction > Change Team > START flow held 5 minutes without sync errors; mixed ON/OFF and OFF/ON held 5 minutes; beta (ON) and stable 1.11.1 paired in both directions, 5 minutes each. Still open: other GPU vendors and a real Steam Deck.
 
 A Remastered page in Ultimate Legends is planned (not released yet); until then
 set these keys by hand. That page is to edit only [Remastered] keys, validate every
