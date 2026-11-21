@@ -1,0 +1,137 @@
+From c5ff121e9df7a716d2ecd6826894dd811fd3faf6 Mon Sep 17 00:00:00 2001
+From: wan-connect-1121 <noreply@anthropic.com>
+Date: Sat, 21 Nov 2026 15:05:42 -0600
+Subject: [PATCH] ICE: srflx binding without address attribute, per-IP TURN
+ permissions, skip CGNAT, renew permissions
+
+Lab-proven fixes for GNS v1.6.1 native ICE against coturn 4.18 (wan-connect-1121).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../steamnetworkingsockets_ice_client.cpp     | 56 ++++++++++++++++++-
+ .../steamnetworkingsockets_ice_client.h       |  4 ++
+ 2 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
+index e5a4814..d15d55b 100644
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
+@@ -1021,7 +1021,11 @@ void ICESessionInterface::QueueBindRequest( const netadr_t &addrSTUNServer, Recv
+     Assert( !m_pPendingSTUNRequest );
+ 
+     m_pPendingSTUNRequest = new CSteamNetworkingSocketsSTUNRequest( this );
+-    m_pPendingSTUNRequest->Queue( k_nSTUN_BindingRequest, nEncoding, addrSTUNServer, cb );
++    // Legends Classic patch: a Binding request to a STUN server carries no address attribute.  Stock code put a
++    // MAPPED-ADDRESS (0x0001, comprehension-required) or XOR-MAPPED-ADDRESS in the request; coturn rejects it with
++    // 420 Unknown Attribute, the error was taken for a timeout, and no server-reflexive candidate was ever found.
++    nEncoding &= ~kSTUNPacketEncodingFlags_MappedAddress;
++    m_pPendingSTUNRequest->Queue( k_nSTUN_BindingRequest, nEncoding | kSTUNPacketEncodingFlags_NoMappedAddress, addrSTUNServer, cb );
+ }
+ 
+ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs, int nExtraAttrs )
+@@ -1375,6 +1379,11 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+         // bypass this optimization.
+ 		const CIPAddress &permIP = static_cast< const CIPAddress &>(candidate.m_addr);
+ 		int nPermClassify = ClassifyIP( permIP );
++		// Legends Classic patch: 100.64.0.0/10 (RFC 6598 shared address space: carrier-grade NAT, Tailscale) is not
++		// reachable through a public relay, and hardened TURN servers deny it.  ClassifyIP calls it public.
++		const bool bSharedAddressSpace = permIP.GetType() == k_EIPTypeV4 && ( permIP.GetIPv4() & 0xFFC00000u ) == 0x64400000u;
++		if ( bSharedAddressSpace )
++			nPermClassify = 0;
+ 		if ( ( nPermClassify & k_nIPClassify_Public ) ||
+ 		     ( m_bAnyTURNServerLANAddress && !( nPermClassify & k_nIPClassify_Localhost ) && nPermClassify != 0 ) )
+ 		{
+@@ -2165,6 +2174,13 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+         const std_vector<CIPAddress> &vecPermitted = bIsIPv4 ? m_vecTURNPermittedIPv4 : m_vecTURNPermittedIPv6;
+         int nSessionRevision = bIsIPv4 ? m_nTURNPermissionRevisionIPv4 : m_nTURNPermissionRevisionIPv6;
+ 
++        // Legends Classic patch: renew every permission before its 5 minute lifetime ends.
++        if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision && !vecPermitted.empty()
++            && pIntf->m_usecPermissionsInstalled != 0 && usecNow - pIntf->m_usecPermissionsInstalled > 240 * k_nMillion )
++        {
++            pIntf->m_nTURNPermissionRevision = 0;
++            pIntf->m_usecPermissionsInstalled = 0;
++        }
+         if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision || vecPermitted.empty() )
+             continue;
+ 
+@@ -2178,9 +2194,15 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+         // Construct the request first so m_nTransactionID is set before we XOR IPv6 addrs.
+         auto *pRequest = new CSteamNetworkingSocketsSTUNRequest( pIntf.get() );
+ 
++        // Legends Classic patch: one permitted IP per CreatePermission request.  TURN servers refuse the whole request
++        // (403) when any one address is not allowed, and the stock callback then never retried, so a single refused
++        // address (a CGNAT/Tailscale host candidate, a relay address) left the allocation with no permission at all.
++        // The session revision equals the list length (it is bumped once per appended IP), so it doubles as an index.
++        const int nNextPermit = std::min( pIntf->m_nTURNPermissionRevision, (int)vecPermitted.size() - 1 );
+         int nPeerAttrs = 0;
+-        for ( const CIPAddress &addr : vecPermitted )
++        for ( int iPermit = nNextPermit; iPermit < (int)vecPermitted.size() && iPermit < nNextPermit + 1; ++iPermit )
+         {
++            const CIPAddress &addr = vecPermitted[ iPermit ];
+             if ( nPeerAttrs >= k_nMaxPeers )
+                 break;
+             if ( addr.GetType() == k_EIPTypeV4 )
+@@ -2208,7 +2230,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+             ++nPeerAttrs;
+         }
+ 
+-        pRequest->m_nTURNPermissionRevision = nSessionRevision;
++        pRequest->m_nTURNPermissionRevision = nNextPermit + 1;
+         pIntf->m_pPendingSTUNRequest = pRequest;
+ 
+         // Attach long-term credentials if the TURN server required auth.
+@@ -2272,7 +2294,35 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
+     // Advance to the revision that was current when we sent this request.
+     // If more IPs arrived while the request was in flight, the revision will still be
+     // behind the session's current revision, and we'll send another CreatePermission.
++    // (Legends Classic patch: an error response also advances, so one refused IP is skipped, not retried forever --
++    // except 438 Stale Nonce, which takes the server's new nonce and sends the same request again.)
++    {
++        const STUNAttribute *pErr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_ErrorCode );
++        const STUNAttribute *pNonce = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_Nonce );
++        if ( pErr != nullptr && pErr->m_nLength >= 4 && pNonce != nullptr )
++        {
++            const uint8 *b = reinterpret_cast<const uint8*>( pErr->m_pData );
++            if ( b[2] * 100 + b[3] == 438 )
++            {
++                pIntf->m_strTURNNonce.assign( reinterpret_cast<const char*>( pNonce->m_pData ), pNonce->m_nLength );
++                return;
++            }
++        }
++    }
+     pIntf->m_nTURNPermissionRevision = info.m_pRequest->m_nTURNPermissionRevision;
++    {
++        const bool bIsIPv4 = pIntf->m_boundAddr.GetType() == k_EIPTypeV4;
++        const int nSessionRevision = bIsIPv4 ? m_nTURNPermissionRevisionIPv4 : m_nTURNPermissionRevisionIPv6;
++        if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision && pIntf->m_usecPermissionsInstalled == 0 )
++            pIntf->m_usecPermissionsInstalled = info.m_usecNow;
++        const STUNAttribute *pErr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_ErrorCode );
++        if ( pErr != nullptr && pErr->m_nLength >= 4 )
++        {
++            const uint8 *b = reinterpret_cast<const uint8*>( pErr->m_pData );
++            SpewMsg( "ICE: TURN server %s refused a CreatePermission (error %d); that peer address is skipped.\n",
++                CUtlNetAdrRender( pIntf->m_addrTURNServer ).String(), b[2] * 100 + b[3] );
++        }
++    }
+ }
+ 
+ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( const RecvSTUNPktInfo_t &info )
+diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
+index f4a2db4..9d838f0 100644
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
+@@ -117,6 +117,10 @@ namespace SteamNetworkingSocketsLib {
+         // new CreatePermission sweep is needed.
+         int m_nTURNPermissionRevision = 0;
+ 
++        // Legends Classic patch: when the permitted-IP list was last fully installed, so the
++        // permissions (5 minute lifetime, RFC 5766 sec. 8) are renewed before they expire.
++        SteamNetworkingMicroseconds m_usecPermissionsInstalled = 0;
++
+         /// Send a packet through this interface to the destination remote address.
+         /// If relay address is non-zero, send via Send Indication to the TURN server
+         bool SendPacketGather( int nChunks, const iovec *pChunks, int cbPayload, const netadr_t &addrPeer, const netadr_t &addrRelay );
+-- 
+2.50.1.windows.1
+
