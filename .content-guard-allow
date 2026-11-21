@@ -170,3 +170,5 @@ DISASM test/npc_weapon_contact_test.hpp # Authored synthetic x86 ABI callers mar
 
 DISASM test/skate_exit_test.hpp # Authored synthetic x86 ABI caller seeds invented registers/stack and records return, x87/SSE and physical state; owned native routines are loaded from the local PE at runtime, no extracted instruction body or listing.
 DISASM src/danger_room_prizes.cpp # Fix 1.11.1 (Skirmish weekend): authored register/flags-preserving prize-row adapter calls our has_payload() and resumes at the guarded native targets; no extracted game body or instruction listing.
+PRIVATE_IP  packaging/gns/gns-ice-coturn-fixes.patch  # the RFC 6598 shared address space (carrier-grade NAT / Tailscale) named as a range the ICE patch excludes from TURN permissions; no player or device address
+PRIVATE_IP  scripts/build-gns.ps1  # the RFC 6598 shared address space named in the comment on the ICE patch; no player or device address
