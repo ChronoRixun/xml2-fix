@@ -138,20 +138,27 @@ int main()
 			const auto marked = mark_signal(gns_signal.data(), gns_signal.size());
 			const std::uint8_t* payload = nullptr;
 			std::size_t payload_size = 0;
-			check(marked.size() == gns_signal.size() + 4 && std::equal(ice_signal_marker.begin(), ice_signal_marker.end(), marked.begin()),
-			      "ICE marker: a fixed PC sends 'LCI2' + GNS's signal");
+			check(marked.size() == gns_signal.size() + 8 && std::equal(gns_signal.begin(), gns_signal.end(), marked.begin()) &&
+			      std::equal(ice_signal_marker.begin(), ice_signal_marker.end(), marked.end() - 8),
+			      "ICE marker: a fixed PC sends GNS's signal + the 8-byte trailer");
 			check(classify_signal(marked.data(), marked.size(), payload, payload_size) == signal_origin::fixed && payload_size == gns_signal.size() &&
 			      std::equal(gns_signal.begin(), gns_signal.end(), payload),
-			      "ICE marker: fixed -> fixed: the receiver strips the marker and hands GNS its exact signal");
+			      "ICE marker: fixed -> fixed: the receiver strips the trailer and hands GNS its exact signal");
 			check(classify_signal(gns_signal.data(), gns_signal.size(), payload, payload_size) == signal_origin::older && payload == nullptr,
 			      "ICE marker: older -> fixed: an unmarked signal is an older XML2 Fix, never given to GNS");
-			check(gns_signal[0] != ice_signal_marker[0] && marked[0] == 0x4c,
-			      "ICE marker: an older build's GNS sees a first byte of 0x4c, an invalid protobuf tag, and drops the fixed PC's signal (older side times out as before)");
-			check(classify_signal(marked.data(), 4, payload, payload_size) == signal_origin::malformed &&
+			{
+				// fixed -> older: the trailer is one well-formed protobuf field an older GNS skips as unknown, so it still answers
+				std::uint32_t tag = 0; int shift = 0; std::size_t i = 0;
+				for (; i < 3; ++i) { tag |= std::uint32_t(ice_signal_marker[i] & 0x7f) << shift; shift += 7; if (!(ice_signal_marker[i] & 0x80)) break; }
+				check(i == 2 && (tag >> 3) == 4242 && (tag & 7) == 2 && ice_signal_marker[3] == 4 && ice_signal_marker.size() == 3 + 1 + 4,
+				      "ICE marker: the trailer is protobuf field 4242, length-delimited, 4 bytes - an unknown field an older GNS skips");
+			}
+			check(classify_signal(ice_signal_marker.data(), ice_signal_marker.size(), payload, payload_size) == signal_origin::malformed &&
 			      classify_signal(nullptr, 0, payload, payload_size) == signal_origin::malformed,
 			      "ICE marker: a bare marker or an empty signal is malformed (ignored, not an older build)");
 			const std::vector<std::uint8_t> biggest(max_gns_signal, 0x0a), too_big(max_gns_signal + 1, 0x0a);
-			check(mark_signal(biggest.data(), biggest.size()).size() == 8192 && mark_signal(too_big.data(), too_big.size()).empty(),
+			check(mark_signal(biggest.data(), biggest.size()).size() == 8192 && mark_signal(too_big.data(), too_big.size()).empty() &&
+			      classify_signal(ice_signal_marker.data(), ice_signal_marker.size(), payload, payload_size) == signal_origin::malformed,
 			      "ICE marker: a marked signal never exceeds the broker's 8192-byte limit");
 			check(std::string(older_fix_message).find("Everyone must update XML2 Fix") != std::string::npos,
 			      "ICE marker: the refusal tells the player that everyone must update XML2 Fix");

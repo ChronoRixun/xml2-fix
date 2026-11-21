@@ -338,9 +338,10 @@ was ever found), one TURN CreatePermission per peer IP and none for 100.64.0.0/1
 with 403 when one address is denied, and stock GNS never retried), permission renewal every 120 s, and bounded
 handling of TURN Refresh and CreatePermission errors. Older builds cannot reach a fixed PC over the internet.
 
-Every GNS signal a fixed build sends through the broker starts with the four bytes `LCI2`
-(`online_room_core::ice_signal_marker`), followed by GNS's own signal; the receiver strips them. A signal without the
-marker comes from an older build: it is never handed to GNS. A joiner whose host's signals lack the marker refuses
+Every GNS signal a fixed build sends through the broker ends with an 8-byte trailer, protobuf field 4242
+(length-delimited) holding `LCI2` (`online_room_core::ice_signal_marker`); the receiver strips it. An older build's GNS
+skips the field as unknown, so it still answers; its answer has no trailer, which marks it as an older build: such a
+signal is never handed to GNS. A joiner whose host's signals lack the marker refuses
 the room as another build (`version_mismatch`, "Everyone must update XML2 Fix to play online."); a host or another
 member logs the older member and ignores it (that older PC keeps timing out as before). The broker is unchanged. A link
 that does come up also refuses by gameplay agreement (rule 25 revision 7).
