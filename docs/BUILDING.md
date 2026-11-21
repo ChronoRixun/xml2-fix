@@ -8,7 +8,8 @@ source-location strings already compiled into their static libraries.
 vjson `2533ddd055e2cd61d44a5e6b8743acb9a33bfd5c`, and the ports from vcpkg
 `3cd21e48a75f67acfef289da52893ce79144aaa1`: protobuf 6.33.4#2,
 abseil 20260107.1#3 and utf8-range 6.33.4. It applies the checked-in signed-cert
-patch and CA public pin. BCrypt, reference ed25519 and native ICE are retained.
+patch, the ICE coturn patch (`packaging/gns/gns-ice-coturn-fixes.patch`: server-reflexive
+discovery, per-IP TURN permissions) and CA public pin. BCrypt, reference ed25519 and native ICE are retained.
 
 The `x86-windows-static-trimmed` triplet builds Release only, with
 `VCPKG_C_FLAGS` and `VCPKG_CXX_FLAGS` set to `/d1trimfile:<WorkDir>/`.

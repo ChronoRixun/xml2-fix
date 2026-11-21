@@ -156,6 +156,21 @@ if ($alreadyPatched) {
 	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply --check $certPatch
 	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply $certPatch
 }
+# ICE fixes for coturn (wan-connect-1121, lab-proven): STUN Binding without an address attribute (coturn answered 420, so
+# no server-reflexive candidate was ever found), one TURN CreatePermission per peer IP and none for 100.64.0.0/10 (one
+# refused address made coturn refuse the whole request with 403), renewal before the 5 minute permission lifetime.
+$icePatch = Join-Path $PackagingDir 'gns-ice-coturn-fixes.patch'
+$iceApplied = $false
+if ($Offline) {
+	& git -C $gnsSrc -c core.autocrlf=false apply --reverse --check $icePatch 2>$null
+	$iceApplied = $LASTEXITCODE -eq 0
+}
+if ($iceApplied) {
+	Write-Host 'ICE coturn patch already applied (reverse-check passed)'
+} else {
+	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply --check $icePatch
+	Invoke-Checked git -C $gnsSrc -c core.autocrlf=false apply $icePatch
+}
 
 # the project CA, compiled into the library (STEAMNETWORKINGSOCKETS_HARDCODED_ROOT_CA_KEY); the private key is never in a repo
 $caPin = (Get-Content (Join-Path $PackagingDir 'ca-pin.txt') -TotalCount 1).Trim()
@@ -217,7 +232,7 @@ foreach ($need in 'GameNetworkingSockets_s.lib', 'libprotobuf.lib', 'utf8_range.
 if (@($libs | Where-Object Name -like 'absl_*').Count -lt 50) { throw 'package has too few abseil libs' }
 $manifest = @(
 	'GameNetworkingSockets package for xml2-fix (scripts/build-gns.ps1)'
-	"GameNetworkingSockets $GnsTag $GnsCommit + packaging/gns/gns-p2p-require-signed-cert.patch, vjson $VjsonCommit"
+	"GameNetworkingSockets $GnsTag $GnsCommit + packaging/gns/gns-p2p-require-signed-cert.patch + packaging/gns/gns-ice-coturn-fixes.patch, vjson $VjsonCommit"
 	"vcpkg $VcpkgCommit, triplet $Triplet (host $HostTriplet)"
 	($ExpectedPorts.Keys | ForEach-Object { "port $_ $($ExpectedPorts[$_])" })
 	"toolchain $generator, MSVC $toolsetVersion"
