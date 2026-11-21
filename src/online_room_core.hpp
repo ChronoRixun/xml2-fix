@@ -607,25 +607,25 @@ namespace online_room_core
 	}
 
 	// ---- the internet-connection fix's signal marker (XML2 Fix 1.11.2 / 1.12.0-beta.2) ----
-	// Every GNS signal this build sends through the broker starts with these four bytes; the rest is GNS's own signal.
-	// Builds without the GameNetworkingSockets ICE fix (gns-ice-coturn-fixes.patch) cannot reach a fixed PC over the
-	// internet (and mostly not each other): their signals carry no marker, so a fixed PC names the problem ("everyone
-	// must update XML2 Fix") at once instead of failing 10 s later with GNS 5008. GNS's signal is a protobuf message,
-	// whose first byte is a field tag; 0x4c ('L') would be field 9 with the end-group wire type, never a valid first
-	// tag, so an unmarked signal can never be mistaken for a marked one. An older build hands a marked signal to GNS,
-	// which refuses it: the older PC times out as before (it cannot be taught anything new).
-	inline constexpr std::array<std::uint8_t, 4> ice_signal_marker{'L', 'C', 'I', '2'};
+	// Every GNS signal this build sends through the broker ENDS with these eight bytes: protobuf field 4242,
+	// length-delimited, holding "LCI2". GNS's signal is a protobuf message, so an older build's GNS skips the field as
+	// unknown, takes the signal and answers as before - and its answer carries no trailer, so this PC names the problem
+	// ("everyone must update XML2 Fix") instead of timing out. (Builds without the GameNetworkingSockets ICE fix,
+	// gns-ice-coturn-fixes.patch, cannot reach a fixed PC over the internet; a mixed pair that did connect would lose
+	// its relay after 5 minutes.) GNS's own messages use field numbers far below 4242, so the trailer is never GNS data.
+	inline constexpr std::array<std::uint8_t, 8> ice_signal_marker{0x92, 0x89, 0x02, 0x04, 'L', 'C', 'I', '2'};
 	inline constexpr std::size_t max_gns_signal = 8192 - ice_signal_marker.size(); // the broker relays at most 8192 bytes
 	enum class signal_origin { fixed, older, malformed };
-	// What a received signal is; for a fixed one, payload/payload_size are GNS's own signal (the marker stripped).
+	// What a received signal is; for a fixed one, payload/payload_size are GNS's own signal (the trailer stripped).
 	inline signal_origin classify_signal(const std::uint8_t* data, std::size_t size, const std::uint8_t*& payload, std::size_t& payload_size)
 	{
 		payload = nullptr; payload_size = 0;
 		if (!data || !size) return signal_origin::malformed;
-		if (size >= ice_signal_marker.size() && std::equal(ice_signal_marker.begin(), ice_signal_marker.end(), data))
+		const auto n = ice_signal_marker.size();
+		if (size >= n && std::equal(ice_signal_marker.begin(), ice_signal_marker.end(), data + size - n))
 		{
-			if (size == ice_signal_marker.size()) return signal_origin::malformed;
-			payload = data + ice_signal_marker.size(); payload_size = size - ice_signal_marker.size();
+			if (size == n) return signal_origin::malformed;
+			payload = data; payload_size = size - n;
 			return signal_origin::fixed;
 		}
 		return signal_origin::older;
@@ -634,8 +634,8 @@ namespace online_room_core
 	inline std::vector<std::uint8_t> mark_signal(const void* data, std::size_t size)
 	{
 		if (!data || !size || size > max_gns_signal) return {};
-		std::vector<std::uint8_t> out(ice_signal_marker.begin(), ice_signal_marker.end());
-		out.insert(out.end(), static_cast<const std::uint8_t*>(data), static_cast<const std::uint8_t*>(data) + size);
+		std::vector<std::uint8_t> out(static_cast<const std::uint8_t*>(data), static_cast<const std::uint8_t*>(data) + size);
+		out.insert(out.end(), ice_signal_marker.begin(), ice_signal_marker.end());
 		return out;
 	}
 	// The message a fixed PC shows when the host (or the member it is joining) runs an older build.
