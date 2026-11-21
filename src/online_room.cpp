@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -752,8 +753,10 @@ namespace online_room
 			explicit signaling(std::string p) : peer(std::move(p)) {}
 			bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t&, const void* data, int size) override
 			{
-				if (size <= 0 || size > 8192 || generation != published_room.load()) return false;
-				return post(core::request("signal", {{"to", peer}, {"data", core::base64(static_cast<const std::uint8_t*>(data), std::size_t(size))}}), generation);
+				if (size <= 0 || std::size_t(size) > core::max_gns_signal || generation != published_room.load()) return false;
+				// The internet-connection fix's marker first (core::ice_signal_marker): an older build's PC is named, not timed out.
+				const auto marked = core::mark_signal(data, std::size_t(size));
+				return !marked.empty() && post(core::request("signal", {{"to", peer}, {"data", core::base64(marked)}}), generation);
 			}
 			void Release() override { delete this; }
 		};
@@ -949,6 +952,21 @@ namespace online_room
 				}
 			}
 		}
+        // A member whose GNS signals carry no internet-connection-fix marker runs an older XML2 Fix: its GNS cannot reach
+        // this PC over the internet, so say so instead of letting both sides time out (5008). Joining its room: refuse
+        // like another build (version_mismatch, terminal for this room). Hosting, or another member: name it in the log
+        // and ignore its signals; its own (older) game keeps showing its connection timeout.
+        std::set<std::string> older_fix_logged;
+        void refuse_older_fix(const std::string& from) {
+            if (older_fix_logged.insert(from).second)
+                logger::write("online: %s runs an older XML2 Fix without the internet connection fix (its signals carry no marker) - it cannot connect to this PC; everyone must update XML2 Fix",
+                              online_security::sanitize_log_text(from).c_str());
+            if (hosting || from != host_id || rate_refused) return;
+            rate_refused = true; // terminal for this room generation, as for incompatible frame-rate settings
+            if (client.view().error == "version_mismatch") return;
+            client.refuse("version_mismatch");
+            online_status::error(online_status_core::error::version_mismatch, core::older_fix_message);
+        }
         void refuse_rate_settings() {
             rate_refused = true;
             if (client.view().error=="version_mismatch") return;
@@ -1253,9 +1271,14 @@ namespace online_room
 				if (!room_ready || !members.contains(from) || encoded.size() > 10924 || !core::unbase64(encoded, data) || data.empty() || data.size() > 8192) return;
 				auto rate = signal_rates.try_emplace(from, 20, 20).first;
 				if (!rate->second.allow(room_clock())) return;
+				const std::uint8_t* payload = nullptr;
+				std::size_t payload_size = 0;
+				const auto origin = core::classify_signal(data.data(), data.size(), payload, payload_size);
+				if (origin == core::signal_origin::older) { refuse_older_fix(from); return; }
+				if (origin != core::signal_origin::fixed) return;
 				incoming context;
 				context.from = from;
-				if (!sockets()->ReceivedP2PCustomSignal(data.data(), int(data.size()), &context))
+				if (!sockets()->ReceivedP2PCustomSignal(payload, int(payload_size), &context))
 					logger::write_once("online-signal-refused", "online: GNS did not take a signal from %s", from.c_str());
 			}
 			else if (op == "error")

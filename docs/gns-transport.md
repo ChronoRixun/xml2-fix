@@ -2,7 +2,7 @@
 
 Requested-only (`[Online] Transport = gns`; absent, empty or any other value = the stock transport, byte for byte, and
 the released capability digest). Every PC of a session must use it: it is gameplay-agreement **rule 25 GnsTransport**,
-revision 6, values `{1, port offset 1000, framing revision 4, 0}` (revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below; revision 6 / framing 4: the 0.6 party kinds 7/8, docs/online-party.md; revision 5 was skipped - its rule summary collided with revision 4's); a PC with it refuses a PC without it (and the other
+revision 7, values `{1, port offset 1000, framing revision 4, 0}` (revision 7, XML2 Fix 1.11.2 / 1.12.0-beta.2: the GameNetworkingSockets ICE fix `packaging/gns/gns-ice-coturn-fixes.patch`, so a fixed and an unfixed PC whose link comes up refuse each other naming 25 GnsTransport; revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below; revision 6 / framing 4: the 0.6 party kinds 7/8, docs/online-party.md; revision 5 was skipped - its rule summary collided with revision 4's); a PC with it refuses a PC without it (and the other
 way round) and names `25 GnsTransport` in the refusal.
 
 The LAN / direct-IP mode is described below. [Online rooms](online-rooms.md) imply this transport and add

@@ -1,19 +1,5 @@
-From c5ff121e9df7a716d2ecd6826894dd811fd3faf6 Mon Sep 17 00:00:00 2001
-From: wan-connect-1121 <noreply@anthropic.com>
-Date: Sat, 21 Nov 2026 15:05:42 -0600
-Subject: [PATCH] ICE: srflx binding without address attribute, per-IP TURN
- permissions, skip CGNAT, renew permissions
-
-Lab-proven fixes for GNS v1.6.1 native ICE against coturn 4.18 (wan-connect-1121).
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
----
- .../steamnetworkingsockets_ice_client.cpp     | 56 ++++++++++++++++++-
- .../steamnetworkingsockets_ice_client.h       |  4 ++
- 2 files changed, 57 insertions(+), 3 deletions(-)
-
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
-index e5a4814..d15d55b 100644
+index e5a4814..489bfba 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 @@ -1021,7 +1021,11 @@ void ICESessionInterface::QueueBindRequest( const netadr_t &addrSTUNServer, Recv
@@ -41,21 +27,101 @@ index e5a4814..d15d55b 100644
  		if ( ( nPermClassify & k_nIPClassify_Public ) ||
  		     ( m_bAnyTURNServerLANAddress && !( nPermClassify & k_nIPClassify_Localhost ) && nPermClassify != 0 ) )
  		{
-@@ -2165,6 +2174,13 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -1390,7 +1399,9 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+ 					break;
+ 				}
+ 			}
+-			if ( !bAlreadyPermitted )
++			// Legends Classic patch: at most 16 peer IPs per family get TURN permissions in one session (one peer
++			// rarely has more than a handful of candidates; the cap bounds the per-IP request work a peer can cause).
++			if ( !bAlreadyPermitted && vecPermitted.size() < 16 )
+ 			{
+ 				vecPermitted.push_back( permIP );
+ 				++nRevision;
+@@ -2110,6 +2121,39 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+ 
+     if ( info.m_pHeader != nullptr )
+     {
++        // Legends Classic patch: an error response is not a success.  Stock code read it as one, found no LIFETIME and
++        // left m_usecRefreshAfter at 0, so the allocation was never refreshed again and expired (relay lost at 10 min).
++        if ( info.m_pHeader->m_nMessageType != k_nTURN_RefreshSuccess && info.m_pHeader->m_nMessageType != ( k_nTURN_RefreshRequest | 0x0110 ) )
++        {
++            pIntf->m_usecRefreshAfter = info.m_usecNow + 30 * k_nMillion;
++            return;
++        }
++        const STUNAttribute *pRefreshErr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_ErrorCode );
++        if ( info.m_pHeader->m_nMessageType != k_nTURN_RefreshSuccess && pRefreshErr != nullptr && pRefreshErr->m_nLength >= 4 )
++        {
++            const uint8 *b = reinterpret_cast<const uint8*>( pRefreshErr->m_pData );
++            const int nErr = b[2] * 100 + b[3];
++            const STUNAttribute *pNonce = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_Nonce );
++            if ( nErr == 438 && pNonce != nullptr && ++pIntf->m_nRefreshChallenges <= 2 )
++            {
++                // Stale nonce: take the new one and refresh again at once (at most twice in a row).
++                pIntf->m_strTURNNonce.assign( reinterpret_cast<const char*>( pNonce->m_pData ), pNonce->m_nLength );
++                pIntf->m_usecRefreshAfter = info.m_usecNow;
++                return;
++            }
++            if ( nErr != 437 )
++            {
++                // Anything else: try again in 30 s while the allocation still lives.
++                SpewMsg( "ICE: TURN server %s refused a Refresh (error %d); retrying in 30 s.\n",
++                    CUtlNetAdrRender( pIntf->m_addrTURNServer ).String(), nErr );
++                pIntf->m_usecRefreshAfter = info.m_usecNow + 30 * k_nMillion;
++                return;
++            }
++            // 437 Allocation Mismatch: the allocation is gone - tear it down like a timeout below.
++        }
++        else
++        {
++        pIntf->m_nRefreshChallenges = 0;
+         // Refresh succeeded -- parse the returned LIFETIME and schedule the next one.
+         const STUNAttribute *pLifetimeAttr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nTURN_Attr_Lifetime );
+         if ( pLifetimeAttr != nullptr && pLifetimeAttr->m_nLength == 4 )
+@@ -2117,7 +2161,13 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+             SteamNetworkingMicroseconds usecLifetime = (SteamNetworkingMicroseconds)ntohl( pLifetimeAttr->m_pData[0] ) * k_nMillion;
+             pIntf->m_usecRefreshAfter = info.m_usecNow + usecLifetime / 2;
+         }
++        else
++        {
++            // (Legends Classic patch: a success without LIFETIME keeps refreshing - every 60 s - instead of never.)
++            pIntf->m_usecRefreshAfter = info.m_usecNow + 60 * k_nMillion;
++        }
+         return;
++        }
+     }
+ 
+     // Refresh timed out -- the allocation is gone.  Tear down relay state so
+@@ -2140,6 +2190,10 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+     pIntf->m_addrTURNServer.Clear();   // clears "discovery done" signal; re-allocation starts next tick
+     pIntf->m_usecRefreshAfter  = 0;
+     pIntf->m_nTURNPermissionRevision = 0;
++    pIntf->m_usecPermissionSweepStarted = 0;
++    pIntf->m_nPermissionTimeouts = 0;
++    pIntf->m_nPermissionChallenges = 0;
++    pIntf->m_nRefreshChallenges = 0;
+     // Leave m_bRelayFailed = false so Think_DiscoverRelayCandidate retries.
+ }
+ 
+@@ -2165,6 +2219,17 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
          const std_vector<CIPAddress> &vecPermitted = bIsIPv4 ? m_vecTURNPermittedIPv4 : m_vecTURNPermittedIPv6;
          int nSessionRevision = bIsIPv4 ? m_nTURNPermissionRevisionIPv4 : m_nTURNPermissionRevisionIPv6;
  
-+        // Legends Classic patch: renew every permission before its 5 minute lifetime ends.
-+        if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision && !vecPermitted.empty()
-+            && pIntf->m_usecPermissionsInstalled != 0 && usecNow - pIntf->m_usecPermissionsInstalled > 240 * k_nMillion )
++        // Legends Classic patch: renew every permission before its 5 minute lifetime ends: 120 s after a sweep started,
++        // start the next one from the first address (also when the previous sweep has not finished).  At most 16
++        // addresses, each held up by at most two timeouts (~5.3 s each), so even a stalled sweep renews every address
++        // within 120 + 16 * 10.6 = 290 s of its previous grant, inside the 300 s lifetime.
++        if ( !vecPermitted.empty() && pIntf->m_usecPermissionSweepStarted != 0
++            && usecNow - pIntf->m_usecPermissionSweepStarted > 120 * k_nMillion )
 +        {
 +            pIntf->m_nTURNPermissionRevision = 0;
-+            pIntf->m_usecPermissionsInstalled = 0;
++            pIntf->m_usecPermissionSweepStarted = 0;
++            pIntf->m_nPermissionTimeouts = 0;
 +        }
          if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision || vecPermitted.empty() )
              continue;
  
-@@ -2178,9 +2194,15 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2178,9 +2243,17 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
          // Construct the request first so m_nTransactionID is set before we XOR IPv6 addrs.
          auto *pRequest = new CSteamNetworkingSocketsSTUNRequest( pIntf.get() );
  
@@ -64,6 +130,8 @@ index e5a4814..d15d55b 100644
 +        // address (a CGNAT/Tailscale host candidate, a relay address) left the allocation with no permission at all.
 +        // The session revision equals the list length (it is bumped once per appended IP), so it doubles as an index.
 +        const int nNextPermit = std::min( pIntf->m_nTURNPermissionRevision, (int)vecPermitted.size() - 1 );
++        if ( nNextPermit == 0 && pIntf->m_usecPermissionSweepStarted == 0 )
++            pIntf->m_usecPermissionSweepStarted = usecNow;
          int nPeerAttrs = 0;
 -        for ( const CIPAddress &addr : vecPermitted )
 +        for ( int iPermit = nNextPermit; iPermit < (int)vecPermitted.size() && iPermit < nNextPermit + 1; ++iPermit )
@@ -72,7 +140,7 @@ index e5a4814..d15d55b 100644
              if ( nPeerAttrs >= k_nMaxPeers )
                  break;
              if ( addr.GetType() == k_EIPTypeV4 )
-@@ -2208,7 +2230,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2208,7 +2281,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
              ++nPeerAttrs;
          }
  
@@ -81,7 +149,27 @@ index e5a4814..d15d55b 100644
          pIntf->m_pPendingSTUNRequest = pRequest;
  
          // Attach long-term credentials if the TURN server required auth.
-@@ -2272,7 +2294,35 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
+@@ -2266,13 +2339,52 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
+     {
+         // Timed out.  m_nTURNPermissionRevision is still stale, so Think_TURNMaintenance
+         // will retry on the next Think() sweep.
++        // (Legends Classic patch: after the second timeout for the same address, skip it - the next sweep retries it -
++        // so one unanswered address cannot hold back the permissions behind it.)
++        if ( ++pIntf->m_nPermissionTimeouts >= 2 )
++        {
++            pIntf->m_nPermissionTimeouts = 0;
++            pIntf->m_nTURNPermissionRevision = info.m_pRequest->m_nTURNPermissionRevision;
++            SpewMsg( "ICE: CreatePermission to TURN server %s timed out twice; that peer address is skipped until the next sweep.\n",
++                CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
++        }
+         return;
+     }
++    // Legends Classic patch: only a CreatePermission success (0x0108) or error (0x0118) response changes state;
++    // anything else carrying the transaction ID is treated as no answer (the request is retried).
++    if ( info.m_pHeader->m_nMessageType != k_nTURN_CreatePermissionSuccess && info.m_pHeader->m_nMessageType != ( k_nTURN_CreatePermissionRequest | 0x0110 ) )
++        return;
++    pIntf->m_nPermissionTimeouts = 0;
+ 
      // Advance to the revision that was current when we sent this request.
      // If more IPs arrived while the request was in flight, the revision will still be
      // behind the session's current revision, and we'll send another CreatePermission.
@@ -93,19 +181,16 @@ index e5a4814..d15d55b 100644
 +        if ( pErr != nullptr && pErr->m_nLength >= 4 && pNonce != nullptr )
 +        {
 +            const uint8 *b = reinterpret_cast<const uint8*>( pErr->m_pData );
-+            if ( b[2] * 100 + b[3] == 438 )
++            if ( b[2] * 100 + b[3] == 438 && ++pIntf->m_nPermissionChallenges <= 2 )
 +            {
 +                pIntf->m_strTURNNonce.assign( reinterpret_cast<const char*>( pNonce->m_pData ), pNonce->m_nLength );
 +                return;
 +            }
 +        }
 +    }
++    pIntf->m_nPermissionChallenges = 0;
      pIntf->m_nTURNPermissionRevision = info.m_pRequest->m_nTURNPermissionRevision;
 +    {
-+        const bool bIsIPv4 = pIntf->m_boundAddr.GetType() == k_EIPTypeV4;
-+        const int nSessionRevision = bIsIPv4 ? m_nTURNPermissionRevisionIPv4 : m_nTURNPermissionRevisionIPv6;
-+        if ( pIntf->m_nTURNPermissionRevision >= nSessionRevision && pIntf->m_usecPermissionsInstalled == 0 )
-+            pIntf->m_usecPermissionsInstalled = info.m_usecNow;
 +        const STUNAttribute *pErr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_ErrorCode );
 +        if ( pErr != nullptr && pErr->m_nLength >= 4 )
 +        {
@@ -117,21 +202,41 @@ index e5a4814..d15d55b 100644
  }
  
  void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( const RecvSTUNPktInfo_t &info )
+@@ -2336,10 +2448,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveKeepAlive( c
+     // Timed out -- try the next STUN server (cycling through the list).
+     if ( m_vecSTUNServers.empty() )
+         return;
+-
++    // Legends Classic patch: not at once.  The interface has one request slot, shared with TURN Refresh and
++    // CreatePermission; an endlessly re-queued keepalive could starve them.  Remember the next server and let the
++    // 15 s keepalive tick send it.
+     const int nSTUNServerIdx = std::max( 0, index_of( m_vecSTUNServers, info.m_pRequest->m_remoteAddr ) );
+     const int nNextSTUNServerIdx = ( nSTUNServerIdx + 1 ) % len( m_vecSTUNServers );
+-    pIntf->QueueBindRequest( m_vecSTUNServers[ nNextSTUNServerIdx ], &CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveKeepAlive, m_nEncoding );
++    pIntf->m_addrSTUNServer = m_vecSTUNServers[ nNextSTUNServerIdx ];
+ }
+ 
+ void CSteamNetworkingICESession::UpdateKeepalive( ICESessionInterface *pIntf )
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
-index f4a2db4..9d838f0 100644
+index f4a2db4..2f264e8 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
-@@ -117,6 +117,10 @@ namespace SteamNetworkingSocketsLib {
+@@ -117,6 +117,18 @@ namespace SteamNetworkingSocketsLib {
          // new CreatePermission sweep is needed.
          int m_nTURNPermissionRevision = 0;
  
-+        // Legends Classic patch: when the permitted-IP list was last fully installed, so the
-+        // permissions (5 minute lifetime, RFC 5766 sec. 8) are renewed before they expire.
-+        SteamNetworkingMicroseconds m_usecPermissionsInstalled = 0;
++        // Legends Classic patch: when the current CreatePermission sweep started (its first request was sent).
++        // Every permission (5 minute lifetime, RFC 5766 sec. 8) is renewed by a new sweep 240 s later, whether or not
++        // the sweep reached the end of the list, so one slow or refused address cannot let the others expire.
++        SteamNetworkingMicroseconds m_usecPermissionSweepStarted = 0;
++        // Timeouts of the CreatePermission for the current list index; after the second the address is skipped
++        // (retried by the next sweep) instead of blocking every address behind it.
++        int m_nPermissionTimeouts = 0;
++        // Consecutive 438 Stale Nonce answers to CreatePermission / Refresh; bounded so a server that keeps
++        // challenging cannot hold the request slot forever.
++        int m_nPermissionChallenges = 0;
++        int m_nRefreshChallenges = 0;
 +
          /// Send a packet through this interface to the destination remote address.
          /// If relay address is non-zero, send via Send Indication to the TURN server
          bool SendPacketGather( int nChunks, const iovec *pChunks, int cbPayload, const netadr_t &addrPeer, const netadr_t &addrRelay );
--- 
-2.50.1.windows.1
-

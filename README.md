@@ -1,4 +1,4 @@
-> **Prepared stable update: XML2 Fix 1.11.1**, paired with Legends Classic 0.6.1. Update Fix first, then LC and Rebuild. Skirmish is experimental; separate-PC acceptance is required before publication. Back up saves.
+> **Prepared stable update: XML2 Fix 1.11.2**, paired with Legends Classic 0.6.1 (unchanged). It fixes online play across the internet; everyone must update. Back up saves.
 
 <p align="center">
   <img src="docs/images/banner.png" alt="XML2 Fix — Xbox controllers & online play for X-Men Legends II (PC)" width="100%">
