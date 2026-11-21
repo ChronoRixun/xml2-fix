@@ -172,3 +172,5 @@ DISASM test/skate_exit_test.hpp # Authored synthetic x86 ABI caller seeds invent
 DISASM src/danger_room_prizes.cpp # Fix 1.11.1 (Skirmish weekend): authored register/flags-preserving prize-row adapter calls our has_payload() and resumes at the guarded native targets; no extracted game body or instruction listing.
 DISASM src/remastered_ui.cpp # Authored register/flags/FX-state-preserving panel adapter; replays only the guarded displaced store and panel-cell load, then resumes the owned retail code. No extracted function body or instruction listing.
 DISASM test/remastered_ui_test.cpp # Authored synthetic ABI probe seeds invented registers, flags and x87 sentinels to verify the panel adapter; owned retail layout code is read locally at runtime. No extracted game body.
+PRIVATE_IP  packaging/gns/gns-ice-coturn-fixes.patch  # the RFC 6598 shared address space (carrier-grade NAT / Tailscale) named as a range the ICE patch excludes from TURN permissions; no player or device address
+PRIVATE_IP  scripts/build-gns.ps1  # the RFC 6598 shared address space named in the comment on the ICE patch; no player or device address
