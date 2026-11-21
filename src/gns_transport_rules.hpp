@@ -134,6 +134,12 @@ namespace gns_transport_rules
 	// two refuse each other by name instead. One bump for all of 0.6's framing changes. Revision 6, not 5: rule 25 is
 	// alone in its rule-summary bucket and {25, 5, 1,1000,4,0} folds to the same summary byte (0x23) as the released
 	// {25, 4, 1,1000,3,0}, so a revision-5 refusal could not be named; revision 6 folds to 0xf1. Revision 5 never shipped.
-	constexpr std::uint16_t agreement_revision = 6;
+	// Revision 7 (XML2 Fix 1.11.2 / 1.12.0-beta.2): the GameNetworkingSockets ICE fix (gns-ice-coturn-fixes.patch:
+	// server-reflexive discovery, per-IP TURN permissions and their renewal). A revision-6 PC still has the broken ICE:
+	// its relay drops a session after 5 minutes and most internet pairs never connect, so a fixed and an unfixed PC
+	// whose link does come up refuse each other naming 25 GnsTransport. (Before a link, the signal marker in
+	// online_room_core.hpp names it.) {25, 7, 1,1000,4,0} folds to summary byte 0x99, distinct from revision 6 (0xf1)
+	// and the released revision 4 (0x23).
+	constexpr std::uint16_t agreement_revision = 7;
 	constexpr std::uint32_t framing_revision = 4;
 }

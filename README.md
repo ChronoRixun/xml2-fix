@@ -1,4 +1,4 @@
-> **Unreleased Remastered preview: 1.12.0-beta.1.** Optional MSAA, selective world filtering and centered Beenox panels; off by default. See [preview settings](docs/remastered.md). Remastered is visual only: the preview keeps the 1.11.1 gameplay agreement and Legends Classic content identity, so it can play online with stable 1.11.1. The stable line is below.
+> **Unreleased Remastered preview: 1.12.0-beta.2** (includes the 1.11.2 internet fix; everyone must update). Optional MSAA, selective world filtering and centered Beenox panels; off by default. See [preview settings](docs/remastered.md). Remastered is visual only: the preview keeps the 1.11.2 gameplay agreement and Legends Classic content identity, so it can play online with stable 1.11.2. The stable line is below.
 
 > **Prepared stable update: XML2 Fix 1.11.1**, paired with Legends Classic 0.6.1. Update Fix first, then LC and Rebuild. Skirmish is experimental; separate-PC acceptance is required before publication. Back up saves.
 

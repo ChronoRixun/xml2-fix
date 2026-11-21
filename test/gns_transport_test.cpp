@@ -545,7 +545,24 @@ int main(int argc, char** argv)
 		check(lost_decision(327, two, 2, 100) == lost_step::wait && lost_decision(327, two, 2, lost_agree_timeout_ms) == lost_step::remove_timeout,
 		      "decision: a different frame waits (a later announcement replaces it), then times out");
 		check(lost_decision(-1, two, 0, 0) == lost_step::wait && lost_decision(40, two, 0, 0) == lost_step::remove_agreed, "decision: alone it removes once announced");
-		check(gns_transport_rules::agreement_revision == 6 && gns_transport_rules::framing_revision == 4, "rule 25 revision 6 / framing 4: every loss takes the agreed cut frame; party kinds 7/8 (0.6)");
+		check(gns_transport_rules::agreement_revision == 7 && gns_transport_rules::framing_revision == 4, "rule 25 revision 7 / framing 4: the GNS ICE fix (1.11.2 / 1.12.0-beta.2) on 0.6's framing");
+		{
+			// Mixed ICE builds: this build (revision 7) against 1.11.1 / 1.12.0-beta.1 (revision 6, framing 4), both directions.
+			using namespace gameplay_capabilities;
+			record fixed, older;
+			for (auto* r : {&fixed, &older}) r->layout(3, {32, 768, 1024, 10}, true);
+			fixed.add(gns_transport_id, gns_transport_rules::agreement_revision, {1u, gns_transport_rules::gns_port_offset, gns_transport_rules::framing_revision, 0u}, true);
+			older.add(gns_transport_id, 6, {1u, 1000u, 4u, 0u}, true);
+			check(fixed.finalize() && older.finalize(), "rule 25 revision 7 and 6 records finalize");
+			difference d7{}, d6{};
+			char n7[128]{}, n6[128]{};
+			check(fixed.compare(older.bytes(), &d7) == result::value, "a fixed PC refuses a 1.11.1-era (revision 6) PC");
+			fixed.describe(d7.buckets, d7.local_only, true, n7, sizeof n7);
+			check(std::string(n7) == "25 GnsTransport", (std::string("the fixed side names 25 GnsTransport (") + n7 + ")").c_str());
+			check(older.compare(fixed.bytes(), &d6) == result::value, "and the revision-6 PC refuses the fixed one");
+			older.describe(d6.buckets, d6.local_only, true, n6, sizeof n6);
+			check(std::string(n6) == "25 GnsTransport", (std::string("the revision-6 side names 25 GnsTransport (") + n6 + ")").c_str());
+		}
 		{
 			// Old-peer refusal by name: this build's rule 25 record against a released revision-4 / framing-3 one.
 			using namespace gameplay_capabilities;
@@ -568,7 +585,7 @@ int main(int argc, char** argv)
 			check(old.compare(now.bytes(), &back) == result::value, "and the revision-4 side refuses this one too");
 			old.describe(back.buckets, back.local_only, true, back_names, sizeof back_names);
 			check(std::string(back_names) == "25 GnsTransport", (std::string("the revision-4 side names 25 GnsTransport (") + back_names + ")").c_str());
-			check(now.compare(same.bytes()) == result::match, "two revision-6 / framing-4 PCs agree");
+			check(now.compare(same.bytes()) == result::match, "two PCs of this build (revision 7 / framing 4) agree");
 		}
 		auto hex6 = [](const std::array<unsigned char, 6>& b) { char out[13]{}; for (int i = 0; i < 6; ++i) std::snprintf(out + i * 2, 3, "%02x", b[i]); return std::string(out); };
 		bool notice_guarded = false, lost_guarded = false;

@@ -1,3 +1,16 @@
+## 1.12.0-beta.2 - 2026-11-21 (Remastered preview + the 1.11.2 internet fix)
+
+- **Online play across the internet works.** At the Multiplayer Beta Weekend no two players in
+  different homes could connect ("took too long to connect"). The networking library XML2 Fix uses
+  never learned a player's public address from our connection server, so direct connections were
+  never tried; one VPN or Tailscale address on either PC made the server refuse the relay entirely;
+  and a relayed game would have dropped after five minutes. All three are fixed: players now connect
+  directly when their routers allow it and through the relay when they don't, and relayed games stay up.
+- **Everyone must update.** A PC with this fix and a PC without it cannot play together online. This
+  build tells you so ("Everyone must update XML2 Fix") instead of timing out when the host runs an
+  older XML2 Fix, and refuses an older PC by name if a link does come up. Nothing changes for local
+  co-op, saves or gameplay.
+
 ## 1.11.0 - 2026-11-18
 
 Legends Classic 0.6.0 and XML2 Fix 1.11.0 are the stable pair. Update XML2 Fix first, update

@@ -132,6 +132,30 @@ int main()
 		check(roster.contains(joiner) && roster.address(joiner) == 0x0a4d0002, "room roster: a rejoin keeps its earlier stable address");
 		check(is_virtual(roster.address(host)) && !is_virtual(0x0a4e0001) && !is_virtual(0xc0a80001), "room roster: only the 10.77/16 virtual range is intercepted");
 
+		{
+			// The internet-connection fix's signal marker (1.11.2 / 1.12.0-beta.2): both directions of a mixed pair.
+			const std::vector<std::uint8_t> gns_signal = hex("0a0b08011203abcdef1a020102"); // a protobuf-shaped GNS signal
+			const auto marked = mark_signal(gns_signal.data(), gns_signal.size());
+			const std::uint8_t* payload = nullptr;
+			std::size_t payload_size = 0;
+			check(marked.size() == gns_signal.size() + 4 && std::equal(ice_signal_marker.begin(), ice_signal_marker.end(), marked.begin()),
+			      "ICE marker: a fixed PC sends 'LCI2' + GNS's signal");
+			check(classify_signal(marked.data(), marked.size(), payload, payload_size) == signal_origin::fixed && payload_size == gns_signal.size() &&
+			      std::equal(gns_signal.begin(), gns_signal.end(), payload),
+			      "ICE marker: fixed -> fixed: the receiver strips the marker and hands GNS its exact signal");
+			check(classify_signal(gns_signal.data(), gns_signal.size(), payload, payload_size) == signal_origin::older && payload == nullptr,
+			      "ICE marker: older -> fixed: an unmarked signal is an older XML2 Fix, never given to GNS");
+			check(gns_signal[0] != ice_signal_marker[0] && marked[0] == 0x4c,
+			      "ICE marker: an older build's GNS sees a first byte of 0x4c, an invalid protobuf tag, and drops the fixed PC's signal (older side times out as before)");
+			check(classify_signal(marked.data(), 4, payload, payload_size) == signal_origin::malformed &&
+			      classify_signal(nullptr, 0, payload, payload_size) == signal_origin::malformed,
+			      "ICE marker: a bare marker or an empty signal is malformed (ignored, not an older build)");
+			const std::vector<std::uint8_t> biggest(max_gns_signal, 0x0a), too_big(max_gns_signal + 1, 0x0a);
+			check(mark_signal(biggest.data(), biggest.size()).size() == 8192 && mark_signal(too_big.data(), too_big.size()).empty(),
+			      "ICE marker: a marked signal never exceeds the broker's 8192-byte limit");
+			check(std::string(older_fix_message).find("Everyone must update XML2 Fix") != std::string::npos,
+			      "ICE marker: the refusal tells the player that everyone must update XML2 Fix");
+		}
 		token_bucket packets(2, 2);
 		check(packets.allow(1000) && packets.allow(1000) && !packets.allow(1000) && packets.allow(1500),
 		      "datagram rate: a token bucket enforces its burst and refills by elapsed time");
